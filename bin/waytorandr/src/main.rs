@@ -65,11 +65,9 @@ Use `--default` together with `save` when the current screen setup may match mul
     #[command(after_long_help = "Examples:
   waytorandr list
   waytorandr list --all
-  waytorandr list --long
 
 By default, `list` only shows profiles matching the current detected topology.
-Use `--all` to show every saved profile across all setups.
-Use `--long` to include fingerprint details.")]
+Use `--all` to show every saved profile across all setups, grouped by setup fingerprint.")]
     List(ListArgs),
 
     #[command(about = "Show the active or currently matched profile")]
@@ -169,9 +167,6 @@ struct ListArgs {
         help = "List all saved profiles, not just profiles matching the current topology"
     )]
     all: bool,
-
-    #[arg(long = "long", help = "Show fingerprint details")]
-    long: bool,
 }
 
 fn main() -> Result<()> {
@@ -197,13 +192,13 @@ fn main() -> Result<()> {
         Commands::Save(args) => cmd_save(&args.name, args.dry_run, args.make_default),
         Commands::Remove(args) => cmd_remove(&args.name, args.dry_run),
         Commands::Cycle(args) => cmd_cycle(args.dry_run),
-        Commands::List(args) => cmd_list(args.all, args.long),
+        Commands::List(args) => cmd_list(args.all),
         Commands::Current => cmd_current(),
         Commands::Detected => cmd_detected(),
     }
 }
 
-fn cmd_list(show_all: bool, long: bool) -> Result<()> {
+fn cmd_list(show_all: bool) -> Result<()> {
     let store = ProfileStore::new()?;
     let profiles = store.list()?;
 
@@ -213,11 +208,7 @@ fn cmd_list(show_all: bool, long: bool) -> Result<()> {
     }
 
     let state = StateStore::new()?.load_state()?.unwrap_or_default();
-    let current_topology = if show_all && !long {
-        None
-    } else {
-        Some(connect_backend()?.enumerate_outputs()?)
-    };
+    let current_topology = Some(connect_backend()?.enumerate_outputs()?);
     let current_setup = current_topology.as_ref().map(Topology::setup_fingerprint);
 
     let listed_profiles: Vec<StoredProfile> = if show_all {
@@ -230,24 +221,16 @@ fn cmd_list(show_all: bool, long: bool) -> Result<()> {
 
     if listed_profiles.is_empty() {
         println!("No profiles match the current topology");
-        if long {
-            if let Some(setup) = &current_setup {
-                println!("Current fingerprint: {}", setup);
-            }
+        if let Some(setup) = &current_setup {
+            println!("Current fingerprint: {}", setup);
         }
         return Ok(());
     }
 
     println!("Profiles:");
-    if long && !show_all {
-        if let Some(setup) = &current_setup {
-            println!("  current fingerprint: {}", setup);
-        }
-    }
-
     let mut current_group: Option<&str> = None;
     for stored in &listed_profiles {
-        if long && show_all && current_group != Some(stored.setup_fingerprint.as_str()) {
+        if current_group != Some(stored.setup_fingerprint.as_str()) {
             current_group = Some(stored.setup_fingerprint.as_str());
             println!(
                 "  fingerprint: {}{}",
@@ -272,8 +255,7 @@ fn cmd_list(show_all: bool, long: bool) -> Result<()> {
         }
 
         println!(
-            "  {}{} (priority: {}){}",
-            if long && show_all { "  " } else { "" },
+            "    {} (priority: {}){}",
             stored.profile.name,
             stored.profile.priority,
             if flags.is_empty() {
@@ -282,14 +264,6 @@ fn cmd_list(show_all: bool, long: bool) -> Result<()> {
                 format!(" [{}]", flags.join(", "))
             }
         );
-
-        if long {
-            println!(
-                "{}    layout fingerprint: {}",
-                if show_all { "  " } else { "" },
-                stored.profile.layout_fingerprint()
-            );
-        }
     }
 
     Ok(())
