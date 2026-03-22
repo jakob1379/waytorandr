@@ -2,14 +2,31 @@
 
 `waytorandr` is a Wayland-native display profile manager inspired by `autorandr`.
 
-It is focused on:
-- saving and setting real output layouts
-- applying quick virtual layouts like `horizontal`, `vertical`, and `common`
-- switching layouts through a single CLI and daemon
+## CLI
+
+```text
+Save, set, and switch Wayland display layouts.
+
+Usage: waytorandr <COMMAND>
+
+Commands:
+  set          Set a saved profile, virtual configuration, or matching/default profile
+  save         Save the current compositor layout as a profile
+  remove       Remove a saved profile
+  cycle        Set the next saved profile
+  list         List all saved profiles
+  current      Show the active or currently matched profile
+  detected     Show detected outputs and current geometry
+  fingerprint  Print the current hardware topology fingerprint
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help   Print help
+```
+
+Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples.
 
 ## Status
-
-This project is early and still rough.
 
 - actively tested on Niri
 - wlroots output-management path is implemented and working
@@ -29,131 +46,16 @@ Current generic wlroots output-management protocols do not expose real physical 
 Reference:
 - `https://github.com/swaywm/wlr-protocols/issues/101`
 
-## Nix Only
-
-This repo assumes Nix usage.
-
-Build:
+## Nix
 
 ```bash
 nix build
-```
-
-Development shell:
-
-```bash
 nix develop
-```
-
-Run tests:
-
-```bash
 nix develop -c cargo test
-```
-
-Run the built binaries:
-
-```bash
 ./result/bin/waytorandr --help
-./result/bin/waytorandrd
 ```
 
-## Shell Completion
-
-Dynamic completions are built into `waytorandr`, including runtime completion of saved profile names for commands like `set` and `remove`.
-
-Bash:
-
-```bash
-echo 'source <(COMPLETE=bash waytorandr)' >> ~/.bashrc
-```
-
-Zsh:
-
-```bash
-echo 'source <(COMPLETE=zsh waytorandr)' >> ~/.zshrc
-```
-
-Fish:
-
-```bash
-echo 'COMPLETE=fish waytorandr | source' >> ~/.config/fish/completions/waytorandr.fish
-```
-
-After reloading your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` will include saved profile names.
-
-## CLI Examples
-
-Detect outputs:
-
-```bash
-waytorandr detected
-```
-
-Show current compositor layout:
-
-```bash
-waytorandr detected
-```
-
-Save the current layout as `default`:
-
-```bash
-waytorandr save
-```
-
-Save the current layout and mark it as the default profile for future matching:
-
-```bash
-waytorandr save --default
-```
-
-Save the current layout with an explicit name:
-
-```bash
-waytorandr save docked
-```
-
-Save a named layout and make that saved profile the default:
-
-```bash
-waytorandr save docked --default
-```
-
-Dry-run a saved profile:
-
-```bash
-waytorandr set docked --dry-run
-```
-
-Set the matching profile, or the configured default if nothing matches:
-
-```bash
-waytorandr set
-```
-
-Dry-run virtual layouts:
-
-```bash
-waytorandr set horizontal --dry-run
-waytorandr set vertical --dry-run
-waytorandr set common --dry-run
-waytorandr set common --largest --dry-run
-```
-
-## Profile Storage
-
-Profiles are stored under:
-
-```text
-$XDG_CONFIG_HOME/waytorandr/profiles/
-```
-
-State is stored under:
-
-```text
-$XDG_STATE_HOME/waytorandr/
-```
+Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
 
 ## Project Note
 
