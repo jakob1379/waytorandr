@@ -1,0 +1,20 @@
+[package]
+name = "waytorandr"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "waytorandr"
+path = "src/main.rs"
+
+[dependencies]
+waytorandr-core = { path = "../../crates/core" }
+waytorandr-wlroots = { path = "../../crates/wlroots" }
+clap.workspace = true
+clap_complete.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
