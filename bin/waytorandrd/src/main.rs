@@ -33,7 +33,9 @@ fn main() -> Result<()> {
     loop {
         if let Some(topology) = watcher.poll_changed()? {
             tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
-            if let Err(err) = maybe_apply_matching_profile(&backend, &store, &state_store, &topology) {
+            if let Err(err) =
+                maybe_apply_matching_profile(&backend, &store, &state_store, &topology)
+            {
                 tracing::error!(error = %err, "failed to apply matching profile");
             }
         }
@@ -46,14 +48,25 @@ fn maybe_apply_matching_profile(
     state_store: &StateStore,
     topology: &Topology,
 ) -> Result<()> {
-    let profiles = store.list()?;
+    let profiles: Vec<_> = store
+        .list()?
+        .into_iter()
+        .map(|stored| stored.profile)
+        .collect();
+    let setup_fingerprint = topology.setup_fingerprint();
     let selected = if let Some(matched) = Matcher::match_profile(topology, &profiles) {
         matched.profile
     } else {
         let state = state_store.load_state()?.unwrap_or_default();
-        match state.default_profile {
+        let default_name = if state.default_profiles.is_empty() {
+            state.default_profile
+        } else {
+            state.default_profiles.get(&setup_fingerprint).cloned()
+        };
+        match default_name {
             Some(default_name) => store
-                .get(&default_name)?
+                .get(&default_name, Some(&setup_fingerprint))?
+                .map(|stored| stored.profile)
                 .ok_or_else(|| anyhow!("default profile '{}' is missing", default_name))?,
             None => {
                 tracing::info!("no matching profile and no default configured");
@@ -71,18 +84,27 @@ fn apply_profile(
     profile: &Profile,
     topology: &Topology,
 ) -> Result<()> {
-    let matched = Matcher::match_profile(topology, std::slice::from_ref(profile))
-        .ok_or_else(|| anyhow!("profile '{}' does not match the current topology", profile.name))?;
+    let matched =
+        Matcher::match_profile(topology, std::slice::from_ref(profile)).ok_or_else(|| {
+            anyhow!(
+                "profile '{}' does not match the current topology",
+                profile.name
+            )
+        })?;
     let plan = Planner::plan_from_profile(&matched, topology)?;
     let test = backend.test(&plan)?;
 
     if !test.success {
-        bail!(test.message.unwrap_or_else(|| "backend rejected configuration".to_string()));
+        bail!(test
+            .message
+            .unwrap_or_else(|| "backend rejected configuration".to_string()));
     }
 
     let result = backend.apply(&plan)?;
     if !result.success {
-        bail!(result.message.unwrap_or_else(|| "backend failed to apply configuration".to_string()));
+        bail!(result
+            .message
+            .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
     }
 
     let applied = result.applied_state.unwrap_or_else(|| topology.clone());

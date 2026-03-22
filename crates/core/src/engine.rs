@@ -1,7 +1,7 @@
-use crate::model::{Topology, Capabilities};
-use crate::profile::{Profile, Hook};
-use crate::matcher::{Matcher, MatchResult};
-use crate::planner::{Planner, LayoutPlan};
+use crate::matcher::{MatchResult, Matcher};
+use crate::model::{Capabilities, Topology};
+use crate::planner::{LayoutPlan, Planner};
+use crate::profile::{Hook, Profile};
 
 pub trait Backend {
     fn capabilities(&self) -> Capabilities;
@@ -102,7 +102,8 @@ impl<B: Backend> Engine<B> {
         profile: &Profile,
         topology: &Topology,
     ) -> anyhow::Result<ApplyResult> {
-        let match_result = self.find_matching_profile(topology, std::slice::from_ref(profile))
+        let match_result = self
+            .find_matching_profile(topology, std::slice::from_ref(profile))
             .ok_or_else(|| anyhow::anyhow!("Profile does not match current topology"))?;
 
         let plan = Planner::plan_from_profile(&match_result, topology)?;
@@ -137,35 +138,33 @@ impl<B: Backend> Engine<B> {
         cmd.stderr(Stdio::piped());
 
         match cmd.spawn() {
-            Ok(mut child) => {
-                loop {
-                    match child.try_wait()? {
-                        Some(status) => {
-                            let elapsed = start.elapsed();
+            Ok(mut child) => loop {
+                match child.try_wait()? {
+                    Some(status) => {
+                        let elapsed = start.elapsed();
+                        return Ok(HookResult {
+                            success: status.success(),
+                            exit_code: status.code(),
+                            elapsed_secs: elapsed.as_secs_f64(),
+                            stdout: String::new(),
+                            stderr: String::new(),
+                        });
+                    }
+                    None => {
+                        if start.elapsed() > timeout {
+                            child.kill()?;
                             return Ok(HookResult {
-                                success: status.success(),
-                                exit_code: status.code(),
-                                elapsed_secs: elapsed.as_secs_f64(),
+                                success: false,
+                                exit_code: None,
+                                elapsed_secs: timeout.as_secs_f64(),
                                 stdout: String::new(),
-                                stderr: String::new(),
+                                stderr: String::from("Hook timed out"),
                             });
                         }
-                        None => {
-                            if start.elapsed() > timeout {
-                                child.kill()?;
-                                return Ok(HookResult {
-                                    success: false,
-                                    exit_code: None,
-                                    elapsed_secs: timeout.as_secs_f64(),
-                                    stdout: String::new(),
-                                    stderr: String::from("Hook timed out"),
-                                });
-                            }
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
+                        std::thread::sleep(Duration::from_millis(50));
                     }
                 }
-            }
+            },
             Err(e) => Ok(HookResult {
                 success: false,
                 exit_code: None,

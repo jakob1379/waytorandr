@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::model::{Topology, OutputState, OutputIdentity};
+use crate::model::{OutputIdentity, OutputState, Topology};
 use crate::profile::Profile;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct MatchResult {
@@ -15,16 +15,25 @@ pub struct Matcher;
 
 impl Matcher {
     pub fn match_profile(topology: &Topology, profiles: &[Profile]) -> Option<MatchResult> {
-        let mut candidates: Vec<MatchResult> = profiles.iter()
+        Self::matching_profiles(topology, profiles)
+            .into_iter()
+            .next()
+    }
+
+    pub fn matching_profiles(topology: &Topology, profiles: &[Profile]) -> Vec<MatchResult> {
+        let mut candidates: Vec<MatchResult> = profiles
+            .iter()
             .filter_map(|p| Self::score_profile(topology, p))
             .collect();
 
         candidates.sort_by(|a, b| {
-            b.score.cmp(&a.score)
+            b.score
+                .cmp(&a.score)
                 .then(b.profile.priority.cmp(&a.profile.priority))
+                .then(a.profile.name.cmp(&b.profile.name))
         });
 
-        candidates.into_iter().next()
+        candidates
     }
 
     fn score_profile(topology: &Topology, profile: &Profile) -> Option<MatchResult> {
@@ -50,13 +59,17 @@ impl Matcher {
             return None;
         }
 
-        let topology_names: std::collections::HashSet<String> = topology.outputs.keys().cloned().collect();
-        let matched_names: std::collections::HashSet<String> = matched_outputs.values().cloned().collect();
+        let topology_names: std::collections::HashSet<String> =
+            topology.outputs.keys().cloned().collect();
+        let matched_names: std::collections::HashSet<String> =
+            matched_outputs.values().cloned().collect();
         let extra_outputs: Vec<String> = topology_names
             .difference(&matched_names)
             .filter(|name| {
                 let name: &String = name;
-                topology.outputs.get(name)
+                topology
+                    .outputs
+                    .get(name)
                     .map(|o| !o.identity.is_ignored && !o.identity.is_virtual)
                     .unwrap_or(false)
             })
@@ -144,8 +157,11 @@ impl Matcher {
             }
         }
 
-        query.make.is_none() && query.model.is_none() && query.serial.is_none()
-            && query.connector.is_none() && query.description.is_none()
+        query.make.is_none()
+            && query.model.is_none()
+            && query.serial.is_none()
+            && query.connector.is_none()
+            && query.description.is_none()
     }
 
     fn identity_match_score(query: &OutputIdentity, _candidate: &OutputIdentity) -> u32 {
@@ -187,29 +203,36 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Mode, Position, Transform, OutputMatcher};
+    use crate::{Mode, OutputMatcher, Position, Transform};
 
     fn make_topology() -> Topology {
         let mut outputs = HashMap::new();
-        outputs.insert("DP-1".to_string(), OutputState {
-            identity: OutputIdentity {
-                edid_hash: Some("abc123".to_string()),
-                make: Some("Dell".to_string()),
-                model: Some("U2720Q".to_string()),
-                serial: Some("SN001".to_string()),
-                connector: Some("DP-1".to_string()),
-                description: Some("Dell U2720Q".to_string()),
-                is_virtual: false,
-                is_ignored: false,
+        outputs.insert(
+            "DP-1".to_string(),
+            OutputState {
+                identity: OutputIdentity {
+                    edid_hash: Some("abc123".to_string()),
+                    make: Some("Dell".to_string()),
+                    model: Some("U2720Q".to_string()),
+                    serial: Some("SN001".to_string()),
+                    connector: Some("DP-1".to_string()),
+                    description: Some("Dell U2720Q".to_string()),
+                    is_virtual: false,
+                    is_ignored: false,
+                },
+                enabled: true,
+                mode: Some(Mode {
+                    width: 3840,
+                    height: 2160,
+                    refresh: 60,
+                }),
+                position: Position { x: 0, y: 0 },
+                scale: 1.0,
+                transform: Transform::Normal,
+                mirror_target: None,
+                backend_data: None,
             },
-            enabled: true,
-            mode: Some(Mode { width: 3840, height: 2160, refresh: 60 }),
-            position: Position { x: 0, y: 0 },
-            scale: 1.0,
-            transform: Transform::Normal,
-            mirror_target: None,
-            backend_data: None,
-        });
+        );
         Topology { outputs }
     }
 

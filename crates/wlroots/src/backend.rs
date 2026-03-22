@@ -6,17 +6,27 @@ use anyhow::{anyhow, bail, Context, Result};
 use wayland_client::backend::ObjectId;
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
 use wayland_client::protocol::{wl_output, wl_registry};
-use wayland_client::{event_created_child, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_client::{
+    event_created_child, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+};
 use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_head_v1::ZwlrOutputConfigurationHeadV1;
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_v1::{self, ZwlrOutputConfigurationV1};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_head_v1::{self, ZwlrOutputHeadV1};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_manager_v1::{self, ZwlrOutputManagerV1};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{self, ZwlrOutputModeV1};
+use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_v1::{
+    self, ZwlrOutputConfigurationV1,
+};
+use wayland_protocols_wlr::output_management::v1::client::zwlr_output_head_v1::{
+    self, ZwlrOutputHeadV1,
+};
+use wayland_protocols_wlr::output_management::v1::client::zwlr_output_manager_v1::{
+    self, ZwlrOutputManagerV1,
+};
+use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
+    self, ZwlrOutputModeV1,
+};
 
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::{
-    ApplyResult, Backend, Capabilities, Mode, OutputIdentity, OutputState, OutputWatcher,
-    Position, TestResult, Topology, Transform,
+    ApplyResult, Backend, Capabilities, Mode, OutputIdentity, OutputState, OutputWatcher, Position,
+    TestResult, Topology, Transform,
 };
 
 pub struct WlrootsBackend {
@@ -78,7 +88,8 @@ impl Default for HeadInfo {
 
 impl WlrootsBackend {
     pub fn connect() -> Result<Self> {
-        let connection = Connection::connect_to_env().context("failed to connect to Wayland display")?;
+        let connection =
+            Connection::connect_to_env().context("failed to connect to Wayland display")?;
         let (globals, event_queue) = registry_queue_init::<State>(&connection)
             .context("failed to initialize Wayland registry")?;
         let qh = event_queue.handle();
@@ -117,7 +128,10 @@ impl Backend for WlrootsBackend {
     }
 
     fn enumerate_outputs(&self) -> Result<Topology> {
-        let mut inner = self.inner.lock().map_err(|_| anyhow!("backend lock poisoned"))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("backend lock poisoned"))?;
         inner.sync()?;
         Ok(inner.export_topology())
     }
@@ -135,20 +149,31 @@ impl Backend for WlrootsBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> Result<TestResult> {
-        let mut inner = self.inner.lock().map_err(|_| anyhow!("backend lock poisoned"))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("backend lock poisoned"))?;
         let status = inner.submit_with_retry(plan, true, 3)?;
         Ok(TestResult {
             success: matches!(status, ConfigStatus::Succeeded),
             message: Some(match status {
-                ConfigStatus::Succeeded => format!("wlroots validated {} output changes", plan.outputs.len()),
+                ConfigStatus::Succeeded => {
+                    format!("wlroots validated {} output changes", plan.outputs.len())
+                }
                 ConfigStatus::Failed => "wlroots compositor rejected the configuration".to_string(),
-                ConfigStatus::Cancelled => "wlroots compositor cancelled the configuration because topology changed".to_string(),
+                ConfigStatus::Cancelled => {
+                    "wlroots compositor cancelled the configuration because topology changed"
+                        .to_string()
+                }
             }),
         })
     }
 
     fn apply(&self, plan: &LayoutPlan) -> Result<ApplyResult> {
-        let mut inner = self.inner.lock().map_err(|_| anyhow!("backend lock poisoned"))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("backend lock poisoned"))?;
         let status = inner.submit_with_retry(plan, false, 3)?;
         inner.sync()?;
         let applied_state = inner.export_topology();
@@ -157,7 +182,9 @@ impl Backend for WlrootsBackend {
             message: Some(match status {
                 ConfigStatus::Succeeded => "applied successfully".to_string(),
                 ConfigStatus::Failed => "compositor rejected the configuration".to_string(),
-                ConfigStatus::Cancelled => "configuration cancelled because topology changed".to_string(),
+                ConfigStatus::Cancelled => {
+                    "configuration cancelled because topology changed".to_string()
+                }
             }),
             applied_state: Some(applied_state),
         })
@@ -191,7 +218,11 @@ impl WaylandClient {
                         serial: head.serial.clone(),
                         connector: Some(name),
                         description: head.description.clone(),
-                        is_virtual: head.description.as_deref().map(is_virtual_description).unwrap_or(false),
+                        is_virtual: head
+                            .description
+                            .as_deref()
+                            .map(is_virtual_description)
+                            .unwrap_or(false),
                         is_ignored: false,
                     },
                     enabled: head.enabled,
@@ -208,10 +239,9 @@ impl WaylandClient {
     }
 
     fn submit(&mut self, plan: &LayoutPlan, test_only: bool) -> Result<ConfigStatus> {
-        let serial = self
-            .state
-            .serial
-            .ok_or_else(|| anyhow!("wlroots compositor did not provide an output-management serial"))?;
+        let serial = self.state.serial.ok_or_else(|| {
+            anyhow!("wlroots compositor did not provide an output-management serial")
+        })?;
         let manager = self
             .state
             .manager
@@ -257,7 +287,12 @@ impl WaylandClient {
         bail!("wlroots compositor did not answer configuration request")
     }
 
-    fn submit_with_retry(&mut self, plan: &LayoutPlan, test_only: bool, attempts: usize) -> Result<ConfigStatus> {
+    fn submit_with_retry(
+        &mut self,
+        plan: &LayoutPlan,
+        test_only: bool,
+        attempts: usize,
+    ) -> Result<ConfigStatus> {
         let attempts = attempts.max(1);
         for attempt in 0..attempts {
             self.sync()?;
@@ -267,7 +302,11 @@ impl WaylandClient {
             }
 
             if attempt + 1 < attempts {
-                tracing::warn!(attempt = attempt + 1, total_attempts = attempts, "wlroots configuration cancelled, retrying with refreshed serial");
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    total_attempts = attempts,
+                    "wlroots configuration cancelled, retrying with refreshed serial"
+                );
             } else {
                 return Ok(status);
             }
@@ -280,7 +319,9 @@ impl WaylandClient {
 fn bind_manager(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<ZwlrOutputManagerV1> {
     globals
         .bind::<ZwlrOutputManagerV1, _, _>(qh, 1..=2, ())
-        .map_err(|_| anyhow!("wlroots output-management protocol is not available on this compositor"))
+        .map_err(|_| {
+            anyhow!("wlroots output-management protocol is not available on this compositor")
+        })
 }
 
 fn mode_from_info(info: &ModeInfo) -> Option<Mode> {
@@ -318,19 +359,23 @@ fn apply_head_config(
     conf_head: &ZwlrOutputConfigurationHeadV1,
 ) -> Result<()> {
     if let Some(mode) = desired.mode {
-        if let Some(existing_mode) = head
-            .modes
-            .iter()
-            .filter_map(|id| state.modes.get(id))
-            .find(|candidate| {
-                candidate.width == Some(mode.width)
-                    && candidate.height == Some(mode.height)
-                    && candidate.refresh.unwrap_or(0) / 1000 == mode.refresh
-            })
+        if let Some(existing_mode) =
+            head.modes
+                .iter()
+                .filter_map(|id| state.modes.get(id))
+                .find(|candidate| {
+                    candidate.width == Some(mode.width)
+                        && candidate.height == Some(mode.height)
+                        && candidate.refresh.unwrap_or(0) / 1000 == mode.refresh
+                })
         {
             conf_head.set_mode(&existing_mode.mode);
         } else {
-            conf_head.set_custom_mode(mode.width as i32, mode.height as i32, (mode.refresh * 1000) as i32);
+            conf_head.set_custom_mode(
+                mode.width as i32,
+                mode.height as i32,
+                (mode.refresh * 1000) as i32,
+            );
         }
     }
 
@@ -459,14 +504,20 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
 
         match event {
             zwlr_output_head_v1::Event::Name { name } => entry.name = Some(name),
-            zwlr_output_head_v1::Event::Description { description } => entry.description = Some(description),
+            zwlr_output_head_v1::Event::Description { description } => {
+                entry.description = Some(description)
+            }
             zwlr_output_head_v1::Event::Make { make } => entry.make = Some(make),
             zwlr_output_head_v1::Event::Model { model } => entry.model = Some(model),
-            zwlr_output_head_v1::Event::SerialNumber { serial_number } => entry.serial = Some(serial_number),
+            zwlr_output_head_v1::Event::SerialNumber { serial_number } => {
+                entry.serial = Some(serial_number)
+            }
             zwlr_output_head_v1::Event::Enabled { enabled } => entry.enabled = enabled != 0,
             zwlr_output_head_v1::Event::Position { x, y } => entry.position = Position { x, y },
             zwlr_output_head_v1::Event::Scale { scale } => entry.scale = scale,
-            zwlr_output_head_v1::Event::Transform { transform } => entry.transform = transform_from_wl(transform),
+            zwlr_output_head_v1::Event::Transform { transform } => {
+                entry.transform = transform_from_wl(transform)
+            }
             zwlr_output_head_v1::Event::Mode { mode } => {
                 let mode_id = mode.id();
                 if !entry.modes.contains(&mode_id) {
@@ -481,7 +532,9 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
                     head_id: head.id(),
                 });
             }
-            zwlr_output_head_v1::Event::CurrentMode { mode } => entry.current_mode = Some(mode.id()),
+            zwlr_output_head_v1::Event::CurrentMode { mode } => {
+                entry.current_mode = Some(mode.id())
+            }
             zwlr_output_head_v1::Event::Finished => {
                 state.heads.remove(&head.id());
                 state.modes.retain(|_, mode| mode.head_id != head.id());

@@ -4,8 +4,10 @@ use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
 use clap_complete::env::CompleteEnv;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use waytorandr_core::store::{ProfileStore, StateStore};
-use waytorandr_core::{Backend, LayoutPlan, MatchResult, Matcher, OutputMatcher, Planner, Profile, Topology};
+use waytorandr_core::store::{ProfileStore, StateStore, StoredProfile};
+use waytorandr_core::{
+    Backend, LayoutPlan, MatchResult, Matcher, OutputMatcher, Planner, Profile, Topology,
+};
 
 #[derive(Parser)]
 #[command(name = "waytorandr")]
@@ -13,7 +15,9 @@ use waytorandr_core::{Backend, LayoutPlan, MatchResult, Matcher, OutputMatcher, 
 #[command(long_about = "Save, set, and switch Wayland display layouts.")]
 #[command(subcommand_required = true)]
 #[command(arg_required_else_help = true)]
-#[command(after_long_help = "Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples.")]
+#[command(
+    after_long_help = "Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -57,17 +61,22 @@ Use `--default` together with `save` when the current screen setup may match mul
     #[command(about = "Set the next saved profile")]
     Cycle(MutatingArgs),
 
-    #[command(about = "List all saved profiles")]
-    List,
+    #[command(about = "List profiles matching the current topology by default")]
+    #[command(after_long_help = "Examples:
+  waytorandr list
+  waytorandr list --all
+  waytorandr list --long
+
+By default, `list` only shows profiles matching the current detected topology.
+Use `--all` to show every saved profile across all setups.
+Use `--long` to include fingerprint details.")]
+    List(ListArgs),
 
     #[command(about = "Show the active or currently matched profile")]
     Current,
 
     #[command(about = "Show detected outputs and current geometry")]
     Detected,
-
-    #[command(about = "Print the current hardware topology fingerprint")]
-    Fingerprint,
 }
 
 #[derive(Args)]
@@ -79,25 +88,49 @@ struct SetArgs {
     )]
     target: Option<String>,
 
-    #[arg(short = 'n', long = "dry-run", help = "Preview without applying the layout")]
+    #[arg(
+        short = 'n',
+        long = "dry-run",
+        help = "Preview without applying the layout"
+    )]
     dry_run: bool,
 
-    #[arg(short = 'l', long = "largest", help = "Only with `common`: use the largest available shared target mode")]
+    #[arg(
+        short = 'l',
+        long = "largest",
+        help = "Only with `common`: use the largest available shared target mode"
+    )]
     largest: bool,
 
-    #[arg(short = 'r', long = "reverse", help = "Only with `horizontal` or `vertical`: reverse ordering")]
+    #[arg(
+        short = 'r',
+        long = "reverse",
+        help = "Only with `horizontal` or `vertical`: reverse ordering"
+    )]
     reverse: bool,
 }
 
 #[derive(Args)]
 struct SaveArgs {
-    #[arg(value_name = "profile", default_value = "default", help = "Profile name to save; defaults to `default`")]
+    #[arg(
+        value_name = "profile",
+        default_value = "default",
+        help = "Profile name to save; defaults to `default`"
+    )]
     name: String,
 
-    #[arg(short = 'd', long = "default", help = "Also set the saved profile as the default profile")]
+    #[arg(
+        short = 'd',
+        long = "default",
+        help = "Also set the saved profile as the default profile"
+    )]
     make_default: bool,
 
-    #[arg(short = 'n', long = "dry-run", help = "Preview the profile that would be saved")]
+    #[arg(
+        short = 'n',
+        long = "dry-run",
+        help = "Preview the profile that would be saved"
+    )]
     dry_run: bool,
 }
 
@@ -110,14 +143,35 @@ struct RemoveArgs {
     )]
     name: String,
 
-    #[arg(short = 'n', long = "dry-run", help = "Preview without removing the profile")]
+    #[arg(
+        short = 'n',
+        long = "dry-run",
+        help = "Preview without removing the profile"
+    )]
     dry_run: bool,
 }
 
 #[derive(Args)]
 struct MutatingArgs {
-    #[arg(short = 'n', long = "dry-run", help = "Preview without applying changes")]
+    #[arg(
+        short = 'n',
+        long = "dry-run",
+        help = "Preview without applying changes"
+    )]
     dry_run: bool,
+}
+
+#[derive(Args)]
+struct ListArgs {
+    #[arg(
+        short = 'a',
+        long = "all",
+        help = "List all saved profiles, not just profiles matching the current topology"
+    )]
+    all: bool,
+
+    #[arg(long = "long", help = "Show fingerprint details")]
+    long: bool,
 }
 
 fn main() -> Result<()> {
@@ -134,18 +188,22 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Set(args) => cmd_set(args.target.as_deref(), args.dry_run, args.reverse, args.largest),
+        Commands::Set(args) => cmd_set(
+            args.target.as_deref(),
+            args.dry_run,
+            args.reverse,
+            args.largest,
+        ),
         Commands::Save(args) => cmd_save(&args.name, args.dry_run, args.make_default),
         Commands::Remove(args) => cmd_remove(&args.name, args.dry_run),
         Commands::Cycle(args) => cmd_cycle(args.dry_run),
-        Commands::List => cmd_list(),
+        Commands::List(args) => cmd_list(args.all, args.long),
         Commands::Current => cmd_current(),
         Commands::Detected => cmd_detected(),
-        Commands::Fingerprint => cmd_fingerprint(),
     }
 }
 
-fn cmd_list() -> Result<()> {
+fn cmd_list(show_all: bool, long: bool) -> Result<()> {
     let store = ProfileStore::new()?;
     let profiles = store.list()?;
 
@@ -155,11 +213,56 @@ fn cmd_list() -> Result<()> {
     }
 
     let state = StateStore::new()?.load_state()?.unwrap_or_default();
+    let current_topology = if show_all && !long {
+        None
+    } else {
+        Some(connect_backend()?.enumerate_outputs()?)
+    };
+    let current_setup = current_topology.as_ref().map(Topology::setup_fingerprint);
+
+    let listed_profiles: Vec<StoredProfile> = if show_all {
+        profiles
+    } else if let Some(setup) = current_setup.as_deref() {
+        store.list_for_setup(setup)?
+    } else {
+        Vec::new()
+    };
+
+    if listed_profiles.is_empty() {
+        println!("No profiles match the current topology");
+        if long {
+            if let Some(setup) = &current_setup {
+                println!("Current fingerprint: {}", setup);
+            }
+        }
+        return Ok(());
+    }
 
     println!("Profiles:");
-    for profile in &profiles {
-        let is_default = state.default_profile.as_ref() == Some(&profile.name);
-        let is_active = state.last_profile.as_ref() == Some(&profile.name);
+    if long && !show_all {
+        if let Some(setup) = &current_setup {
+            println!("  current fingerprint: {}", setup);
+        }
+    }
+
+    let mut current_group: Option<&str> = None;
+    for stored in &listed_profiles {
+        if long && show_all && current_group != Some(stored.setup_fingerprint.as_str()) {
+            current_group = Some(stored.setup_fingerprint.as_str());
+            println!(
+                "  fingerprint: {}{}",
+                stored.setup_fingerprint,
+                if current_setup.as_deref() == Some(stored.setup_fingerprint.as_str()) {
+                    " [current]"
+                } else {
+                    ""
+                }
+            );
+        }
+
+        let is_default = default_profile_for_setup(&state, &stored.setup_fingerprint)
+            == Some(stored.profile.name.as_str());
+        let is_active = state.last_profile.as_ref() == Some(&stored.profile.name);
         let mut flags = Vec::new();
         if is_default {
             flags.push("default");
@@ -169,15 +272,24 @@ fn cmd_list() -> Result<()> {
         }
 
         println!(
-            "  {} (priority: {}){}",
-            profile.name,
-            profile.priority,
+            "  {}{} (priority: {}){}",
+            if long && show_all { "  " } else { "" },
+            stored.profile.name,
+            stored.profile.priority,
             if flags.is_empty() {
                 String::new()
             } else {
                 format!(" [{}]", flags.join(", "))
             }
         );
+
+        if long {
+            println!(
+                "{}    layout fingerprint: {}",
+                if show_all { "  " } else { "" },
+                stored.profile.layout_fingerprint()
+            );
+        }
     }
 
     Ok(())
@@ -188,7 +300,7 @@ fn cmd_current() -> Result<()> {
     let profiles: Vec<_> = store
         .list()?
         .into_iter()
-        .map(|p| with_inferred_match_rules(&p))
+        .map(|stored| with_inferred_match_rules(&stored.profile))
         .collect();
     let backend = connect_backend()?;
     let topology = backend.current_state()?;
@@ -212,17 +324,11 @@ fn cmd_detected() -> Result<()> {
     Ok(())
 }
 
-fn cmd_fingerprint() -> Result<()> {
-    let backend = connect_backend()?;
-    let topology = backend.enumerate_outputs()?;
-    println!("{}", topology.fingerprint());
-    Ok(())
-}
-
 fn cmd_save(name: &str, dry_run: bool, make_default: bool) -> Result<()> {
     let store = ProfileStore::new()?;
     let backend = connect_backend()?;
     let topology = backend.enumerate_outputs()?;
+    let setup_fingerprint = topology.setup_fingerprint();
 
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
@@ -266,11 +372,14 @@ fn cmd_save(name: &str, dry_run: bool, make_default: bool) -> Result<()> {
         return Ok(());
     }
 
-    store.save(&profile)?;
+    store.save(&profile, &setup_fingerprint)?;
     if make_default {
         let state_store = StateStore::new()?;
         let mut state = state_store.load_state()?.unwrap_or_default();
         state.default_profile = Some(name.to_string());
+        state
+            .default_profiles
+            .insert(setup_fingerprint, name.to_string());
         state_store.save_state(&state)?;
     }
     println!("Saved profile '{}'", name);
@@ -297,10 +406,11 @@ fn cmd_set(name: Option<&str>, dry_run: bool, reverse: bool, largest: bool) -> R
     }
 
     let store = ProfileStore::new()?;
+    let setup_fingerprint = current_setup_fingerprint()?;
     let profile = store
-        .get(name)?
+        .get(name, setup_fingerprint.as_deref())?
         .ok_or_else(|| anyhow!("profile '{}' not found", name))?;
-    execute_profile_action(&profile, dry_run)
+    execute_profile_action(&profile.profile, dry_run)
 }
 
 fn cmd_change(dry_run: bool) -> Result<()> {
@@ -314,7 +424,8 @@ fn cmd_change(dry_run: bool) -> Result<()> {
 
 fn cmd_remove(name: &str, dry_run: bool) -> Result<()> {
     let store = ProfileStore::new()?;
-    let exists = store.get(name)?.is_some();
+    let setup_fingerprint = current_setup_fingerprint()?;
+    let exists = store.get(name, setup_fingerprint.as_deref())?.is_some();
 
     if dry_run {
         if exists {
@@ -325,7 +436,7 @@ fn cmd_remove(name: &str, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    if store.remove(name)? {
+    if store.remove(name, setup_fingerprint.as_deref())? {
         println!("Removed profile '{}'", name);
     } else {
         println!("Profile '{}' not found", name);
@@ -335,7 +446,19 @@ fn cmd_remove(name: &str, dry_run: bool) -> Result<()> {
 
 fn cmd_cycle(dry_run: bool) -> Result<()> {
     let store = ProfileStore::new()?;
-    let profiles = store.list()?;
+    let profiles: Vec<Profile> = if let Some(setup) = current_setup_fingerprint()? {
+        store
+            .list_for_setup(&setup)?
+            .into_iter()
+            .map(|stored| stored.profile)
+            .collect()
+    } else {
+        store
+            .list()?
+            .into_iter()
+            .map(|stored| stored.profile)
+            .collect()
+    };
     if profiles.is_empty() {
         bail!("no profiles available to cycle")
     }
@@ -370,12 +493,16 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<()> {
     let test = test?;
 
     if !test.success {
-        bail!(test.message.unwrap_or_else(|| "backend rejected configuration".to_string()));
+        bail!(test
+            .message
+            .unwrap_or_else(|| "backend rejected configuration".to_string()));
     }
 
     let applied = backend.apply(&plan)?;
     if !applied.success {
-        bail!(applied.message.unwrap_or_else(|| "backend failed to apply configuration".to_string()));
+        bail!(applied
+            .message
+            .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
     }
 
     let applied_topology = applied.applied_state.unwrap_or(topology);
@@ -404,12 +531,16 @@ fn execute_profile_action(profile: &Profile, dry_run: bool) -> Result<()> {
     let test = test?;
 
     if !test.success {
-        bail!(test.message.unwrap_or_else(|| "backend rejected configuration".to_string()));
+        bail!(test
+            .message
+            .unwrap_or_else(|| "backend rejected configuration".to_string()));
     }
 
     let applied = backend.apply(&plan)?;
     if !applied.success {
-        bail!(applied.message.unwrap_or_else(|| "backend failed to apply configuration".to_string()));
+        bail!(applied
+            .message
+            .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
     }
 
     let applied_topology = applied.applied_state.unwrap_or_else(|| topology.clone());
@@ -511,20 +642,26 @@ fn virtual_completion_candidates(current: &str) -> Vec<CompletionCandidate> {
 }
 
 fn saved_profile_completion_candidates(current: &str) -> Vec<CompletionCandidate> {
+    let mut seen = std::collections::BTreeSet::new();
     ProfileStore::new()
         .and_then(|store| store.list())
         .unwrap_or_default()
         .into_iter()
-        .filter(|profile| profile.name.starts_with(current))
-        .map(|profile| CompletionCandidate::new(profile.name).tag(Some("profile".into())))
+        .filter(|stored| stored.profile.name.starts_with(current))
+        .filter(|stored| seen.insert(stored.profile.name.clone()))
+        .map(|stored| CompletionCandidate::new(stored.profile.name).tag(Some("profile".into())))
         .collect()
 }
 
 fn resolve_profile_plan(profile: &Profile, topology: &Topology) -> Result<MatchResult> {
     let profile = with_inferred_match_rules(profile);
     let profile_name = profile.name.clone();
-    Matcher::match_profile(topology, &[profile])
-        .ok_or_else(|| anyhow!("profile '{}' does not match the current topology", profile_name))
+    Matcher::match_profile(topology, &[profile]).ok_or_else(|| {
+        anyhow!(
+            "profile '{}' does not match the current topology",
+            profile_name
+        )
+    })
 }
 
 fn with_inferred_match_rules(profile: &Profile) -> Profile {
@@ -553,21 +690,48 @@ fn select_profile_for_topology(
     let profiles: Vec<_> = store
         .list()?
         .into_iter()
-        .map(|p| with_inferred_match_rules(&p))
+        .map(|stored| with_inferred_match_rules(&stored.profile))
         .collect();
     if let Some(matched) = Matcher::match_profile(topology, &profiles) {
         return Ok(Some(matched.profile));
     }
 
     let state = state_store.load_state()?.unwrap_or_default();
-    if let Some(default_name) = state.default_profile {
-        return store.get(&default_name);
+    let setup_fingerprint = topology.setup_fingerprint();
+    if let Some(default_name) = default_profile_for_setup(&state, &setup_fingerprint) {
+        return store
+            .get(default_name, Some(&setup_fingerprint))
+            .map(|stored| stored.map(|stored| stored.profile));
     }
 
     Ok(None)
 }
 
-fn save_runtime_state(profile_name: &str, backend: Option<&str>, topology: &Topology) -> Result<()> {
+fn current_setup_fingerprint() -> Result<Option<String>> {
+    connect_backend()
+        .and_then(|backend| backend.enumerate_outputs())
+        .map(|topology| Some(topology.setup_fingerprint()))
+}
+
+fn default_profile_for_setup<'a>(
+    state: &'a waytorandr_core::store::State,
+    setup_fingerprint: &str,
+) -> Option<&'a str> {
+    if state.default_profiles.is_empty() {
+        state.default_profile.as_deref()
+    } else {
+        state
+            .default_profiles
+            .get(setup_fingerprint)
+            .map(String::as_str)
+    }
+}
+
+fn save_runtime_state(
+    profile_name: &str,
+    backend: Option<&str>,
+    topology: &Topology,
+) -> Result<()> {
     let state_store = StateStore::new()?;
     let mut state = state_store.load_state()?.unwrap_or_default();
     state.last_profile = Some(profile_name.to_string());

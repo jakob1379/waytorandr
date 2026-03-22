@@ -75,7 +75,9 @@ impl Planner {
 
     fn plan_off(topology: &Topology) -> Result<LayoutPlan, PlanError> {
         if topology.outputs.is_empty() {
-            return Err(PlanError::InvalidConfiguration("No outputs to disable".to_string()));
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs to disable".to_string(),
+            ));
         }
 
         let outputs = topology
@@ -106,7 +108,9 @@ impl Planner {
 
         let mut outputs = available_outputs(topology);
         if outputs.is_empty() {
-            return Err(PlanError::InvalidConfiguration("No outputs to arrange".to_string()));
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs to arrange".to_string(),
+            ));
         }
 
         if let Some(primary) = primary_hint {
@@ -155,9 +159,9 @@ impl Planner {
 
     fn plan_common(topology: &Topology) -> Result<LayoutPlan, PlanError> {
         let outputs = available_outputs(topology);
-        outputs
-            .first()
-            .ok_or_else(|| PlanError::InvalidConfiguration("No outputs available for common layout".to_string()))?;
+        outputs.first().ok_or_else(|| {
+            PlanError::InvalidConfiguration("No outputs available for common layout".to_string())
+        })?;
 
         let mode = outputs
             .iter()
@@ -187,7 +191,11 @@ impl Planner {
             .iter()
             .filter_map(|(name, state)| state.mode.map(|mode| (name.clone(), mode)))
             .max_by_key(|(_, mode)| mode.width * mode.height)
-            .ok_or_else(|| PlanError::InvalidConfiguration("No connected outputs with a mode found".to_string()))?;
+            .ok_or_else(|| {
+                PlanError::InvalidConfiguration(
+                    "No connected outputs with a mode found".to_string(),
+                )
+            })?;
 
         let mut planned = HashMap::new();
         for (name, mut state) in outputs {
@@ -227,7 +235,10 @@ pub fn detect_preset(topology: &Topology) -> Option<String> {
         return None;
     }
 
-    let positions: Vec<_> = enabled.iter().map(|s| (s.position.x, s.position.y)).collect();
+    let positions: Vec<_> = enabled
+        .iter()
+        .map(|s| (s.position.x, s.position.y))
+        .collect();
 
     let same_y = positions.iter().all(|(_, y)| *y == positions[0].1);
     let same_x = positions.iter().all(|(x, _)| *x == positions[0].0);

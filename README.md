@@ -14,10 +14,9 @@ Commands:
   save         Save the current compositor layout as a profile
   remove       Remove a saved profile
   cycle        Set the next saved profile
-  list         List all saved profiles
+  list         List profiles matching the current topology by default
   current      Show the active or currently matched profile
   detected     Show detected outputs and current geometry
-  fingerprint  Print the current hardware topology fingerprint
   help         Print this message or the help of the given subcommand(s)
 
 Options:

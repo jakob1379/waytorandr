@@ -27,10 +27,25 @@ impl Topology {
     }
 
     pub fn fingerprint(&self) -> String {
-        let mut parts: Vec<String> = self.outputs.keys().map(|k| {
-            let o = &self.outputs[k];
-            format!("{}:{}", k, if o.enabled { "on" } else { "off" })
-        }).collect();
+        let mut parts: Vec<String> = self
+            .outputs
+            .keys()
+            .map(|k| {
+                let o = &self.outputs[k];
+                format!("{}:{}", k, if o.enabled { "on" } else { "off" })
+            })
+            .collect();
+        parts.sort();
+        parts.join(";")
+    }
+
+    pub fn setup_fingerprint(&self) -> String {
+        let mut parts: Vec<String> = self
+            .outputs
+            .values()
+            .filter(|output| !output.identity.is_ignored && !output.identity.is_virtual)
+            .map(|output| output.identity.primary_key())
+            .collect();
         parts.sort();
         parts.join(";")
     }
@@ -61,9 +76,18 @@ impl OutputState {
             "{}:{}:{}x{}@{}:{}:{}",
             self.identity.primary_key(),
             if self.enabled { "on" } else { "off" },
-            self.mode.as_ref().map(|m| m.width.to_string()).unwrap_or_default(),
-            self.mode.as_ref().map(|m| m.height.to_string()).unwrap_or_default(),
-            self.mode.as_ref().map(|m| m.refresh.to_string()).unwrap_or_default(),
+            self.mode
+                .as_ref()
+                .map(|m| m.width.to_string())
+                .unwrap_or_default(),
+            self.mode
+                .as_ref()
+                .map(|m| m.height.to_string())
+                .unwrap_or_default(),
+            self.mode
+                .as_ref()
+                .map(|m| m.refresh.to_string())
+                .unwrap_or_default(),
             self.scale,
             self.transform,
         )
@@ -93,28 +117,41 @@ impl OutputIdentity {
         if let Some(hash) = &self.edid_hash {
             return format!("edid:{}", hash);
         }
-        let parts: Vec<String> = [
-            self.make.clone(),
-            self.model.clone(),
-            self.serial.clone(),
-        ].into_iter().flatten().collect();
+        let parts: Vec<String> = [self.make.clone(), self.model.clone(), self.serial.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
         if !parts.is_empty() {
             return format!("id:{}", parts.join(":"));
         }
         if let Some(conn) = &self.connector {
             return format!("conn:{}", conn);
         }
-        self.description.clone().unwrap_or_else(|| "unknown".to_string())
+        self.description
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     pub fn match_strength(&self) -> u8 {
         let mut strength = 0u8;
-        if self.edid_hash.is_some() { strength += 5; }
-        if self.make.is_some() { strength += 2; }
-        if self.model.is_some() { strength += 2; }
-        if self.serial.is_some() { strength += 3; }
-        if self.connector.is_some() { strength += 1; }
-        if self.description.is_some() { strength += 0; }
+        if self.edid_hash.is_some() {
+            strength += 5;
+        }
+        if self.make.is_some() {
+            strength += 2;
+        }
+        if self.model.is_some() {
+            strength += 2;
+        }
+        if self.serial.is_some() {
+            strength += 3;
+        }
+        if self.connector.is_some() {
+            strength += 1;
+        }
+        if self.description.is_some() {
+            strength += 0;
+        }
         strength
     }
 }
@@ -140,7 +177,11 @@ pub struct Mode {
 
 impl Mode {
     pub fn new(width: u32, height: u32, refresh: u32) -> Self {
-        Self { width, height, refresh }
+        Self {
+            width,
+            height,
+            refresh,
+        }
     }
 }
 

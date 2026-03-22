@@ -1,6 +1,6 @@
+use crate::model::{OutputIdentity, OutputState, Position};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::model::{OutputState, Position, OutputIdentity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
@@ -34,7 +34,10 @@ pub struct OutputConfig {
 
 impl From<OutputState> for OutputConfig {
     fn from(state: OutputState) -> Self {
-        Self { state, preset: None }
+        Self {
+            state,
+            preset: None,
+        }
     }
 }
 
@@ -76,6 +79,48 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl Profile {
+    pub fn setup_fingerprint(&self) -> String {
+        let mut parts: Vec<String> = if !self.match_rules.is_empty() {
+            self.match_rules
+                .iter()
+                .map(|matcher| matcher.identity.primary_key())
+                .collect()
+        } else {
+            self.layout
+                .values()
+                .map(|config| config.state.identity.primary_key())
+                .collect()
+        };
+        parts.sort();
+        parts.join(";")
+    }
+
+    pub fn layout_fingerprint(&self) -> String {
+        let mut parts: Vec<String> = if !self.layout.is_empty() {
+            self.layout
+                .values()
+                .map(|config| config.state.fingerprint())
+                .collect()
+        } else {
+            self.match_rules
+                .iter()
+                .map(|matcher| {
+                    format!(
+                        "{}:{}",
+                        matcher.identity.primary_key(),
+                        if matcher.required {
+                            "required"
+                        } else {
+                            "optional"
+                        }
+                    )
+                })
+                .collect()
+        };
+        parts.sort();
+        parts.join(";")
+    }
+
     pub fn save_to_file(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
