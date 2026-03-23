@@ -119,7 +119,7 @@ impl Matcher {
         best_match.map(|(name, state, _)| (name, state))
     }
 
-    fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> bool {
+    pub fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> bool {
         if let Some(query_hash) = &query.edid_hash {
             if let Some(cand_hash) = &candidate.edid_hash {
                 return query_hash == cand_hash;
@@ -143,6 +143,10 @@ impl Matcher {
             if query_serial != cand_serial {
                 return false;
             }
+        }
+
+        if query.serial.is_some() {
+            return candidate.serial.is_some();
         }
 
         if let (Some(query_conn), Some(cand_conn)) = (&query.connector, &candidate.connector) {
@@ -283,5 +287,27 @@ mod tests {
 
         let result = Matcher::match_profile(&topo, &[profile]);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_serial_match_does_not_require_same_connector() {
+        let query = OutputIdentity {
+            make: Some("Microstep".to_string()),
+            model: Some("MSI MP273A".to_string()),
+            serial: Some("PB4H603B02982".to_string()),
+            connector: Some("DP-4".to_string()),
+            description: Some("Microstep - MSI MP273A - DP-4".to_string()),
+            ..Default::default()
+        };
+        let candidate = OutputIdentity {
+            make: Some("Microstep".to_string()),
+            model: Some("MSI MP273A".to_string()),
+            serial: Some("PB4H603B02982".to_string()),
+            connector: Some("DP-1".to_string()),
+            description: Some("Microstep - MSI MP273A - DP-1".to_string()),
+            ..Default::default()
+        };
+
+        assert!(Matcher::identities_match(&query, &candidate));
     }
 }

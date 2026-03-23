@@ -225,7 +225,7 @@ impl WaylandClient {
                             .unwrap_or(false),
                         is_ignored: false,
                     },
-                    enabled: head.enabled,
+                    enabled: head_is_enabled(head.enabled, head.current_mode.as_ref()),
                     mode,
                     position: head.position,
                     scale: head.scale,
@@ -350,6 +350,10 @@ fn preferred_mode_for_head(state: &State, head: &HeadInfo) -> Option<Mode> {
                 .filter_map(|id| state.modes.get(id))
                 .find_map(mode_from_info)
         })
+}
+
+fn head_is_enabled(enabled: bool, current_mode: Option<&ObjectId>) -> bool {
+    enabled || current_mode.is_some()
 }
 
 fn apply_head_config(
@@ -616,4 +620,15 @@ pub fn probe_backend() -> Option<Box<dyn Backend>> {
     WlrootsBackend::connect()
         .ok()
         .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_mode_marks_head_enabled() {
+        assert!(head_is_enabled(false, Some(&ObjectId::null())));
+        assert!(!head_is_enabled(false, None));
+    }
 }
