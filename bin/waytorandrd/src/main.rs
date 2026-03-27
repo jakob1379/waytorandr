@@ -1,8 +1,12 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use waytorandr_core::engine::Backend;
+use waytorandr_core::runtime;
 use waytorandr_core::store::{ProfileStore, StateStore};
-use waytorandr_core::{Backend, Matcher, Planner, Profile, Topology};
+use waytorandr_core::store::State;
+
+mod daemon;
 
 fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -13,7 +17,7 @@ fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let backend = waytorandr_wlroots::WlrootsBackend::connect()
+    let backend = waytorandr_wlroots::backend::WlrootsBackend::connect()
         .map_err(|err| anyhow!("failed to connect to wlroots backend: {err}"))?;
     let capabilities = backend.capabilities();
     let store = ProfileStore::new()?;
@@ -21,100 +25,35 @@ fn main() -> Result<()> {
     let mut watcher = backend.watch_outputs()?;
 
     let mut state = state_store.load_state()?.unwrap_or_default();
-    state.daemon_enabled = true;
-    state.backend = Some(capabilities.backend_name.clone());
+    runtime::record_daemon_started(&mut state, &capabilities.backend_name);
     state_store.save_state(&state)?;
 
-    let initial = backend.enumerate_outputs()?;
-    maybe_apply_matching_profile(&backend, &store, &state_store, &initial)?;
+    daemon::handle_topology_change(&backend, &store, &state_store)?;
 
     tracing::info!(backend = %capabilities.backend_name, "daemon ready, watching outputs");
 
     loop {
         if let Some(topology) = watcher.poll_changed()? {
+            let topology = state_store.normalize_topology_and_persist(&topology)?;
             tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
-            if let Err(err) =
-                maybe_apply_matching_profile(&backend, &store, &state_store, &topology)
-            {
+            if let Err(err) = daemon::handle_topology_change(&backend, &store, &state_store) {
                 tracing::error!(error = %err, "failed to apply matching profile");
             }
         }
     }
 }
 
-fn maybe_apply_matching_profile(
-    backend: &waytorandr_wlroots::WlrootsBackend,
-    store: &ProfileStore,
-    state_store: &StateStore,
-    topology: &Topology,
-) -> Result<()> {
-    let profiles: Vec<_> = store
-        .list()?
-        .into_iter()
-        .map(|stored| stored.profile)
-        .collect();
-    let setup_fingerprint = topology.setup_fingerprint();
-    let selected = if let Some(matched) = Matcher::match_profile(topology, &profiles) {
-        matched.profile
-    } else {
-        let state = state_store.load_state()?.unwrap_or_default();
-        let default_name = if state.default_profiles.is_empty() {
-            state.default_profile
-        } else {
-            state.default_profiles.get(&setup_fingerprint).cloned()
-        };
-        match default_name {
-            Some(default_name) => store
-                .get(&default_name, Some(&setup_fingerprint))?
-                .map(|stored| stored.profile)
-                .ok_or_else(|| anyhow!("default profile '{}' is missing", default_name))?,
-            None => {
-                tracing::info!("no matching profile and no default configured");
-                return Ok(());
-            }
-        }
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    apply_profile(backend, state_store, &selected, topology)
-}
+    #[test]
+    fn record_daemon_start_marks_backend_and_enablement() {
+        let mut state = State::default();
 
-fn apply_profile(
-    backend: &waytorandr_wlroots::WlrootsBackend,
-    state_store: &StateStore,
-    profile: &Profile,
-    topology: &Topology,
-) -> Result<()> {
-    let matched =
-        Matcher::match_profile(topology, std::slice::from_ref(profile)).ok_or_else(|| {
-            anyhow!(
-                "profile '{}' does not match the current topology",
-                profile.name
-            )
-        })?;
-    let plan = Planner::plan_from_profile(&matched, topology)?;
-    let test = backend.test(&plan)?;
+        runtime::record_daemon_started(&mut state, "wlroots");
 
-    if !test.success {
-        bail!(test
-            .message
-            .unwrap_or_else(|| "backend rejected configuration".to_string()));
+        assert!(state.daemon_enabled);
+        assert_eq!(state.backend.as_deref(), Some("wlroots"));
     }
-
-    let result = backend.apply(&plan)?;
-    if !result.success {
-        bail!(result
-            .message
-            .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
-    }
-
-    let applied = result.applied_state.unwrap_or_else(|| topology.clone());
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.last_profile = Some(profile.name.clone());
-    state.last_topology_fingerprint = Some(applied.fingerprint());
-    state.backend = Some("wlroots".to_string());
-    state.daemon_enabled = true;
-    state_store.save_state(&state)?;
-
-    tracing::info!(profile = %profile.name, "applied profile");
-    Ok(())
 }
