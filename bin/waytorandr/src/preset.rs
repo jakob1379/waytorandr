@@ -1,6 +1,10 @@
 use anyhow::{bail, Result};
 
-pub(crate) fn resolve_virtual_preset(name: &str, reverse: bool, largest: bool) -> Result<Option<String>> {
+pub(crate) fn resolve_virtual_preset(
+    name: &str,
+    reverse: bool,
+    largest: bool,
+) -> Result<Option<String>> {
     let preset = match name {
         "off" => Some(name.to_string()),
         "common" => Some(if largest {
@@ -36,7 +40,9 @@ pub(crate) fn mirror_unavailable_message() -> &'static str {
     "true display mirroring is not available through generic wlroots output-management today; use 'wl-mirror' for now. See https://github.com/swaywm/wlr-protocols/issues/101"
 }
 
-pub(crate) fn virtual_completion_candidates(current: &str) -> Vec<clap_complete::engine::CompletionCandidate> {
+pub(crate) fn virtual_completion_candidates(
+    current: &str,
+) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
         ("off", "virtual"),
         ("common", "virtual"),

@@ -17,7 +17,9 @@ fn xdg_lock() -> &'static Mutex<()> {
 }
 
 fn with_test_dirs<T>(f: impl FnOnce(&TempDir) -> T) -> T {
-    let _guard = xdg_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = xdg_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let config_home = temp.path().join("config");
     let state_home = temp.path().join("state");
@@ -72,16 +74,34 @@ fn profile(name: &str, connector: &str) -> Profile {
     }
 }
 
+fn profiles_path(temp: &TempDir) -> std::path::PathBuf {
+    temp.path()
+        .join("config")
+        .join("waytorandr")
+        .join("profiles.json")
+}
+
 #[test]
 fn profile_store_roundtrips_saved_profiles_per_setup() {
-    with_test_dirs(|_| {
+    with_test_dirs(|temp| {
         let store = ProfileStore::new().unwrap();
         let profile = profile("desk", "DP-1");
         let setup_fingerprint = profile.setup_fingerprint();
 
         store.save(&profile, "setup-1").unwrap();
 
-        let loaded = store.get_in_setup("desk", &setup_fingerprint).unwrap().unwrap();
+        assert!(profiles_path(temp).exists());
+        assert!(!temp
+            .path()
+            .join("config")
+            .join("waytorandr")
+            .join("profiles")
+            .exists());
+
+        let loaded = store
+            .get_in_setup("desk", &setup_fingerprint)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.profile.name, "desk");
         assert_eq!(loaded.setup_fingerprint, setup_fingerprint);
     });
@@ -118,22 +138,28 @@ fn profile_store_returns_canonical_match_ready_profiles() {
 }
 
 #[test]
-fn profile_store_migrates_legacy_flat_profiles_to_setup_directories() {
+fn profile_store_migrates_legacy_profiles_to_json_file() {
     with_test_dirs(|temp| {
         let legacy_profile = profile("desk", "DP-1");
-        let profiles_dir = temp.path().join("config").join("waytorandr").join("profiles");
+        let profiles_dir = temp
+            .path()
+            .join("config")
+            .join("waytorandr")
+            .join("profiles");
         std::fs::create_dir_all(&profiles_dir).unwrap();
         let legacy_path = profiles_dir.join("desk.toml");
-        std::fs::write(&legacy_path, toml::to_string_pretty(&legacy_profile).unwrap()).unwrap();
+        std::fs::write(
+            &legacy_path,
+            toml::to_string_pretty(&legacy_profile).unwrap(),
+        )
+        .unwrap();
 
         let store = ProfileStore::new().unwrap();
         let setup_fingerprint = legacy_profile.setup_fingerprint();
-        let setup_path = profiles_dir
-            .join(&setup_fingerprint)
-            .join("desk.toml");
+        let profiles_path = profiles_path(temp);
 
         assert!(!legacy_path.exists());
-        assert!(setup_path.exists());
+        assert!(profiles_path.exists());
         assert!(store
             .get_in_setup("desk", &setup_fingerprint)
             .unwrap()
@@ -146,18 +172,17 @@ fn state_store_normalizes_profile_using_cached_outputs() {
     with_test_dirs(|_| {
         let state_store = StateStore::new().unwrap();
         let mut state = State::default();
-        state.known_outputs.insert(
-            "DP-1".to_string(),
-            {
-                let mut identity = OutputIdentity::new("DP-1");
-                identity.make = Some("Dell".to_string());
-                identity.model = Some("U2720Q".to_string());
-                identity
-            },
-        );
+        state.known_outputs.insert("DP-1".to_string(), {
+            let mut identity = OutputIdentity::new("DP-1");
+            identity.make = Some("Dell".to_string());
+            identity.model = Some("U2720Q".to_string());
+            identity
+        });
         state_store.save_state(&state).unwrap();
 
-        let normalized = state_store.normalize_profile(&profile("desk", "DP-1")).unwrap();
+        let normalized = state_store
+            .normalize_profile(&profile("desk", "DP-1"))
+            .unwrap();
         let identity = &normalized.layout["DP-1"].state.identity;
 
         assert_eq!(identity.make.as_deref(), Some("Dell"));
@@ -210,11 +235,12 @@ fn runtime_selects_applies_and_records_matching_profile() {
 
         let selected = runtime::select_profile_for_topology(&topology, &profiles, &state)
             .expect("matching profile should be selected");
-        let cycle = runtime::execute_plan_cycle_with_backend(&backend, &selected.hooks, false, || {
-            let plan = runtime::plan_profile_for_topology(&selected, &topology)?;
-            Ok((topology.clone(), plan))
-        })
-        .unwrap();
+        let cycle =
+            runtime::execute_plan_cycle_with_backend(&backend, &selected.hooks, false, || {
+                let plan = runtime::plan_profile_for_topology(&selected, &topology)?;
+                Ok((topology.clone(), plan))
+            })
+            .unwrap();
         let applied = cycle.apply_result.unwrap();
 
         assert!(applied.success);

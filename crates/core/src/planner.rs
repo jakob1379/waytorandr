@@ -400,24 +400,21 @@ mod tests {
     #[test]
     fn plan_from_profile_maps_layout_using_stable_identity() {
         let topology = Topology {
-            outputs: HashMap::from([(
-                "DP-1".to_string(),
-                {
-                    let mut state = OutputState::new("DP-1");
-                    state.identity.make = Some("Microstep".to_string());
-                    state.identity.model = Some("MSI MP273A".to_string());
-                    state.identity.serial = Some("PB4H603B02982".to_string());
-                    state.identity.description = Some("Microstep - MSI MP273A - DP-1".to_string());
-                    state.enabled = true;
-                    state.mode = Some(Mode::new(1920, 1080, 60));
-                    state.position = Position::new(400, 200);
-                    state.scale = 1.0;
-                    state.transform = Transform::Normal;
-                    state.mirror_target = None;
-                    state.backend_data = None;
-                    state
-                },
-            )]),
+            outputs: HashMap::from([("DP-1".to_string(), {
+                let mut state = OutputState::new("DP-1");
+                state.identity.make = Some("Microstep".to_string());
+                state.identity.model = Some("MSI MP273A".to_string());
+                state.identity.serial = Some("PB4H603B02982".to_string());
+                state.identity.description = Some("Microstep - MSI MP273A - DP-1".to_string());
+                state.enabled = true;
+                state.mode = Some(Mode::new(1920, 1080, 60));
+                state.position = Position::new(400, 200);
+                state.scale = 1.0;
+                state.transform = Transform::Normal;
+                state.mirror_target = None;
+                state.backend_data = None;
+                state
+            })]),
         };
         let profile = Profile {
             name: "default".to_string(),
@@ -442,7 +439,8 @@ mod tests {
                         state.identity.make = Some("Microstep".to_string());
                         state.identity.model = Some("MSI MP273A".to_string());
                         state.identity.serial = Some("PB4H603B02982".to_string());
-                        state.identity.description = Some("Microstep - MSI MP273A - DP-4".to_string());
+                        state.identity.description =
+                            Some("Microstep - MSI MP273A - DP-4".to_string());
                         state.enabled = false;
                         state.mode = Some(Mode::new(1920, 1080, 60));
                         state.position = Position::new(0, 0);

@@ -5,80 +5,57 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub struct ProfileStore {
-    dir: PathBuf,
+    path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
 pub struct StoredProfile {
     pub profile: Profile,
     pub setup_fingerprint: String,
-    path: PathBuf,
 }
 
 pub struct StateStore {
     dir: PathBuf,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ProfilesFile {
+    #[serde(default)]
+    profiles: Vec<Profile>,
+}
+
 impl ProfileStore {
     pub fn new() -> CoreResult<Self> {
-        let dir = profile_dir()?;
-        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let store = Self { dir };
+        let path = profiles_path()?;
+        let dir = path
+            .parent()
+            .ok_or(CoreError::MissingConfigDirectory)?
+            .to_path_buf();
+        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir { path: dir, source })?;
+        let store = Self { path };
         store.migrate_legacy_profiles()?;
         Ok(store)
     }
 
     pub fn open_read_only() -> CoreResult<Self> {
-        Ok(Self { dir: profile_dir()? })
+        Ok(Self {
+            path: profiles_path()?,
+        })
     }
 
     pub fn list(&self) -> CoreResult<Vec<StoredProfile>> {
-        let mut profiles = Vec::new();
         let state = StateStore::new()?.load_state()?.unwrap_or_default();
-        if !self.dir.exists() {
-            return Ok(profiles);
-        }
-
-        for entry in fs::read_dir(&self.dir).map_err(|source| CoreError::ReadDir {
-            path: self.dir.clone(),
-            source,
-        })? {
-            let entry = entry.map_err(|source| CoreError::ReadDir {
-                path: self.dir.clone(),
-                source,
-            })?;
-            let path = entry.path();
-            if path.is_dir() {
-                let setup_fingerprint = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_string);
-                for nested in fs::read_dir(&path).map_err(|source| CoreError::ReadDir {
-                    path: path.clone(),
-                    source,
-                })? {
-                    let nested = nested.map_err(|source| CoreError::ReadDir {
-                        path: path.clone(),
-                        source,
-                    })?;
-                    let nested_path = nested.path();
-                    if nested_path
-                        .extension()
-                        .map(|e| e == "toml")
-                        .unwrap_or(false)
-                    {
-                        let mut profile =
-                            self.load_stored_profile(&nested_path, setup_fingerprint.clone())?;
-                        profile.profile = canonicalize_profile(&profile.profile, &state.known_outputs);
-                        profile.setup_fingerprint = profile.profile.setup_fingerprint();
-                        profiles.push(profile)
-                    }
+        let mut profiles: Vec<_> = self
+            .load_profiles()?
+            .into_iter()
+            .map(|profile| {
+                let profile = canonicalize_profile(&profile, &state.known_outputs);
+                StoredProfile {
+                    setup_fingerprint: profile.setup_fingerprint(),
+                    profile,
                 }
-            }
-        }
+            })
+            .collect();
 
         profiles.sort_by(|a, b| {
             a.setup_fingerprint
@@ -114,47 +91,9 @@ impl ProfileStore {
     }
 
     pub fn list_names(&self) -> CoreResult<Vec<String>> {
-        if !self.dir.exists() {
-            return Ok(Vec::new());
-        }
-
         let mut names = std::collections::BTreeSet::new();
-        for entry in fs::read_dir(&self.dir).map_err(|source| CoreError::ReadDir {
-            path: self.dir.clone(),
-            source,
-        })? {
-            let entry = entry.map_err(|source| CoreError::ReadDir {
-                path: self.dir.clone(),
-                source,
-            })?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            for nested in fs::read_dir(&path).map_err(|source| CoreError::ReadDir {
-                path: path.clone(),
-                source,
-            })? {
-                let nested = nested.map_err(|source| CoreError::ReadDir {
-                    path: path.clone(),
-                    source,
-                })?;
-                let nested_path = nested.path();
-                if nested_path
-                    .extension()
-                    .map(|extension| extension == "toml")
-                    .unwrap_or(false)
-                {
-                    if let Some(name) = nested_path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .map(str::to_string)
-                    {
-                        names.insert(name);
-                    }
-                }
-            }
+        for profile in self.load_profiles()? {
+            names.insert(profile.name);
         }
 
         Ok(names.into_iter().collect())
@@ -165,12 +104,9 @@ impl ProfileStore {
         name: &str,
         setup_fingerprint: &str,
     ) -> CoreResult<Option<StoredProfile>> {
-        Ok(self
-            .list()?
-            .into_iter()
-            .find(|stored| {
-                stored.profile.name == name && stored.setup_fingerprint == setup_fingerprint
-            }))
+        Ok(self.list()?.into_iter().find(|stored| {
+            stored.profile.name == name && stored.setup_fingerprint == setup_fingerprint
+        }))
     }
 
     pub fn get_unique(&self, name: &str) -> CoreResult<Option<StoredProfile>> {
@@ -187,25 +123,35 @@ impl ProfileStore {
         }
     }
 
-    pub fn save(&self, profile: &Profile, setup_fingerprint: &str) -> CoreResult<()> {
-        let dir = self.dir.join(setup_fingerprint);
-        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = dir.join(format!("{}.toml", profile.name));
-        save_profile_to_file(profile, &path)?;
+    pub fn save(&self, profile: &Profile, _setup_fingerprint: &str) -> CoreResult<()> {
+        let state = StateStore::new()?.load_state()?.unwrap_or_default();
+        let setup_fingerprint =
+            canonicalize_profile(profile, &state.known_outputs).setup_fingerprint();
+        let mut stored = self.load_profiles_file()?;
+        stored.profiles.retain(|existing| {
+            !(existing.name == profile.name
+                && canonicalize_profile(existing, &state.known_outputs).setup_fingerprint()
+                    == setup_fingerprint)
+        });
+        stored.profiles.push(profile.clone());
+        self.save_profiles_file(&stored)?;
 
-        tracing::info!("Saved profile '{}' to {:?}", profile.name, path);
+        tracing::info!("Saved profile '{}' to {:?}", profile.name, self.path);
         Ok(())
     }
 
     pub fn remove_in_setup(&self, name: &str, setup_fingerprint: &str) -> CoreResult<bool> {
-        if let Some(stored) = self.get_in_setup(name, setup_fingerprint)? {
-            fs::remove_file(&stored.path).map_err(|source| CoreError::WriteFile {
-                path: stored.path.clone(),
-                source,
-            })?;
+        let state = StateStore::new()?.load_state()?.unwrap_or_default();
+        let mut stored = self.load_profiles_file()?;
+        let original_len = stored.profiles.len();
+        stored.profiles.retain(|profile| {
+            !(profile.name == name
+                && canonicalize_profile(profile, &state.known_outputs).setup_fingerprint()
+                    == setup_fingerprint)
+        });
+
+        if stored.profiles.len() != original_len {
+            self.save_profiles_file(&stored)?;
             tracing::info!("Removed profile '{}'", name);
             Ok(true)
         } else {
@@ -214,11 +160,22 @@ impl ProfileStore {
     }
 
     pub fn remove_unique(&self, name: &str) -> CoreResult<bool> {
-        if let Some(stored) = self.get_unique(name)? {
-            fs::remove_file(&stored.path).map_err(|source| CoreError::WriteFile {
-                path: stored.path.clone(),
-                source,
-            })?;
+        let mut stored = self.load_profiles_file()?;
+        let matches = stored
+            .profiles
+            .iter()
+            .filter(|profile| profile.name == name)
+            .count();
+
+        if matches > 1 {
+            return Err(CoreError::AmbiguousProfile(name.to_string()));
+        }
+
+        let original_len = stored.profiles.len();
+        stored.profiles.retain(|profile| profile.name != name);
+
+        if stored.profiles.len() != original_len {
+            self.save_profiles_file(&stored)?;
             tracing::info!("Removed profile '{}'", name);
             Ok(true)
         } else {
@@ -226,79 +183,82 @@ impl ProfileStore {
         }
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    fn load_stored_profile(
-        &self,
-        path: &Path,
-        setup_fingerprint: Option<String>,
-    ) -> CoreResult<StoredProfile> {
-        let profile = load_profile_from_file(path)?;
-        Ok(StoredProfile {
-            setup_fingerprint: setup_fingerprint.unwrap_or_else(|| profile.setup_fingerprint()),
-            profile,
-            path: path.to_path_buf(),
-        })
+    fn load_profiles(&self) -> CoreResult<Vec<Profile>> {
+        if self.path.exists() {
+            return Ok(self.load_profiles_file()?.profiles);
+        }
+
+        self.load_legacy_profiles()
     }
 
     fn migrate_legacy_profiles(&self) -> CoreResult<()> {
-        for entry in fs::read_dir(&self.dir).map_err(|source| CoreError::ReadDir {
-            path: self.dir.clone(),
-            source,
-        })? {
-            let entry = entry.map_err(|source| CoreError::ReadDir {
-                path: self.dir.clone(),
-                source,
-            })?;
-            let legacy_path = entry.path();
-            if legacy_path.is_dir()
-                || !legacy_path
-                    .extension()
-                    .map(|extension| extension == "toml")
-                    .unwrap_or(false)
-            {
-                continue;
-            }
+        let legacy_dir = legacy_profile_dir()?;
+        if !legacy_dir.exists() {
+            return Ok(());
+        }
 
-            let profile = load_profile_from_file(&legacy_path)?;
-            let setup_fingerprint = profile.setup_fingerprint();
-            let setup_dir = self.dir.join(&setup_fingerprint);
-            fs::create_dir_all(&setup_dir).map_err(|source| CoreError::CreateDir {
-                path: setup_dir.clone(),
-                source,
-            })?;
+        let mut stored = self.load_profiles_file()?;
+        let mut migrated_paths = Vec::new();
 
-            let setup_path = setup_dir.join(format!("{}.toml", profile.name));
-            if setup_path.exists() {
-                let setup_profile = load_profile_from_file(&setup_path)?;
-                let same_profile = setup_profile.name == profile.name
-                    && setup_profile.setup_fingerprint() == setup_fingerprint
-                    && setup_profile.layout_fingerprint() == profile.layout_fingerprint();
+        for (legacy_path, profile) in load_legacy_profiles_from_dir(&legacy_dir)? {
+            merge_legacy_profile(&mut stored.profiles, profile, &legacy_path, &self.path)?;
+            migrated_paths.push(legacy_path);
+        }
 
-                if same_profile {
-                    fs::remove_file(&legacy_path).map_err(|source| CoreError::WriteFile {
-                        path: legacy_path.clone(),
-                        source,
-                    })?;
-                    continue;
-                }
+        if migrated_paths.is_empty() {
+            return Ok(());
+        }
 
-                return Err(CoreError::LegacyProfileConflict {
-                    name: profile.name,
-                    legacy_path,
-                    setup_path,
-                });
-            }
-
-            fs::rename(&legacy_path, &setup_path).map_err(|source| CoreError::WriteFile {
-                path: legacy_path,
+        self.save_profiles_file(&stored)?;
+        for path in migrated_paths {
+            fs::remove_file(&path).map_err(|source| CoreError::WriteFile {
+                path: path.clone(),
                 source,
             })?;
         }
+        remove_empty_legacy_directories(&legacy_dir)?;
 
         Ok(())
+    }
+
+    fn load_profiles_file(&self) -> CoreResult<ProfilesFile> {
+        if !self.path.exists() {
+            return Ok(ProfilesFile::default());
+        }
+
+        let content = fs::read_to_string(&self.path).map_err(|source| CoreError::ReadFile {
+            path: self.path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
+            path: self.path.clone(),
+            source,
+        })
+    }
+
+    fn save_profiles_file(&self, profiles: &ProfilesFile) -> CoreResult<()> {
+        let content = serde_json::to_string_pretty(profiles).map_err(CoreError::SerializeJson)?;
+        fs::write(&self.path, format!("{content}\n")).map_err(|source| CoreError::WriteFile {
+            path: self.path.clone(),
+            source,
+        })?;
+        Ok(())
+    }
+
+    fn load_legacy_profiles(&self) -> CoreResult<Vec<Profile>> {
+        let legacy_dir = legacy_profile_dir()?;
+        if !legacy_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        Ok(load_legacy_profiles_from_dir(&legacy_dir)?
+            .into_iter()
+            .map(|(_, profile)| profile)
+            .collect())
     }
 }
 
@@ -340,10 +300,8 @@ impl StateStore {
             path: path.clone(),
             source,
         })?;
-        let mut state: State = toml::from_str(&content).map_err(|source| CoreError::ParseToml {
-            path,
-            source,
-        })?;
+        let mut state: State =
+            toml::from_str(&content).map_err(|source| CoreError::ParseToml { path, source })?;
         if state.migrate_legacy_default_profile() {
             self.save_state(&state)?;
         }
@@ -352,7 +310,10 @@ impl StateStore {
 
     pub fn normalize_topology(&self, topology: &Topology) -> CoreResult<Topology> {
         let state = self.load_state()?.unwrap_or_default();
-        Ok(normalize_topology_with_cache(topology, &state.known_outputs))
+        Ok(normalize_topology_with_cache(
+            topology,
+            &state.known_outputs,
+        ))
     }
 
     pub fn normalize_topology_and_persist(&self, topology: &Topology) -> CoreResult<Topology> {
@@ -458,22 +419,19 @@ fn normalize_topology_with_cache(
     normalized
 }
 
-fn profile_dir() -> CoreResult<PathBuf> {
-    let config_home = directories::BaseDirs::new()
+fn config_dir() -> CoreResult<PathBuf> {
+    Ok(directories::BaseDirs::new()
         .ok_or(CoreError::MissingConfigDirectory)?
         .config_dir()
-        .join("waytorandr")
-        .join("profiles");
-    Ok(config_home)
+        .join("waytorandr"))
 }
 
-fn save_profile_to_file(profile: &Profile, path: &Path) -> CoreResult<()> {
-    let content = toml::to_string_pretty(profile)?;
-    fs::write(path, content).map_err(|source| CoreError::WriteFile {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(())
+fn profiles_path() -> CoreResult<PathBuf> {
+    Ok(config_dir()?.join("profiles.json"))
+}
+
+fn legacy_profile_dir() -> CoreResult<PathBuf> {
+    Ok(config_dir()?.join("profiles"))
 }
 
 fn load_profile_from_file(path: &Path) -> CoreResult<Profile> {
@@ -493,4 +451,120 @@ fn canonicalize_profile(
     known_outputs: &std::collections::HashMap<String, OutputIdentity>,
 ) -> Profile {
     normalize_profile_with_cache(&profile.with_inferred_match_rules(), known_outputs)
+}
+
+fn load_legacy_profiles_from_dir(dir: &Path) -> CoreResult<Vec<(PathBuf, Profile)>> {
+    let mut profiles = Vec::new();
+
+    for entry in fs::read_dir(dir).map_err(|source| CoreError::ReadDir {
+        path: dir.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| CoreError::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            for nested in fs::read_dir(&path).map_err(|source| CoreError::ReadDir {
+                path: path.clone(),
+                source,
+            })? {
+                let nested = nested.map_err(|source| CoreError::ReadDir {
+                    path: path.clone(),
+                    source,
+                })?;
+                let nested_path = nested.path();
+                if nested_path
+                    .extension()
+                    .map(|extension| extension == "toml")
+                    .unwrap_or(false)
+                {
+                    profiles.push((nested_path.clone(), load_profile_from_file(&nested_path)?));
+                }
+            }
+            continue;
+        }
+
+        if path
+            .extension()
+            .map(|extension| extension == "toml")
+            .unwrap_or(false)
+        {
+            profiles.push((path.clone(), load_profile_from_file(&path)?));
+        }
+    }
+
+    Ok(profiles)
+}
+
+fn merge_legacy_profile(
+    stored_profiles: &mut Vec<Profile>,
+    profile: Profile,
+    legacy_path: &Path,
+    target_path: &Path,
+) -> CoreResult<()> {
+    let setup_fingerprint = profile.setup_fingerprint();
+    if let Some(existing) = stored_profiles.iter().find(|existing| {
+        existing.name == profile.name && existing.setup_fingerprint() == setup_fingerprint
+    }) {
+        let same_profile = existing.layout_fingerprint() == profile.layout_fingerprint();
+        if same_profile {
+            return Ok(());
+        }
+
+        return Err(CoreError::LegacyProfileConflict {
+            name: profile.name,
+            legacy_path: legacy_path.to_path_buf(),
+            setup_path: target_path.to_path_buf(),
+        });
+    }
+
+    stored_profiles.push(profile);
+    Ok(())
+}
+
+fn remove_empty_legacy_directories(dir: &Path) -> CoreResult<()> {
+    for entry in fs::read_dir(dir).map_err(|source| CoreError::ReadDir {
+        path: dir.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| CoreError::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            let is_empty = fs::read_dir(&path)
+                .map_err(|source| CoreError::ReadDir {
+                    path: path.clone(),
+                    source,
+                })?
+                .next()
+                .is_none();
+            if is_empty {
+                fs::remove_dir(&path).map_err(|source| CoreError::WriteFile {
+                    path: path.clone(),
+                    source,
+                })?;
+            }
+        }
+    }
+
+    let is_empty = fs::read_dir(dir)
+        .map_err(|source| CoreError::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?
+        .next()
+        .is_none();
+    if is_empty {
+        fs::remove_dir(dir).map_err(|source| CoreError::WriteFile {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+    }
+
+    Ok(())
 }

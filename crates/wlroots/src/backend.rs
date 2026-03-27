@@ -26,8 +26,7 @@ use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
 use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
 use waytorandr_core::error::{CoreError, CoreResult};
 use waytorandr_core::model::{
-    normalized_identity_value, Capabilities, Mode, OutputState, Position,
-    Topology, Transform,
+    normalized_identity_value, Capabilities, Mode, OutputState, Position, Topology, Transform,
 };
 use waytorandr_core::planner::LayoutPlan;
 
@@ -126,12 +125,9 @@ impl Backend for WlrootsBackend {
     }
 
     fn enumerate_outputs(&self) -> CoreResult<Topology> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| CoreError::Backend {
-                source: anyhow!("backend lock poisoned"),
-            })?;
+        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+            source: anyhow!("backend lock poisoned"),
+        })?;
         inner
             .sync()
             .map_err(|source| CoreError::Backend { source })?;
@@ -151,12 +147,9 @@ impl Backend for WlrootsBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| CoreError::Backend {
-                source: anyhow!("backend lock poisoned"),
-            })?;
+        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+            source: anyhow!("backend lock poisoned"),
+        })?;
         let status = inner
             .submit_with_retry(plan, true, 3)
             .map_err(|source| CoreError::Backend { source })?;
@@ -169,19 +162,17 @@ impl Backend for WlrootsBackend {
             }
             ConfigStatus::Failed => "wlroots compositor rejected the configuration".to_string(),
             ConfigStatus::Cancelled => {
-                "wlroots compositor cancelled the configuration because topology changed".to_string()
+                "wlroots compositor cancelled the configuration because topology changed"
+                    .to_string()
             }
         });
         Ok(result)
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| CoreError::Backend {
-                source: anyhow!("backend lock poisoned"),
-            })?;
+        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+            source: anyhow!("backend lock poisoned"),
+        })?;
         let status = inner
             .submit_with_retry(plan, false, 3)
             .map_err(|source| CoreError::Backend { source })?;
@@ -195,7 +186,9 @@ impl Backend for WlrootsBackend {
         result.message = Some(match status {
             ConfigStatus::Succeeded => "applied successfully".to_string(),
             ConfigStatus::Failed => "compositor rejected the configuration".to_string(),
-            ConfigStatus::Cancelled => "configuration cancelled because topology changed".to_string(),
+            ConfigStatus::Cancelled => {
+                "configuration cancelled because topology changed".to_string()
+            }
         });
         result.applied_state = Some(applied_state);
         Ok(result)
@@ -219,31 +212,28 @@ impl WaylandClient {
 
             let mode = preferred_mode_for_head(&self.state, head);
 
-            outputs.insert(
-                name.clone(),
-                {
-                    let mut state = OutputState::new(name);
-                    state.identity.edid_hash = None;
-                    state.identity.make = head.make.clone();
-                    state.identity.model = head.model.clone();
-                    state.identity.serial = head.serial.clone();
-                    state.identity.description = head.description.clone();
-                    state.identity.is_virtual = head
-                        .description
-                        .as_deref()
-                        .map(is_virtual_description)
-                        .unwrap_or(false);
-                    state.identity.is_ignored = false;
-                    state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
-                    state.mode = mode;
-                    state.position = head.position;
-                    state.scale = head.scale;
-                    state.transform = head.transform;
-                    state.mirror_target = None;
-                    state.backend_data = None;
-                    state
-                },
-            );
+            outputs.insert(name.clone(), {
+                let mut state = OutputState::new(name);
+                state.identity.edid_hash = None;
+                state.identity.make = head.make.clone();
+                state.identity.model = head.model.clone();
+                state.identity.serial = head.serial.clone();
+                state.identity.description = head.description.clone();
+                state.identity.is_virtual = head
+                    .description
+                    .as_deref()
+                    .map(is_virtual_description)
+                    .unwrap_or(false);
+                state.identity.is_ignored = false;
+                state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
+                state.mode = mode;
+                state.position = head.position;
+                state.scale = head.scale;
+                state.transform = head.transform;
+                state.mirror_target = None;
+                state.backend_data = None;
+                state
+            });
         }
         Topology { outputs }
     }

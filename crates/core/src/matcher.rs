@@ -168,31 +168,28 @@ mod tests {
 
     fn make_topology() -> Topology {
         let mut outputs = HashMap::new();
-        outputs.insert(
-            "DP-1".to_string(),
-            {
-                let mut state = OutputState::new("DP-1");
-                state.identity.edid_hash = Some("abc123".to_string());
-                state.identity.make = Some("Dell".to_string());
-                state.identity.model = Some("U2720Q".to_string());
-                state.identity.serial = Some("SN001".to_string());
-                state.identity.description = Some("Dell U2720Q".to_string());
-                state.identity.is_virtual = false;
-                state.identity.is_ignored = false;
-                state.enabled = true;
-                state.mode = Some(Mode {
-                    width: 3840,
-                    height: 2160,
-                    refresh: 60,
-                });
-                state.position = Position { x: 0, y: 0 };
-                state.scale = 1.0;
-                state.transform = Transform::Normal;
-                state.mirror_target = None;
-                state.backend_data = None;
-                state
-            },
-        );
+        outputs.insert("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.identity.edid_hash = Some("abc123".to_string());
+            state.identity.make = Some("Dell".to_string());
+            state.identity.model = Some("U2720Q".to_string());
+            state.identity.serial = Some("SN001".to_string());
+            state.identity.description = Some("Dell U2720Q".to_string());
+            state.identity.is_virtual = false;
+            state.identity.is_ignored = false;
+            state.enabled = true;
+            state.mode = Some(Mode {
+                width: 3840,
+                height: 2160,
+                refresh: 60,
+            });
+            state.position = Position { x: 0, y: 0 };
+            state.scale = 1.0;
+            state.transform = Transform::Normal;
+            state.mirror_target = None;
+            state.backend_data = None;
+            state
+        });
         Topology { outputs }
     }
 

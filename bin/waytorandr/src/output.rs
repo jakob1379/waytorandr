@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use waytorandr_core::engine::TestResult;
 use waytorandr_core::model::Mode;
-use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::model::Topology;
+use waytorandr_core::planner::LayoutPlan;
 
 pub(crate) fn print_topology(title: &str, topology: &Topology) {
     println!("{title}");

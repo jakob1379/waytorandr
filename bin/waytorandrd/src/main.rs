@@ -3,8 +3,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use waytorandr_core::engine::Backend;
 use waytorandr_core::runtime;
-use waytorandr_core::store::{ProfileStore, StateStore};
 use waytorandr_core::store::State;
+use waytorandr_core::store::{ProfileStore, StateStore};
 
 mod daemon;
 

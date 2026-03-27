@@ -14,10 +14,7 @@ pub struct ExecutionCycle {
     pub apply_topology: Option<Topology>,
 }
 
-pub fn default_profile_for_setup<'a>(
-    state: &'a State,
-    setup_fingerprint: &str,
-) -> Option<&'a str> {
+pub fn default_profile_for_setup<'a>(state: &'a State, setup_fingerprint: &str) -> Option<&'a str> {
     state
         .default_profiles
         .get(setup_fingerprint)
@@ -42,7 +39,11 @@ pub fn select_profile_for_topology(
         .cloned()
 }
 
-pub fn current_profile_name(topology: &Topology, profiles: &[Profile], state: &State) -> Option<String> {
+pub fn current_profile_name(
+    topology: &Topology,
+    profiles: &[Profile],
+    state: &State,
+) -> Option<String> {
     state
         .last_profile
         .clone()

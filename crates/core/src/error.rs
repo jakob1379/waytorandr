@@ -40,7 +40,17 @@ pub enum CoreError {
         #[source]
         source: toml::de::Error,
     },
-    #[error("profile '{0}' is ambiguous across setup fingerprints; use the matching hardware setup")]
+    #[error("failed to serialize JSON")]
+    SerializeJson(#[source] serde_json::Error),
+    #[error("failed to parse JSON from {path:?}")]
+    ParseJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "profile '{0}' is ambiguous across setup fingerprints; use the matching hardware setup"
+    )]
     AmbiguousProfile(String),
     #[error(
         "legacy profile migration conflict for '{name}' between {legacy_path:?} and {setup_path:?}"

@@ -194,14 +194,10 @@ impl OutputIdentity {
         identity.make = choose_identity_value(self.make.as_deref(), fallback.make.as_deref());
         identity.model = choose_identity_value(self.model.as_deref(), fallback.model.as_deref());
         identity.serial = choose_identity_value(self.serial.as_deref(), fallback.serial.as_deref());
-        identity.connector = choose_identity_value(
-            self.connector.as_deref(),
-            fallback.connector.as_deref(),
-        );
-        identity.description = choose_identity_value(
-            self.description.as_deref(),
-            fallback.description.as_deref(),
-        );
+        identity.connector =
+            choose_identity_value(self.connector.as_deref(), fallback.connector.as_deref());
+        identity.description =
+            choose_identity_value(self.description.as_deref(), fallback.description.as_deref());
         identity.is_virtual = self.is_virtual;
         identity.is_ignored = self.is_ignored;
         identity

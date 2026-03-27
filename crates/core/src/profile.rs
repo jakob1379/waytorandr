@@ -150,7 +150,6 @@ impl Profile {
             .collect();
         inferred
     }
-
 }
 
 #[cfg(test)]

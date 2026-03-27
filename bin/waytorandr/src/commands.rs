@@ -425,7 +425,10 @@ fn set_default_profile_for_setup(profile_name: &str, dry_run: bool) -> Result<()
 
 fn load_current_topology(state_store: &StateStore) -> Result<Topology> {
     let backend = connect_backend()?;
-    Ok(runtime::normalized_topology_from_backend(&backend, state_store)?)
+    Ok(runtime::normalized_topology_from_backend(
+        &backend,
+        state_store,
+    )?)
 }
 
 fn save_runtime_state(

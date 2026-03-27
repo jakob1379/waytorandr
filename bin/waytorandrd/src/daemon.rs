@@ -45,10 +45,7 @@ pub(crate) fn handle_topology_change(
     Ok(())
 }
 
-fn wait_for_stable_topology(
-    backend: &impl Backend,
-    state_store: &StateStore,
-) -> Result<Topology> {
+fn wait_for_stable_topology(backend: &impl Backend, state_store: &StateStore) -> Result<Topology> {
     let deadline = Instant::now() + STABLE_TIMEOUT;
     let mut last_fingerprint = None;
     let mut stable_samples = 0usize;
@@ -102,7 +99,8 @@ fn apply_profile(
     profile: &Profile,
     topology: &Topology,
 ) -> Result<DaemonOutcome> {
-    let plan = runtime::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
+    let plan =
+        runtime::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
     if plan_matches_topology(&plan, topology) {
         persist_applied_profile(state_store, profile, topology)?;
         tracing::info!(profile = %profile.name, "profile already matches current topology");
@@ -190,7 +188,9 @@ mod tests {
     }
 
     fn with_test_state_dir<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = xdg_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = xdg_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let unique = format!(
             "waytorandrd-test-{}-{}",
             std::process::id(),
@@ -269,9 +269,7 @@ mod tests {
             Ok(self.topology.clone())
         }
 
-        fn watch_outputs(
-            &self,
-        ) -> waytorandr_core::error::CoreResult<Box<dyn OutputWatcher>> {
+        fn watch_outputs(&self) -> waytorandr_core::error::CoreResult<Box<dyn OutputWatcher>> {
             Err(CoreError::Backend {
                 source: anyhow::anyhow!("not used in tests"),
             })
@@ -306,15 +304,12 @@ mod tests {
         let topology = Topology {
             outputs: HashMap::from([
                 ("DP-1".to_string(), output("DP-1", true)),
-                (
-                    "HEADLESS-1".to_string(),
-                    {
-                        let mut state = OutputState::new("HEADLESS-1");
-                        state.identity.is_virtual = true;
-                        state.enabled = true;
-                        state
-                    },
-                ),
+                ("HEADLESS-1".to_string(), {
+                    let mut state = OutputState::new("HEADLESS-1");
+                    state.identity.is_virtual = true;
+                    state.enabled = true;
+                    state
+                }),
             ]),
         };
 

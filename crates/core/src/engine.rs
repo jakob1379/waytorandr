@@ -124,7 +124,10 @@ impl<B: Backend> Engine<B> {
             let failure_results = self.run_hooks(&hooks.on_failure, "failure");
             tracing::debug!(
                 ran = failure_results.len(),
-                failed = failure_results.iter().filter(|result| !result.success).count(),
+                failed = failure_results
+                    .iter()
+                    .filter(|result| !result.success)
+                    .count(),
                 "Failure hooks completed"
             );
         }
@@ -173,7 +176,9 @@ impl<B: Backend> Engine<B> {
                         if start.elapsed() > timeout {
                             let timeout_message = match child.kill() {
                                 Ok(()) => "Hook timed out".to_string(),
-                                Err(err) => format!("Hook timed out and could not be killed: {err}"),
+                                Err(err) => {
+                                    format!("Hook timed out and could not be killed: {err}")
+                                }
                             };
                             return HookResult {
                                 success: false,
@@ -316,14 +321,11 @@ mod tests {
         };
         let engine = Engine::new(backend.clone());
         let hooks = test_hooks(&log_path);
-        let plan = LayoutPlan::new(HashMap::from([(
-            "DP-1".to_string(),
-            {
-                let mut state = OutputState::new("DP-1");
-                state.enabled = true;
-                state
-            },
-        )]));
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.enabled = true;
+            state
+        })]));
 
         let result = engine.apply_plan(&plan, &hooks).unwrap();
 
@@ -344,14 +346,11 @@ mod tests {
         let engine = Engine::new(backend.clone());
         let mut hooks = Hooks::default();
         hooks.pre_apply = vec![Hook::new("definitely-not-a-real-hook-command")];
-        let plan = LayoutPlan::new(HashMap::from([(
-            "DP-1".to_string(),
-            {
-                let mut state = OutputState::new("DP-1");
-                state.enabled = true;
-                state
-            },
-        )]));
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.enabled = true;
+            state
+        })]));
 
         let result = engine.apply_plan(&plan, &hooks).unwrap();
 
@@ -366,14 +365,11 @@ mod tests {
 
     #[test]
     fn test_plan_short_circuits_when_backend_cannot_test() {
-        let plan = LayoutPlan::new(HashMap::from([(
-            "DP-1".to_string(),
-            {
-                let mut state = OutputState::new("DP-1");
-                state.enabled = true;
-                state
-            },
-        )]));
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.enabled = true;
+            state
+        })]));
 
         let mut no_test_capabilities = Capabilities::named("test");
         no_test_capabilities.can_apply = true;
