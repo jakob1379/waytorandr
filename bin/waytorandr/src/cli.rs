@@ -13,6 +13,13 @@ use crate::completion::{complete_saved_profiles, complete_set_targets};
     after_long_help = "Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples."
 )]
 pub(crate) struct Cli {
+    #[arg(
+        long = "json",
+        global = true,
+        help = "Emit command output as JSON on stdout"
+    )]
+    pub(crate) json: bool,
+
     #[command(subcommand)]
     pub(crate) command: Commands,
 }
@@ -178,9 +185,22 @@ pub(crate) struct ListArgs {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use clap::Parser;
 
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn global_json_flag_parses_before_subcommand() {
+        let cli = Cli::parse_from(["waytorandr", "--json", "current"]);
+        assert!(cli.json);
+    }
+
+    #[test]
+    fn global_json_flag_parses_after_subcommand() {
+        let cli = Cli::parse_from(["waytorandr", "list", "--json"]);
+        assert!(cli.json);
     }
 }

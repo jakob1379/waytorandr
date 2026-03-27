@@ -43,8 +43,10 @@ fn main() -> Result<()> {
 }
 
 fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
-    let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
+    let wayland_display =
+        std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xdg_runtime_dir =
+        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
     let display_hint = if wayland_display.contains('/') {
         "; WAYLAND_DISPLAY should be a socket name like 'wayland-0', not a path"
     } else {

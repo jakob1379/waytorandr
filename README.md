@@ -25,6 +25,8 @@ Options:
 
 Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples.
 
+Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout.
+
 ## Daemon
 
 `waytorandrd` watches output changes and reapplies the configured default profile for the current hardware setup, or the best matching saved profile when no setup default exists.

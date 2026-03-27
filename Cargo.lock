@@ -868,6 +868,8 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "waytorandr-core",

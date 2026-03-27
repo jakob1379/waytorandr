@@ -16,5 +16,7 @@ waytorandr-wlroots = { path = "../../crates/wlroots" }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
