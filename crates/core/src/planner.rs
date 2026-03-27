@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::matcher::{MatchResult, Matcher};
-use crate::model::{OutputState, Position, Topology};
+use crate::model::{identities_match, OutputState, Position, Topology};
+use crate::profile::Profile;
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LayoutPlan {
     pub outputs: HashMap<String, OutputState>,
     pub preset_used: Option<String>,
@@ -31,24 +32,36 @@ impl std::error::Error for PlanError {}
 
 pub struct Planner;
 
+impl LayoutPlan {
+    pub fn new(outputs: HashMap<String, OutputState>) -> Self {
+        Self {
+            outputs,
+            preset_used: None,
+        }
+    }
+
+    pub fn with_preset_used(mut self, preset_used: impl Into<String>) -> Self {
+        self.preset_used = Some(preset_used.into());
+        self
+    }
+}
+
 impl Planner {
     pub fn plan_from_profile(
-        matched: &MatchResult,
+        profile: &Profile,
+        matched_outputs: &HashMap<String, String>,
         topology: &Topology,
     ) -> Result<LayoutPlan, PlanError> {
         let mut planned: HashMap<String, OutputState> = HashMap::new();
 
-        for topo_name in matched.matched_outputs.keys() {
+        for topo_name in matched_outputs.keys() {
             let output_state = topology.outputs.get(topo_name);
-            let config = matched.profile.layout.get(topo_name).cloned().or_else(|| {
+            let config = profile.layout.get(topo_name).cloned().or_else(|| {
                 output_state.and_then(|state| {
-                    matched
-                        .profile
+                    profile
                         .layout
                         .values()
-                        .find(|config| {
-                            Matcher::identities_match(&config.state.identity, &state.identity)
-                        })
+                        .find(|config| identities_match(&config.state.identity, &state.identity))
                         .cloned()
                 })
             });
@@ -271,25 +284,19 @@ pub fn detect_preset(topology: &Topology) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Matcher, Mode, OutputConfig, OutputIdentity, OutputMatcher, OutputState, Position, Profile,
-        Transform,
-    };
+    use crate::model::{Mode, OutputIdentity, OutputState, Position, Transform};
+    use crate::profile::{OutputConfig, OutputMatcher, Profile};
 
     fn output(connector: &str, width: u32, height: u32) -> OutputState {
-        OutputState {
-            identity: OutputIdentity {
-                connector: Some(connector.to_string()),
-                ..Default::default()
-            },
-            enabled: true,
-            mode: Some(Mode::new(width, height, 60)),
-            position: Position::default(),
-            scale: 1.0,
-            transform: Transform::Normal,
-            mirror_target: None,
-            backend_data: None,
-        }
+        let mut state = OutputState::new(connector);
+        state.enabled = true;
+        state.mode = Some(Mode::new(width, height, 60));
+        state.position = Position::default();
+        state.scale = 1.0;
+        state.transform = Transform::Normal;
+        state.mirror_target = None;
+        state.backend_data = None;
+        state
     }
 
     #[test]
@@ -395,22 +402,20 @@ mod tests {
         let topology = Topology {
             outputs: HashMap::from([(
                 "DP-1".to_string(),
-                OutputState {
-                    identity: OutputIdentity {
-                        make: Some("Microstep".to_string()),
-                        model: Some("MSI MP273A".to_string()),
-                        serial: Some("PB4H603B02982".to_string()),
-                        connector: Some("DP-1".to_string()),
-                        description: Some("Microstep - MSI MP273A - DP-1".to_string()),
-                        ..Default::default()
-                    },
-                    enabled: true,
-                    mode: Some(Mode::new(1920, 1080, 60)),
-                    position: Position::new(400, 200),
-                    scale: 1.0,
-                    transform: Transform::Normal,
-                    mirror_target: None,
-                    backend_data: None,
+                {
+                    let mut state = OutputState::new("DP-1");
+                    state.identity.make = Some("Microstep".to_string());
+                    state.identity.model = Some("MSI MP273A".to_string());
+                    state.identity.serial = Some("PB4H603B02982".to_string());
+                    state.identity.description = Some("Microstep - MSI MP273A - DP-1".to_string());
+                    state.enabled = true;
+                    state.mode = Some(Mode::new(1920, 1080, 60));
+                    state.position = Position::new(400, 200);
+                    state.scale = 1.0;
+                    state.transform = Transform::Normal;
+                    state.mirror_target = None;
+                    state.backend_data = None;
+                    state
                 },
             )]),
         };
@@ -418,13 +423,13 @@ mod tests {
             name: "default".to_string(),
             priority: 0,
             match_rules: vec![OutputMatcher {
-                identity: OutputIdentity {
-                    make: Some("Microstep".to_string()),
-                    model: Some("MSI MP273A".to_string()),
-                    serial: Some("PB4H603B02982".to_string()),
-                    connector: Some("DP-4".to_string()),
-                    description: Some("Microstep - MSI MP273A - DP-4".to_string()),
-                    ..Default::default()
+                identity: {
+                    let mut identity = OutputIdentity::new("DP-4");
+                    identity.make = Some("Microstep".to_string());
+                    identity.model = Some("MSI MP273A".to_string());
+                    identity.serial = Some("PB4H603B02982".to_string());
+                    identity.description = Some("Microstep - MSI MP273A - DP-4".to_string());
+                    identity
                 },
                 required: true,
                 position_hint: Some(Position::new(0, 0)),
@@ -432,22 +437,20 @@ mod tests {
             layout: HashMap::from([(
                 "DP-4".to_string(),
                 OutputConfig {
-                    state: OutputState {
-                        identity: OutputIdentity {
-                            make: Some("Microstep".to_string()),
-                            model: Some("MSI MP273A".to_string()),
-                            serial: Some("PB4H603B02982".to_string()),
-                            connector: Some("DP-4".to_string()),
-                            description: Some("Microstep - MSI MP273A - DP-4".to_string()),
-                            ..Default::default()
-                        },
-                        enabled: false,
-                        mode: Some(Mode::new(1920, 1080, 60)),
-                        position: Position::new(0, 0),
-                        scale: 1.0,
-                        transform: Transform::Normal,
-                        mirror_target: None,
-                        backend_data: None,
+                    state: {
+                        let mut state = OutputState::new("DP-4");
+                        state.identity.make = Some("Microstep".to_string());
+                        state.identity.model = Some("MSI MP273A".to_string());
+                        state.identity.serial = Some("PB4H603B02982".to_string());
+                        state.identity.description = Some("Microstep - MSI MP273A - DP-4".to_string());
+                        state.enabled = false;
+                        state.mode = Some(Mode::new(1920, 1080, 60));
+                        state.position = Position::new(0, 0);
+                        state.scale = 1.0;
+                        state.transform = Transform::Normal;
+                        state.mirror_target = None;
+                        state.backend_data = None;
+                        state
                     },
                     preset: None,
                 },
@@ -456,8 +459,9 @@ mod tests {
             options: Default::default(),
         };
 
-        let matched = Matcher::match_profile(&topology, &[profile]).expect("profile should match");
-        let plan = Planner::plan_from_profile(&matched, &topology).expect("plan should build");
+        let matched_outputs = HashMap::from([("DP-1".to_string(), "DP-1".to_string())]);
+        let plan = Planner::plan_from_profile(&profile, &matched_outputs, &topology)
+            .expect("plan should build");
 
         assert!(!plan.outputs["DP-1"].enabled);
         assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));

@@ -1,8 +1,9 @@
-use crate::model::{OutputIdentity, OutputState, Topology};
+use crate::model::{identities_match, OutputIdentity, OutputState, Topology};
 use crate::profile::Profile;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MatchResult {
     pub profile: Profile,
     pub score: u32,
@@ -120,52 +121,7 @@ impl Matcher {
     }
 
     pub fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> bool {
-        if let Some(query_hash) = &query.edid_hash {
-            if let Some(cand_hash) = &candidate.edid_hash {
-                return query_hash == cand_hash;
-            }
-            return false;
-        }
-
-        if let (Some(query_make), Some(cand_make)) = (&query.make, &candidate.make) {
-            if query_make != cand_make {
-                return false;
-            }
-        }
-
-        if let (Some(query_model), Some(cand_model)) = (&query.model, &candidate.model) {
-            if query_model != cand_model {
-                return false;
-            }
-        }
-
-        if let (Some(query_serial), Some(cand_serial)) = (&query.serial, &candidate.serial) {
-            if query_serial != cand_serial {
-                return false;
-            }
-        }
-
-        if query.serial.is_some() {
-            return candidate.serial.is_some();
-        }
-
-        if let (Some(query_conn), Some(cand_conn)) = (&query.connector, &candidate.connector) {
-            if query_conn == cand_conn {
-                return true;
-            }
-        }
-
-        if let (Some(query_desc), Some(cand_desc)) = (&query.description, &candidate.description) {
-            if query_desc == cand_desc {
-                return true;
-            }
-        }
-
-        query.make.is_none()
-            && query.model.is_none()
-            && query.serial.is_none()
-            && query.connector.is_none()
-            && query.description.is_none()
+        identities_match(query, candidate)
     }
 
     fn identity_match_score(query: &OutputIdentity, _candidate: &OutputIdentity) -> u32 {
@@ -207,34 +163,34 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Mode, OutputMatcher, Position, Transform};
+    use crate::model::{Mode, Position, Transform};
+    use crate::profile::OutputMatcher;
 
     fn make_topology() -> Topology {
         let mut outputs = HashMap::new();
         outputs.insert(
             "DP-1".to_string(),
-            OutputState {
-                identity: OutputIdentity {
-                    edid_hash: Some("abc123".to_string()),
-                    make: Some("Dell".to_string()),
-                    model: Some("U2720Q".to_string()),
-                    serial: Some("SN001".to_string()),
-                    connector: Some("DP-1".to_string()),
-                    description: Some("Dell U2720Q".to_string()),
-                    is_virtual: false,
-                    is_ignored: false,
-                },
-                enabled: true,
-                mode: Some(Mode {
+            {
+                let mut state = OutputState::new("DP-1");
+                state.identity.edid_hash = Some("abc123".to_string());
+                state.identity.make = Some("Dell".to_string());
+                state.identity.model = Some("U2720Q".to_string());
+                state.identity.serial = Some("SN001".to_string());
+                state.identity.description = Some("Dell U2720Q".to_string());
+                state.identity.is_virtual = false;
+                state.identity.is_ignored = false;
+                state.enabled = true;
+                state.mode = Some(Mode {
                     width: 3840,
                     height: 2160,
                     refresh: 60,
-                }),
-                position: Position { x: 0, y: 0 },
-                scale: 1.0,
-                transform: Transform::Normal,
-                mirror_target: None,
-                backend_data: None,
+                });
+                state.position = Position { x: 0, y: 0 };
+                state.scale = 1.0;
+                state.transform = Transform::Normal;
+                state.mirror_target = None;
+                state.backend_data = None;
+                state
             },
         );
         Topology { outputs }
@@ -247,9 +203,10 @@ mod tests {
             name: "test".to_string(),
             priority: 0,
             match_rules: vec![OutputMatcher {
-                identity: OutputIdentity {
-                    edid_hash: Some("abc123".to_string()),
-                    ..Default::default()
+                identity: {
+                    let mut identity = OutputIdentity::default();
+                    identity.edid_hash = Some("abc123".to_string());
+                    identity
                 },
                 required: true,
                 position_hint: None,
@@ -273,9 +230,10 @@ mod tests {
             name: "test".to_string(),
             priority: 0,
             match_rules: vec![OutputMatcher {
-                identity: OutputIdentity {
-                    edid_hash: Some("missing".to_string()),
-                    ..Default::default()
+                identity: {
+                    let mut identity = OutputIdentity::default();
+                    identity.edid_hash = Some("missing".to_string());
+                    identity
                 },
                 required: true,
                 position_hint: None,
@@ -291,21 +249,41 @@ mod tests {
 
     #[test]
     fn test_serial_match_does_not_require_same_connector() {
-        let query = OutputIdentity {
-            make: Some("Microstep".to_string()),
-            model: Some("MSI MP273A".to_string()),
-            serial: Some("PB4H603B02982".to_string()),
-            connector: Some("DP-4".to_string()),
-            description: Some("Microstep - MSI MP273A - DP-4".to_string()),
-            ..Default::default()
+        let query = {
+            let mut identity = OutputIdentity::new("DP-4");
+            identity.make = Some("Microstep".to_string());
+            identity.model = Some("MSI MP273A".to_string());
+            identity.serial = Some("PB4H603B02982".to_string());
+            identity.description = Some("Microstep - MSI MP273A - DP-4".to_string());
+            identity
         };
-        let candidate = OutputIdentity {
-            make: Some("Microstep".to_string()),
-            model: Some("MSI MP273A".to_string()),
-            serial: Some("PB4H603B02982".to_string()),
-            connector: Some("DP-1".to_string()),
-            description: Some("Microstep - MSI MP273A - DP-1".to_string()),
-            ..Default::default()
+        let candidate = {
+            let mut identity = OutputIdentity::new("DP-1");
+            identity.make = Some("Microstep".to_string());
+            identity.model = Some("MSI MP273A".to_string());
+            identity.serial = Some("PB4H603B02982".to_string());
+            identity.description = Some("Microstep - MSI MP273A - DP-1".to_string());
+            identity
+        };
+
+        assert!(Matcher::identities_match(&query, &candidate));
+    }
+
+    #[test]
+    fn unknown_identity_fields_fall_back_to_connector_match() {
+        let query = {
+            let mut identity = OutputIdentity::new("DP-4");
+            identity.make = Some("Unknown".to_string());
+            identity.model = Some("Unknown".to_string());
+            identity.description = Some("Unknown - Unknown - DP-4".to_string());
+            identity
+        };
+        let candidate = {
+            let mut identity = OutputIdentity::new("DP-4");
+            identity.make = Some("Microstep".to_string());
+            identity.model = Some("MSI MP273A".to_string());
+            identity.description = Some("Microstep - MSI MP273A - DP-4".to_string());
+            identity
         };
 
         assert!(Matcher::identities_match(&query, &candidate));

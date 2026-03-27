@@ -23,11 +23,13 @@ use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
     self, ZwlrOutputModeV1,
 };
 
-use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::{
-    ApplyResult, Backend, Capabilities, Mode, OutputIdentity, OutputState, OutputWatcher, Position,
-    TestResult, Topology, Transform,
+use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
+use waytorandr_core::error::{CoreError, CoreResult};
+use waytorandr_core::model::{
+    normalized_identity_value, Capabilities, Mode, OutputState, Position,
+    Topology, Transform,
 };
+use waytorandr_core::planner::LayoutPlan;
 
 pub struct WlrootsBackend {
     inner: Mutex<WaylandClient>,
@@ -113,81 +115,90 @@ impl WlrootsBackend {
 
 impl Backend for WlrootsBackend {
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            can_enumerate: true,
-            can_watch: true,
-            can_test: true,
-            can_apply: true,
-            supports_transforms: true,
-            supports_scale: true,
-            supports_mirror: false,
-            supports_brightness: false,
-            supports_gamma: false,
-            backend_name: "wlroots".to_string(),
-        }
+        let mut capabilities = Capabilities::named("wlroots");
+        capabilities.can_enumerate = true;
+        capabilities.can_watch = true;
+        capabilities.can_test = true;
+        capabilities.can_apply = true;
+        capabilities.supports_transforms = true;
+        capabilities.supports_scale = true;
+        capabilities
     }
 
-    fn enumerate_outputs(&self) -> Result<Topology> {
+    fn enumerate_outputs(&self) -> CoreResult<Topology> {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| anyhow!("backend lock poisoned"))?;
-        inner.sync()?;
+            .map_err(|_| CoreError::Backend {
+                source: anyhow!("backend lock poisoned"),
+            })?;
+        inner
+            .sync()
+            .map_err(|source| CoreError::Backend { source })?;
         Ok(inner.export_topology())
     }
 
-    fn watch_outputs(&self) -> Result<Box<dyn OutputWatcher>> {
+    fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
         let initial = self.enumerate_outputs()?.fingerprint();
         Ok(Box::new(WlrootsWatcher {
-            backend: WlrootsBackend::connect()?,
+            backend: WlrootsBackend::connect().map_err(|source| CoreError::Backend { source })?,
             last_fingerprint: Some(initial),
         }))
     }
 
-    fn current_state(&self) -> Result<Topology> {
+    fn current_state(&self) -> CoreResult<Topology> {
         self.enumerate_outputs()
     }
 
-    fn test(&self, plan: &LayoutPlan) -> Result<TestResult> {
+    fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| anyhow!("backend lock poisoned"))?;
-        let status = inner.submit_with_retry(plan, true, 3)?;
-        Ok(TestResult {
-            success: matches!(status, ConfigStatus::Succeeded),
-            message: Some(match status {
-                ConfigStatus::Succeeded => {
-                    format!("wlroots validated {} output changes", plan.outputs.len())
-                }
-                ConfigStatus::Failed => "wlroots compositor rejected the configuration".to_string(),
-                ConfigStatus::Cancelled => {
-                    "wlroots compositor cancelled the configuration because topology changed"
-                        .to_string()
-                }
-            }),
-        })
+            .map_err(|_| CoreError::Backend {
+                source: anyhow!("backend lock poisoned"),
+            })?;
+        let status = inner
+            .submit_with_retry(plan, true, 3)
+            .map_err(|source| CoreError::Backend { source })?;
+        let mut result = TestResult::default();
+        result.success = matches!(status, ConfigStatus::Succeeded);
+        result.failure = config_failure(status);
+        result.message = Some(match status {
+            ConfigStatus::Succeeded => {
+                format!("wlroots validated {} output changes", plan.outputs.len())
+            }
+            ConfigStatus::Failed => "wlroots compositor rejected the configuration".to_string(),
+            ConfigStatus::Cancelled => {
+                "wlroots compositor cancelled the configuration because topology changed".to_string()
+            }
+        });
+        Ok(result)
     }
 
-    fn apply(&self, plan: &LayoutPlan) -> Result<ApplyResult> {
+    fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| anyhow!("backend lock poisoned"))?;
-        let status = inner.submit_with_retry(plan, false, 3)?;
-        inner.sync()?;
+            .map_err(|_| CoreError::Backend {
+                source: anyhow!("backend lock poisoned"),
+            })?;
+        let status = inner
+            .submit_with_retry(plan, false, 3)
+            .map_err(|source| CoreError::Backend { source })?;
+        inner
+            .sync()
+            .map_err(|source| CoreError::Backend { source })?;
         let applied_state = inner.export_topology();
-        Ok(ApplyResult {
-            success: matches!(status, ConfigStatus::Succeeded),
-            message: Some(match status {
-                ConfigStatus::Succeeded => "applied successfully".to_string(),
-                ConfigStatus::Failed => "compositor rejected the configuration".to_string(),
-                ConfigStatus::Cancelled => {
-                    "configuration cancelled because topology changed".to_string()
-                }
-            }),
-            applied_state: Some(applied_state),
-        })
+        let mut result = ApplyResult::default();
+        result.success = matches!(status, ConfigStatus::Succeeded);
+        result.failure = config_failure(status);
+        result.message = Some(match status {
+            ConfigStatus::Succeeded => "applied successfully".to_string(),
+            ConfigStatus::Failed => "compositor rejected the configuration".to_string(),
+            ConfigStatus::Cancelled => "configuration cancelled because topology changed".to_string(),
+        });
+        result.applied_state = Some(applied_state);
+        Ok(result)
     }
 }
 
@@ -210,28 +221,27 @@ impl WaylandClient {
 
             outputs.insert(
                 name.clone(),
-                OutputState {
-                    identity: OutputIdentity {
-                        edid_hash: None,
-                        make: head.make.clone(),
-                        model: head.model.clone(),
-                        serial: head.serial.clone(),
-                        connector: Some(name),
-                        description: head.description.clone(),
-                        is_virtual: head
-                            .description
-                            .as_deref()
-                            .map(is_virtual_description)
-                            .unwrap_or(false),
-                        is_ignored: false,
-                    },
-                    enabled: head_is_enabled(head.enabled, head.current_mode.as_ref()),
-                    mode,
-                    position: head.position,
-                    scale: head.scale,
-                    transform: head.transform,
-                    mirror_target: None,
-                    backend_data: None,
+                {
+                    let mut state = OutputState::new(name);
+                    state.identity.edid_hash = None;
+                    state.identity.make = head.make.clone();
+                    state.identity.model = head.model.clone();
+                    state.identity.serial = head.serial.clone();
+                    state.identity.description = head.description.clone();
+                    state.identity.is_virtual = head
+                        .description
+                        .as_deref()
+                        .map(is_virtual_description)
+                        .unwrap_or(false);
+                    state.identity.is_ignored = false;
+                    state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
+                    state.mode = mode;
+                    state.position = head.position;
+                    state.scale = head.scale;
+                    state.transform = head.transform;
+                    state.mirror_target = None;
+                    state.backend_data = None;
+                    state
                 },
             );
         }
@@ -305,7 +315,7 @@ impl WaylandClient {
                 tracing::warn!(
                     attempt = attempt + 1,
                     total_attempts = attempts,
-                    "wlroots configuration cancelled, retrying with refreshed serial"
+                    "wlroots configuration cancelled, retrying after refreshing compositor state"
                 );
             } else {
                 return Ok(status);
@@ -354,6 +364,14 @@ fn preferred_mode_for_head(state: &State, head: &HeadInfo) -> Option<Mode> {
 
 fn head_is_enabled(enabled: bool, current_mode: Option<&ObjectId>) -> bool {
     enabled || current_mode.is_some()
+}
+
+fn config_failure(status: ConfigStatus) -> Option<ConfigFailureKind> {
+    match status {
+        ConfigStatus::Succeeded => None,
+        ConfigStatus::Failed => Some(ConfigFailureKind::Rejected),
+        ConfigStatus::Cancelled => Some(ConfigFailureKind::TopologyChanged),
+    }
 }
 
 fn apply_head_config(
@@ -431,13 +449,19 @@ fn is_virtual_description(description: &str) -> bool {
     lower.contains("virtual") || lower.contains("headless") || lower.contains("x11")
 }
 
+fn update_identity_field(field: &mut Option<String>, value: &str) {
+    if let Some(value) = normalized_identity_value(Some(value)) {
+        *field = Some(value);
+    }
+}
+
 struct WlrootsWatcher {
     backend: WlrootsBackend,
     last_fingerprint: Option<String>,
 }
 
 impl OutputWatcher for WlrootsWatcher {
-    fn poll_changed(&mut self) -> Result<Option<Topology>> {
+    fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
         std::thread::sleep(Duration::from_millis(500));
         let topology = self.backend.enumerate_outputs()?;
         let fingerprint = topology.fingerprint();
@@ -509,12 +533,16 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
         match event {
             zwlr_output_head_v1::Event::Name { name } => entry.name = Some(name),
             zwlr_output_head_v1::Event::Description { description } => {
-                entry.description = Some(description)
+                update_identity_field(&mut entry.description, &description)
             }
-            zwlr_output_head_v1::Event::Make { make } => entry.make = Some(make),
-            zwlr_output_head_v1::Event::Model { model } => entry.model = Some(model),
+            zwlr_output_head_v1::Event::Make { make } => {
+                update_identity_field(&mut entry.make, &make)
+            }
+            zwlr_output_head_v1::Event::Model { model } => {
+                update_identity_field(&mut entry.model, &model)
+            }
             zwlr_output_head_v1::Event::SerialNumber { serial_number } => {
-                entry.serial = Some(serial_number)
+                update_identity_field(&mut entry.serial, &serial_number)
             }
             zwlr_output_head_v1::Event::Enabled { enabled } => entry.enabled = enabled != 0,
             zwlr_output_head_v1::Event::Position { x, y } => entry.position = Position { x, y },
@@ -630,5 +658,12 @@ mod tests {
     fn current_mode_marks_head_enabled() {
         assert!(head_is_enabled(false, Some(&ObjectId::null())));
         assert!(!head_is_enabled(false, None));
+    }
+
+    #[test]
+    fn update_identity_field_keeps_existing_value_for_unknown_placeholder() {
+        let mut field = Some("Microstep".to_string());
+        update_identity_field(&mut field, "Unknown");
+        assert_eq!(field.as_deref(), Some("Microstep"));
     }
 }

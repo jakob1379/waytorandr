@@ -42,6 +42,7 @@ impl From<OutputState> for OutputConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct Hooks {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_apply: Vec<Hook>,
@@ -52,6 +53,7 @@ pub struct Hooks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Hook {
     pub command: String,
     #[serde(default)]
@@ -62,6 +64,16 @@ pub struct Hook {
 
 fn default_timeout() -> u64 {
     30
+}
+
+impl Hook {
+    pub fn new(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            args: Vec::new(),
+            timeout_secs: default_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -121,24 +133,67 @@ impl Profile {
         parts.join(";")
     }
 
-    pub fn save_to_file(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
-        Ok(())
+    pub fn with_inferred_match_rules(&self) -> Self {
+        if !self.match_rules.is_empty() {
+            return self.clone();
+        }
+
+        let mut inferred = self.clone();
+        inferred.match_rules = self
+            .layout
+            .values()
+            .map(|config| OutputMatcher {
+                identity: config.state.identity.clone(),
+                required: config.state.enabled,
+                position_hint: Some(config.state.position),
+            })
+            .collect();
+        inferred
     }
 
-    pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let profile: Profile = toml::from_str(&content)?;
-        Ok(profile)
-    }
 }
 
-pub fn default_profile_dir() -> anyhow::Result<std::path::PathBuf> {
-    let config_home = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?
-        .config_dir()
-        .join("waytorandr")
-        .join("profiles");
-    Ok(config_home)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{OutputState, Position};
+
+    #[test]
+    fn infers_match_rules_from_layout_when_missing() {
+        let mut layout = HashMap::new();
+        layout.insert(
+            "DP-1".to_string(),
+            OutputConfig {
+                state: {
+                    let mut state = OutputState::new("DP-1");
+                    state.enabled = true;
+                    state.position = Position::new(10, 20);
+                    state
+                },
+                preset: None,
+            },
+        );
+
+        let profile = Profile {
+            name: "desk".to_string(),
+            priority: 0,
+            match_rules: Vec::new(),
+            layout,
+            hooks: Hooks::default(),
+            options: ProfileOptions::default(),
+        };
+
+        let inferred = profile.with_inferred_match_rules();
+
+        assert_eq!(inferred.match_rules.len(), 1);
+        assert_eq!(
+            inferred.match_rules[0].identity.connector.as_deref(),
+            Some("DP-1")
+        );
+        assert!(inferred.match_rules[0].required);
+        assert_eq!(
+            inferred.match_rules[0].position_hint,
+            Some(Position::new(10, 20))
+        );
+    }
 }

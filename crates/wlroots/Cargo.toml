@@ -9,8 +9,6 @@ rust-version.workspace = true
 [dependencies]
 waytorandr-core = { path = "../core" }
 wayland-client = "0.31"
-wayland-protocols = { version = "0.31", features = ["staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-rustix = { version = "0.38", features = ["process"] }
 anyhow.workspace = true
 tracing.workspace = true
