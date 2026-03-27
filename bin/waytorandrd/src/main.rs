@@ -17,8 +17,7 @@ fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let backend = waytorandr_wlroots::backend::WlrootsBackend::connect()
-        .map_err(|err| anyhow!("failed to connect to wlroots backend: {err}"))?;
+    let backend = connect_backend()?;
     let capabilities = backend.capabilities();
     let store = ProfileStore::new()?;
     let state_store = StateStore::new()?;
@@ -41,6 +40,22 @@ fn main() -> Result<()> {
             }
         }
     }
+}
+
+fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
+    let display_hint = if wayland_display.contains('/') {
+        "; WAYLAND_DISPLAY should be a socket name like 'wayland-0', not a path"
+    } else {
+        ""
+    };
+
+    waytorandr_wlroots::backend::WlrootsBackend::connect().map_err(|err| {
+        anyhow!(
+            "failed to connect to wlroots backend: {err} (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint})"
+        )
+    })
 }
 
 #[cfg(test)]

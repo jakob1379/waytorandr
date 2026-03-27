@@ -37,7 +37,6 @@
           LIBCLUDIR = "${pkgs.libglvnd}/lib";
 
           shellHook = ''
-            export WAYLAND_DISPLAY=${pkgs.xorg.libX11}/lib
             export LD_LIBRARY_PATH="${pkgs.wayland}/lib:$LD_LIBRARY_PATH"
             '';
         };

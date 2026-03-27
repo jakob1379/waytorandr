@@ -27,12 +27,22 @@ pub fn select_profile_for_topology(
     profiles: &[Profile],
     state: &State,
 ) -> Option<Profile> {
+    let setup_fingerprint = topology.setup_fingerprint();
+    if let Some(default_name) = state
+        .default_profiles
+        .get(&setup_fingerprint)
+        .map(String::as_str)
+    {
+        if let Some(profile) = profiles.iter().find(|profile| profile.name == default_name) {
+            return Some(profile.clone());
+        }
+    }
+
     if let Some(matched) = Matcher::match_profile(topology, profiles) {
         return Some(matched.profile);
     }
 
-    let setup_fingerprint = topology.setup_fingerprint();
-    let default_name = default_profile_for_setup(state, &setup_fingerprint)?;
+    let default_name = state.global_default_profile()?;
     profiles
         .iter()
         .find(|profile| profile.name == default_name)
@@ -221,7 +231,23 @@ mod tests {
     }
 
     #[test]
-    fn select_profile_prefers_match_before_default() {
+    fn select_profile_prefers_setup_default_before_match() {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let mut state = State::default();
+        state
+            .default_profiles
+            .insert(topology.setup_fingerprint(), "external-only".to_string());
+        let profiles = vec![profile("both", "DP-1"), profile("external-only", "DP-1")];
+
+        let selected = select_profile_for_topology(&topology, &profiles, &state).unwrap();
+
+        assert_eq!(selected.name, "external-only");
+    }
+
+    #[test]
+    fn select_profile_prefers_match_before_global_default() {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
         };

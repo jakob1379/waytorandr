@@ -251,6 +251,25 @@ fn runtime_selects_applies_and_records_matching_profile() {
     });
 }
 
+#[test]
+fn runtime_prefers_setup_default_over_matching_profile() {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let profiles = vec![profile("both", "DP-1"), profile("external-only", "DP-1")];
+        let mut state = State::default();
+        state
+            .default_profiles
+            .insert(topology.setup_fingerprint(), "external-only".to_string());
+
+        let selected = runtime::select_profile_for_topology(&topology, &profiles, &state)
+            .expect("setup default should be selected");
+
+        assert_eq!(selected.name, "external-only");
+    });
+}
+
 #[derive(Clone)]
 struct TestBackend {
     apply_calls: Arc<Mutex<usize>>,

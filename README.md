@@ -10,7 +10,7 @@ Save, set, and switch Wayland display layouts.
 Usage: waytorandr <COMMAND>
 
 Commands:
-  set          Set a saved profile, virtual configuration, or matching/default profile
+  set          Set a saved profile, virtual configuration, or default/matching profile
   save         Save the current compositor layout as a profile
   remove       Remove a saved profile
   cycle        Set the next saved profile
@@ -27,7 +27,7 @@ Run `waytorandr set --help` or `waytorandr save --help` for command-specific exa
 
 ## Daemon
 
-`waytorandrd` watches output changes and reapplies the best matching or configured default profile for the current hardware setup.
+`waytorandrd` watches output changes and reapplies the configured default profile for the current hardware setup, or the best matching saved profile when no setup default exists.
 
 - use `waytorandr` for explicit save/set/list/current workflows
 - use `waytorandrd` when you want automatic reapplication after dock/undock or output hotplug events

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
@@ -395,8 +395,19 @@ fn validate_profile(profile: &Profile) -> Result<()> {
 }
 
 fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
-    waytorandr_wlroots::backend::WlrootsBackend::connect()
-        .context("failed to connect to wlroots output-management backend")
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
+    let display_hint = if wayland_display.contains('/') {
+        "; WAYLAND_DISPLAY should be a socket name like 'wayland-0', not a path"
+    } else {
+        ""
+    };
+
+    waytorandr_wlroots::backend::WlrootsBackend::connect().map_err(|err| {
+        anyhow!(
+            "failed to connect to wlroots output-management backend: {err} (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint})"
+        )
+    })
 }
 
 fn current_setup_fingerprint() -> Result<Option<String>> {

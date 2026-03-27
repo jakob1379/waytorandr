@@ -19,13 +19,16 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    #[command(about = "Set a saved profile, virtual configuration, or matching/default profile")]
+    #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
     #[command(after_long_help = "Virtual configurations:
   off        Disable all outputs
   common     Place all connected outputs at a common resolution on the same origin
   mirror     Reserved name; prints guidance to use wl-mirror for real mirroring
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
+
+When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
+If no setup default is configured, it applies the best matching saved profile.
 
 Examples:
   waytorandr set
@@ -76,7 +79,7 @@ Use `--all` to show every saved profile across all setups, grouped by setup fing
 pub(crate) struct SetArgs {
     #[arg(
         value_name = "profile",
-        help = "Saved profile or virtual configuration; omit to set the matching profile or default",
+        help = "Saved profile or virtual configuration; omit to set setup default or best match",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,
