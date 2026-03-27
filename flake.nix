@@ -9,12 +9,37 @@
   };
 
   outputs = { self, nixpkgs, utils, rust-overlay }:
+    let
+      homeModule = import ./nix/home-manager/waytorandr.nix { inherit self; };
+    in
     utils.lib.eachDefaultSystem (system:
       let
         overlays = [ rust-overlay.overlays.default ];
         pkgs = import nixpkgs { inherit system overlays; };
         rust = pkgs.rust-bin.stable.latest.default;
         wayland = pkgs.wayland;
+        waytorandrPackage = pkgs.rustPlatform.buildRustPackage {
+          pname = "waytorandr";
+          version = "0.1.0";
+          src = self;
+
+          cargoLock.lockFile = self + /Cargo.lock;
+
+          nativeBuildInputs = with pkgs; [ pkg-config ];
+          buildInputs = with pkgs; [
+            wayland
+            wayland-protocols
+            wlroots
+            libxkbcommon.dev
+          ];
+
+          meta = with pkgs.lib; {
+            description = "Wayland-native display profile manager";
+            homepage = "https://github.com/jsg/waytorandr";
+            license = licenses.mit;
+            platforms = platforms.linux;
+          };
+        };
       in
       {
         devShell = pkgs.mkShell {
@@ -41,28 +66,17 @@
             '';
         };
 
-        packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "waytorandr";
-          version = "0.1.0";
-          src = self;
-
-          cargoLock.lockFile = self + /Cargo.lock;
-
-          nativeBuildInputs = with pkgs; [ pkg-config ];
-          buildInputs = with pkgs; [
-            wayland
-            wayland-protocols
-            wlroots
-            libxkbcommon.dev
-          ];
-
-          meta = with pkgs.lib; {
-            description = "Wayland-native display profile manager";
-            homepage = "https://github.com/jsg/waytorandr";
-            license = licenses.mit;
-            platforms = platforms.linux;
-          };
+        packages = {
+          waytorandr = waytorandrPackage;
+          default = waytorandrPackage;
         };
       }
-    );
+    )
+    // {
+      homeModules = {
+        waytorandr = homeModule;
+        default = homeModule;
+      };
+      homeManagerModules = self.homeModules;
+    };
 }
