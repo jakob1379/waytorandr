@@ -25,6 +25,14 @@ Options:
 
 Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples.
 
+## Daemon
+
+`waytorandrd` watches output changes and reapplies the best matching or configured default profile for the current hardware setup.
+
+- use `waytorandr` for explicit save/set/list/current workflows
+- use `waytorandrd` when you want automatic reapplication after dock/undock or output hotplug events
+- the daemon uses the same wlroots backend path as the CLI and writes runtime state under the same XDG state directory
+
 ## Status
 
 - actively tested on Niri
@@ -52,6 +60,7 @@ nix build
 nix develop
 nix develop -c cargo test
 ./result/bin/waytorandr --help
+./result/bin/waytorandrd
 ```
 
 Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
