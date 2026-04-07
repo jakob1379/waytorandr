@@ -186,21 +186,25 @@ impl OutputIdentity {
     }
 
     pub fn with_fallback(&self, fallback: &OutputIdentity) -> OutputIdentity {
-        let mut identity = Self::default();
-        identity.edid_hash = self
-            .edid_hash
-            .clone()
-            .or_else(|| fallback.edid_hash.clone());
-        identity.make = choose_identity_value(self.make.as_deref(), fallback.make.as_deref());
-        identity.model = choose_identity_value(self.model.as_deref(), fallback.model.as_deref());
-        identity.serial = choose_identity_value(self.serial.as_deref(), fallback.serial.as_deref());
-        identity.connector =
-            choose_identity_value(self.connector.as_deref(), fallback.connector.as_deref());
-        identity.description =
-            choose_identity_value(self.description.as_deref(), fallback.description.as_deref());
-        identity.is_virtual = self.is_virtual;
-        identity.is_ignored = self.is_ignored;
-        identity
+        Self {
+            edid_hash: self
+                .edid_hash
+                .clone()
+                .or_else(|| fallback.edid_hash.clone()),
+            make: choose_identity_value(self.make.as_deref(), fallback.make.as_deref()),
+            model: choose_identity_value(self.model.as_deref(), fallback.model.as_deref()),
+            serial: choose_identity_value(self.serial.as_deref(), fallback.serial.as_deref()),
+            connector: choose_identity_value(
+                self.connector.as_deref(),
+                fallback.connector.as_deref(),
+            ),
+            description: choose_identity_value(
+                self.description.as_deref(),
+                fallback.description.as_deref(),
+            ),
+            is_virtual: self.is_virtual,
+            is_ignored: self.is_ignored,
+        }
     }
 }
 

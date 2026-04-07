@@ -3,7 +3,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use waytorandr_core::engine::Backend;
 use waytorandr_core::runtime;
-use waytorandr_core::store::State;
 use waytorandr_core::store::{ProfileStore, StateStore};
 
 mod daemon;
@@ -63,6 +62,7 @@ fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waytorandr_core::store::State;
 
     #[test]
     fn record_daemon_start_marks_backend_and_enablement() {

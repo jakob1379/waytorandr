@@ -200,10 +200,9 @@ mod tests {
             name: "test".to_string(),
             priority: 0,
             match_rules: vec![OutputMatcher {
-                identity: {
-                    let mut identity = OutputIdentity::default();
-                    identity.edid_hash = Some("abc123".to_string());
-                    identity
+                identity: OutputIdentity {
+                    edid_hash: Some("abc123".to_string()),
+                    ..OutputIdentity::default()
                 },
                 required: true,
                 position_hint: None,
@@ -227,10 +226,9 @@ mod tests {
             name: "test".to_string(),
             priority: 0,
             match_rules: vec![OutputMatcher {
-                identity: {
-                    let mut identity = OutputIdentity::default();
-                    identity.edid_hash = Some("missing".to_string());
-                    identity
+                identity: OutputIdentity {
+                    edid_hash: Some("missing".to_string()),
+                    ..OutputIdentity::default()
                 },
                 required: true,
                 position_hint: None,

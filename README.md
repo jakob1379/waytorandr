@@ -65,6 +65,48 @@ nix develop -c cargo test
 ./result/bin/waytorandrd
 ```
 
+### Home Manager
+
+The flake exports a Home Manager module at `homeManagerModules.default` and
+`homeManagerModules.waytorandr`.
+
+Implementation files:
+
+- `nix/home-manager/waytorandr.nix`
+- `nix/modules/home-manager.nix`
+
+Read `nix/modules/home-manager.nix` for the option surface and inline option
+descriptions.
+
+The module only installs the package and manages the `waytorandrd` user
+service. Profiles remain imperative and are expected to be managed by
+`waytorandr` itself.
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    waytorandr.url = "github:jsg/waytorandr";
+  };
+
+  outputs = inputs@{ nixpkgs, home-manager, waytorandr, ... }: {
+    homeConfigurations."alice" = home-manager.lib.homeManagerConfiguration {
+      pkgs = import nixpkgs { system = "x86_64-linux"; };
+      modules = [
+        waytorandr.homeManagerModules.default
+        {
+          home.username = "alice";
+          home.homeDirectory = "/home/alice";
+          home.stateVersion = "24.11";
+          services.waytorandr.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
 Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
 
 ## Project Note
