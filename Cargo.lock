@@ -873,6 +873,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "waytorandr-core",
+ "waytorandr-kscreen",
  "waytorandr-wlroots",
 ]
 
@@ -888,6 +889,17 @@ dependencies = [
  "thiserror",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "waytorandr-kscreen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tracing",
+ "waytorandr-core",
 ]
 
 [[package]]
@@ -909,6 +921,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "waytorandr-core",
+ "waytorandr-kscreen",
  "waytorandr-wlroots",
 ]
 

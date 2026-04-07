@@ -33,14 +33,14 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 
 - use `waytorandr` for explicit save/set/list/current workflows
 - use `waytorandrd` when you want automatic reapplication after dock/undock or output hotplug events
-- the daemon uses the same wlroots backend path as the CLI and writes runtime state under the same XDG state directory
+- the daemon uses the same backend-selection path as the CLI and writes runtime state under the same XDG state directory
 
 ## Status
 
-- actively tested on Niri
+- actively tested on Niri and KDE Plasma/KWin
 - wlroots output-management path is implemented and working
-- more compositor testing is still needed
-- GNOME and KDE backends are not implemented yet
+- KDE Plasma/KWin support is implemented through KScreen
+- GNOME backends are not implemented yet
 
 ## Important Limits
 

@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     runtime::record_daemon_started(&mut state, &capabilities.backend_name);
     state_store.save_state(&state)?;
 
-    daemon::handle_topology_change(&backend, &store, &state_store)?;
+    daemon::handle_topology_change(backend.as_ref(), &store, &state_store)?;
 
     tracing::info!(backend = %capabilities.backend_name, "daemon ready, watching outputs");
 
@@ -34,14 +34,15 @@ fn main() -> Result<()> {
         if let Some(topology) = watcher.poll_changed()? {
             let topology = state_store.normalize_topology_and_persist(&topology)?;
             tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
-            if let Err(err) = daemon::handle_topology_change(&backend, &store, &state_store) {
+            if let Err(err) = daemon::handle_topology_change(backend.as_ref(), &store, &state_store)
+            {
                 tracing::error!(error = %err, "failed to apply matching profile");
             }
         }
     }
 }
 
-fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
+fn connect_backend() -> Result<Box<dyn Backend>> {
     let wayland_display =
         std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xdg_runtime_dir =
@@ -51,11 +52,59 @@ fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
     } else {
         ""
     };
+    let prefer_kscreen = is_kde_session();
+    let mut errors = Vec::new();
 
-    waytorandr_wlroots::backend::WlrootsBackend::connect().map_err(|err| {
-        anyhow!(
-            "failed to connect to wlroots backend: {err} (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint})"
-        )
+    for (label, attempt) in backend_attempts(prefer_kscreen) {
+        match attempt() {
+            Ok(backend) => return Ok(backend),
+            Err(err) => errors.push(format!("{label}: {err}")),
+        }
+    }
+
+    Err(anyhow!(
+        "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {}",
+        errors.join("; ")
+    ))
+}
+
+fn backend_attempts(prefer_kscreen: bool) -> Vec<(&'static str, fn() -> Result<Box<dyn Backend>>)> {
+    let kscreen = (
+        "kscreen",
+        connect_kscreen as fn() -> Result<Box<dyn Backend>>,
+    );
+    let wlroots = (
+        "wlroots",
+        connect_wlroots as fn() -> Result<Box<dyn Backend>>,
+    );
+    if prefer_kscreen {
+        vec![kscreen, wlroots]
+    } else {
+        vec![wlroots, kscreen]
+    }
+}
+
+fn connect_kscreen() -> Result<Box<dyn Backend>> {
+    waytorandr_kscreen::backend::KScreenBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
+
+fn connect_wlroots() -> Result<Box<dyn Backend>> {
+    waytorandr_wlroots::backend::WlrootsBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
+
+fn is_kde_session() -> bool {
+    [
+        std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        std::env::var("XDG_SESSION_DESKTOP").ok(),
+        std::env::var("DESKTOP_SESSION").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("kde") || value.contains("plasma")
     })
 }
 
