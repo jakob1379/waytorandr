@@ -359,19 +359,21 @@ mod tests {
 
         fn test(&self, _plan: &LayoutPlan) -> CoreResult<TestResult> {
             *self.test_calls.lock().unwrap() += 1;
-            let mut result = TestResult::default();
-            result.success = self.test_success;
-            Ok(result)
+            Ok(TestResult {
+                success: self.test_success,
+                ..TestResult::default()
+            })
         }
 
         fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
             *self.apply_calls.lock().unwrap() += 1;
-            let mut result = ApplyResult::default();
-            result.success = true;
-            result.applied_state = Some(Topology {
-                outputs: plan.outputs.clone(),
-            });
-            Ok(result)
+            Ok(ApplyResult {
+                success: true,
+                applied_state: Some(Topology {
+                    outputs: plan.outputs.clone(),
+                }),
+                ..ApplyResult::default()
+            })
         }
     }
 

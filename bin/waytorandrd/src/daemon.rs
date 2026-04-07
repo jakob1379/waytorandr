@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 
 use waytorandr_core::engine::{Backend, ConfigFailureKind};
-use waytorandr_core::error::CoreError;
-use waytorandr_core::model::{OutputState, Topology};
+use waytorandr_core::model::Topology;
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::runtime;
@@ -176,10 +174,12 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::ffi::OsString;
     use std::sync::{Arc, Mutex, OnceLock};
     use waytorandr_core::engine::{ApplyResult, OutputWatcher, TestResult};
-    use waytorandr_core::model::{Capabilities, OutputIdentity, Position};
+    use waytorandr_core::error::CoreError;
+    use waytorandr_core::model::{Capabilities, OutputIdentity, OutputState, Position};
     use waytorandr_core::profile::{Hooks, OutputConfig, OutputMatcher, Profile, ProfileOptions};
 
     fn xdg_lock() -> &'static Mutex<()> {
