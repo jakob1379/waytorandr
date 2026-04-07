@@ -78,6 +78,10 @@ Implementation files:
 Read `nix/modules/home-manager.nix` for the option surface and inline option
 descriptions.
 
+The module only installs the package and manages the `waytorandrd` user
+service. Profiles remain imperative and are expected to be managed by
+`waytorandr` itself.
+
 ```nix
 {
   inputs = {
