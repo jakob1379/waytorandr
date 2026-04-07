@@ -1,0 +1,14 @@
+[package]
+name = "waytorandr-backend-loader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+waytorandr-core = { path = "../core" }
+waytorandr-gnome = { path = "../gnome" }
+waytorandr-kscreen = { path = "../kscreen" }
+waytorandr-wlroots = { path = "../wlroots" }
+anyhow.workspace = true

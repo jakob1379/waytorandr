@@ -40,7 +40,7 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 - actively tested on Niri and KDE Plasma/KWin
 - wlroots output-management path is implemented and working
 - KDE Plasma/KWin support is implemented through KScreen
-- GNOME backends are not implemented yet
+- GNOME support is implemented through Mutter DisplayConfig
 
 ## Important Limits
 

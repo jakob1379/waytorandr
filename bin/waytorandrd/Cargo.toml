@@ -11,9 +11,8 @@ name = "waytorandrd"
 path = "src/main.rs"
 
 [dependencies]
+waytorandr-backend-loader = { path = "../../crates/backend-loader" }
 waytorandr-core = { path = "../../crates/core" }
-waytorandr-kscreen = { path = "../../crates/kscreen" }
-waytorandr-wlroots = { path = "../../crates/wlroots" }
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

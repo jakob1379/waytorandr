@@ -5,7 +5,8 @@ use serde::Serialize;
 use crate::cli::{Cli, Commands};
 use crate::output::{print_plan_summary, print_topology, print_validation_result};
 use crate::preset::resolve_virtual_preset;
-use waytorandr_core::engine::{Backend, ConfigFailureKind, TestResult};
+use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{OutputState, Topology};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::{Hooks, Profile};
@@ -776,72 +777,6 @@ fn validate_profile(profile: &Profile) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn connect_backend() -> Result<Box<dyn Backend>> {
-    let wayland_display =
-        std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xdg_runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
-    let display_hint = if wayland_display.contains('/') {
-        "; WAYLAND_DISPLAY should be a socket name like 'wayland-0', not a path"
-    } else {
-        ""
-    };
-    let prefer_kscreen = is_kde_session();
-    let mut errors = Vec::new();
-
-    for (label, attempt) in backend_attempts(prefer_kscreen) {
-        match attempt() {
-            Ok(backend) => return Ok(backend),
-            Err(err) => errors.push(format!("{label}: {err}")),
-        }
-    }
-
-    Err(anyhow!(
-        "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {}",
-        errors.join("; ")
-    ))
-}
-
-fn backend_attempts(prefer_kscreen: bool) -> Vec<(&'static str, fn() -> Result<Box<dyn Backend>>)> {
-    let kscreen = (
-        "kscreen",
-        connect_kscreen as fn() -> Result<Box<dyn Backend>>,
-    );
-    let wlroots = (
-        "wlroots",
-        connect_wlroots as fn() -> Result<Box<dyn Backend>>,
-    );
-    if prefer_kscreen {
-        vec![kscreen, wlroots]
-    } else {
-        vec![wlroots, kscreen]
-    }
-}
-
-fn connect_kscreen() -> Result<Box<dyn Backend>> {
-    waytorandr_kscreen::backend::KScreenBackend::connect()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
-}
-
-fn connect_wlroots() -> Result<Box<dyn Backend>> {
-    waytorandr_wlroots::backend::WlrootsBackend::connect()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
-}
-
-fn is_kde_session() -> bool {
-    [
-        std::env::var("XDG_CURRENT_DESKTOP").ok(),
-        std::env::var("XDG_SESSION_DESKTOP").ok(),
-        std::env::var("DESKTOP_SESSION").ok(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| {
-        let value = value.to_ascii_lowercase();
-        value.contains("kde") || value.contains("plasma")
-    })
 }
 
 fn current_setup_fingerprint() -> Result<Option<String>> {
