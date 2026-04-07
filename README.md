@@ -65,6 +65,70 @@ nix develop -c cargo test
 ./result/bin/waytorandrd
 ```
 
+### Home Manager
+
+The flake exports a Home Manager module at `homeManagerModules.default` and
+`homeManagerModules.waytorandr`.
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    waytorandr.url = "github:jsg/waytorandr";
+  };
+
+  outputs = inputs@{ nixpkgs, home-manager, waytorandr, ... }: {
+    homeConfigurations."alice" = home-manager.lib.homeManagerConfiguration {
+      pkgs = import nixpkgs { system = "x86_64-linux"; };
+      modules = [
+        waytorandr.homeManagerModules.default
+        {
+          home.username = "alice";
+          home.homeDirectory = "/home/alice";
+          home.stateVersion = "24.11";
+
+          services.waytorandr = {
+            enable = true;
+            environment.RUST_LOG = "waytorandrd=info";
+            profiles = [
+              {
+                name = "laptop";
+                layout = {
+                  "eDP-1" = {
+                    enabled = true;
+                    scale = 2.0;
+                    mode = {
+                      width = 2880;
+                      height = 1800;
+                      refresh = 60000;
+                    };
+                  };
+                };
+              }
+            ];
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The module follows the same basic shape as Home Manager services like
+`services.kanshi` and `services.swayidle`:
+
+- `enable` installs the package and starts `waytorandrd` as a user service
+- `profiles` declaratively writes `~/.config/waytorandr/profiles.json`
+- `profilesFile` lets you provide an existing `profiles.json` instead
+- `systemdTarget` binds the daemon to your graphical Wayland session target
+- `environment` lets you pass service-specific variables such as `RUST_LOG`
+
+The daemon still owns runtime state under `XDG_STATE_HOME/waytorandr`. In
+particular, per-setup defaults remain mutable state, so the module does not
+symlink `state.toml`. Set those defaults with the CLI after activation, for
+example `waytorandr save desk --default` or `waytorandr set desk --default`.
+
 Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
 
 ## Project Note
