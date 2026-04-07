@@ -70,6 +70,14 @@ nix develop -c cargo test
 The flake exports a Home Manager module at `homeManagerModules.default` and
 `homeManagerModules.waytorandr`.
 
+Implementation files:
+
+- `nix/home-manager/waytorandr.nix`
+- `nix/modules/home-manager.nix`
+
+Read `nix/modules/home-manager.nix` for the option surface and inline option
+descriptions.
+
 ```nix
 {
   inputs = {
@@ -87,47 +95,13 @@ The flake exports a Home Manager module at `homeManagerModules.default` and
           home.username = "alice";
           home.homeDirectory = "/home/alice";
           home.stateVersion = "24.11";
-
-          services.waytorandr = {
-            enable = true;
-            environment.RUST_LOG = "waytorandrd=info";
-            profiles = [
-              {
-                name = "laptop";
-                layout = {
-                  "eDP-1" = {
-                    enabled = true;
-                    scale = 2.0;
-                    mode = {
-                      width = 2880;
-                      height = 1800;
-                      refresh = 60000;
-                    };
-                  };
-                };
-              }
-            ];
-          };
+          services.waytorandr.enable = true;
         }
       ];
     };
   };
 }
 ```
-
-The module follows the same basic shape as Home Manager services like
-`services.kanshi` and `services.swayidle`:
-
-- `enable` installs the package and starts `waytorandrd` as a user service
-- `profiles` declaratively writes `~/.config/waytorandr/profiles.json`
-- `profilesFile` lets you provide an existing `profiles.json` instead
-- `systemdTarget` binds the daemon to your graphical Wayland session target
-- `environment` lets you pass service-specific variables such as `RUST_LOG`
-
-The daemon still owns runtime state under `XDG_STATE_HOME/waytorandr`. In
-particular, per-setup defaults remain mutable state, so the module does not
-symlink `state.toml`. Set those defaults with the CLI after activation, for
-example `waytorandr save desk --default` or `waytorandr set desk --default`.
 
 Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
 
