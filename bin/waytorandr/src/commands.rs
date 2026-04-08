@@ -4,7 +4,9 @@ use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
 use crate::output::{print_plan_summary, print_topology, print_validation_result};
-use crate::preset::{mirror_unavailable_message, resolve_virtual_preset};
+use crate::preset::{
+    common_unavailable_message, mirror_unavailable_message, resolve_virtual_preset,
+};
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{OutputState, Topology};
@@ -586,6 +588,12 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> 
     if preset == "mirror" && !capabilities.supports_mirror {
         bail!(mirror_unavailable_message(&capabilities.backend_name));
     }
+    if matches!(preset, "common" | "common-largest")
+        && capabilities.backend_name == "wlroots"
+        && is_niri_session()
+    {
+        bail!(common_unavailable_message(&capabilities.backend_name));
+    }
     let hooks = Hooks::default();
     let state_store = StateStore::new()?;
     let backend_name = capabilities.backend_name;
@@ -817,6 +825,21 @@ fn save_runtime_state(
     Ok(())
 }
 
+fn is_niri_session() -> bool {
+    session_looks_like_niri([
+        std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        std::env::var("XDG_SESSION_DESKTOP").ok(),
+        std::env::var("DESKTOP_SESSION").ok(),
+    ])
+}
+
+fn session_looks_like_niri(values: impl IntoIterator<Item = Option<String>>) -> bool {
+    values
+        .into_iter()
+        .flatten()
+        .any(|value| value.to_ascii_lowercase().contains("niri"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,5 +918,19 @@ mod tests {
         assert!(!validation.success);
         assert_eq!(validation.failure, Some("topology_changed"));
         assert_eq!(validation.message.as_deref(), Some("changed"));
+    }
+
+    #[test]
+    fn session_detection_matches_niri_anywhere_in_session_env() {
+        assert!(session_looks_like_niri([
+            Some("sway:niri".to_string()),
+            None,
+            Some("niri".to_string()),
+        ]));
+        assert!(!session_looks_like_niri([
+            Some("GNOME".to_string()),
+            Some("plasma".to_string()),
+            None,
+        ]));
     }
 }

@@ -54,6 +54,7 @@ Native `mirror` support depends on the active backend.
 - `common` clones all connected outputs at the same origin using the largest shared mode
 - `mirror` uses native backend mirroring where available
 - on backends without native mirroring support, use `wl-mirror`
+- on Niri, overlapping outputs are auto-positioned instead of kept overlapped, so `common` is rejected with guidance instead of silently not cloning
 
 Reference:
 - `https://github.com/swaywm/wlr-protocols/issues/101`

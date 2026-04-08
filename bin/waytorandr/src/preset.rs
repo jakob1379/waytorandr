@@ -42,6 +42,12 @@ pub(crate) fn mirror_unavailable_message(backend_name: &str) -> String {
     )
 }
 
+pub(crate) fn common_unavailable_message(backend_name: &str) -> String {
+    format!(
+        "the `common` clone layout is not available through the `{backend_name}` backend on Niri because Niri automatically repositions overlapping outputs instead of keeping them at the same origin; use `wl-mirror` for true mirroring or `horizontal`/`vertical` for compositor-managed layouts"
+    )
+}
+
 pub(crate) fn virtual_completion_candidates(
     current: &str,
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
@@ -85,5 +91,16 @@ mod tests {
 
         assert!(message.contains("wlroots"));
         assert!(message.contains("wl-mirror"));
+    }
+
+    #[test]
+    fn common_unavailable_guidance_mentions_niri_and_alternatives() {
+        let message = common_unavailable_message("wlroots");
+
+        assert!(message.contains("wlroots"));
+        assert!(message.contains("Niri"));
+        assert!(message.contains("wl-mirror"));
+        assert!(message.contains("horizontal"));
+        assert!(message.contains("vertical"));
     }
 }
