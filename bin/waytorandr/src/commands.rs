@@ -583,8 +583,9 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> 
     let backend = connect_backend()?;
     let hooks = Hooks::default();
     let state_store = StateStore::new()?;
-    let cycle = runtime::execute_plan_cycle_with_backend(&backend, &hooks, dry_run, || {
-        runtime::plan_preset_with_backend(&backend, &state_store, preset)
+    let backend_name = backend.capabilities().backend_name;
+    let cycle = runtime::execute_plan_cycle_with_backend(backend.as_ref(), &hooks, dry_run, || {
+        runtime::plan_preset_with_backend(backend.as_ref(), &state_store, preset)
     })
     .map_err(anyhow::Error::from)?;
     let test = cycle.validation;
@@ -622,7 +623,7 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> 
     }
 
     let applied_topology = applied.applied_state.unwrap_or(apply_topology);
-    save_runtime_state(preset, Some("wlroots"), &applied_topology)?;
+    save_runtime_state(preset, Some(&backend_name), &applied_topology)?;
 
     Ok(ActionOutcome {
         target: preset.to_string(),
@@ -642,10 +643,12 @@ fn execute_profile_action(
     validate_profile(profile)?;
     let backend = connect_backend()?;
     let state_store = StateStore::new()?;
-    let cycle = runtime::execute_plan_cycle_with_backend(&backend, &profile.hooks, dry_run, || {
-        runtime::plan_profile_with_backend(&backend, &state_store, profile)
-    })
-    .map_err(anyhow::Error::from)?;
+    let backend_name = backend.capabilities().backend_name;
+    let cycle =
+        runtime::execute_plan_cycle_with_backend(backend.as_ref(), &profile.hooks, dry_run, || {
+            runtime::plan_profile_with_backend(backend.as_ref(), &state_store, profile)
+        })
+        .map_err(anyhow::Error::from)?;
     let test = cycle.validation;
 
     if dry_run {
@@ -681,7 +684,7 @@ fn execute_profile_action(
     }
 
     let applied_topology = applied.applied_state.unwrap_or(apply_topology);
-    save_runtime_state(&profile.name, Some("wlroots"), &applied_topology)?;
+    save_runtime_state(&profile.name, Some(&backend_name), &applied_topology)?;
     if make_default {
         set_default_profile_for_fingerprint(&profile.name, &applied_topology.setup_fingerprint())?;
     }
@@ -775,7 +778,7 @@ fn validate_profile(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
+fn connect_backend() -> Result<Box<dyn Backend>> {
     let wayland_display =
         std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
     let xdg_runtime_dir =
@@ -785,11 +788,59 @@ fn connect_backend() -> Result<waytorandr_wlroots::backend::WlrootsBackend> {
     } else {
         ""
     };
+    let prefer_kscreen = is_kde_session();
+    let mut errors = Vec::new();
 
-    waytorandr_wlroots::backend::WlrootsBackend::connect().map_err(|err| {
-        anyhow!(
-            "failed to connect to wlroots output-management backend: {err} (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint})"
-        )
+    for (label, attempt) in backend_attempts(prefer_kscreen) {
+        match attempt() {
+            Ok(backend) => return Ok(backend),
+            Err(err) => errors.push(format!("{label}: {err}")),
+        }
+    }
+
+    Err(anyhow!(
+        "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {}",
+        errors.join("; ")
+    ))
+}
+
+fn backend_attempts(prefer_kscreen: bool) -> Vec<(&'static str, fn() -> Result<Box<dyn Backend>>)> {
+    let kscreen = (
+        "kscreen",
+        connect_kscreen as fn() -> Result<Box<dyn Backend>>,
+    );
+    let wlroots = (
+        "wlroots",
+        connect_wlroots as fn() -> Result<Box<dyn Backend>>,
+    );
+    if prefer_kscreen {
+        vec![kscreen, wlroots]
+    } else {
+        vec![wlroots, kscreen]
+    }
+}
+
+fn connect_kscreen() -> Result<Box<dyn Backend>> {
+    waytorandr_kscreen::backend::KScreenBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
+
+fn connect_wlroots() -> Result<Box<dyn Backend>> {
+    waytorandr_wlroots::backend::WlrootsBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
+
+fn is_kde_session() -> bool {
+    [
+        std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        std::env::var("XDG_SESSION_DESKTOP").ok(),
+        std::env::var("DESKTOP_SESSION").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("kde") || value.contains("plasma")
     })
 }
 
@@ -810,7 +861,7 @@ fn set_default_profile_for_fingerprint(profile_name: &str, setup_fingerprint: &s
 fn load_current_topology(state_store: &StateStore) -> Result<Topology> {
     let backend = connect_backend()?;
     Ok(runtime::normalized_topology_from_backend(
-        &backend,
+        backend.as_ref(),
         state_store,
     )?)
 }

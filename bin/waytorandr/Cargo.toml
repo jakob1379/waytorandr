@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 waytorandr-core = { path = "../../crates/core" }
+waytorandr-kscreen = { path = "../../crates/kscreen" }
 waytorandr-wlroots = { path = "../../crates/wlroots" }
 clap.workspace = true
 clap_complete.workspace = true

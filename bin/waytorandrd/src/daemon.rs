@@ -21,7 +21,7 @@ enum DaemonOutcome {
 }
 
 pub(crate) fn handle_topology_change(
-    backend: &impl Backend,
+    backend: &(impl Backend + ?Sized),
     store: &ProfileStore,
     state_store: &StateStore,
 ) -> Result<()> {
@@ -43,7 +43,10 @@ pub(crate) fn handle_topology_change(
     Ok(())
 }
 
-fn wait_for_stable_topology(backend: &impl Backend, state_store: &StateStore) -> Result<Topology> {
+fn wait_for_stable_topology(
+    backend: &(impl Backend + ?Sized),
+    state_store: &StateStore,
+) -> Result<Topology> {
     let deadline = Instant::now() + STABLE_TIMEOUT;
     let mut last_fingerprint = None;
     let mut stable_samples = 0usize;
@@ -71,7 +74,7 @@ fn wait_for_stable_topology(backend: &impl Backend, state_store: &StateStore) ->
 }
 
 fn maybe_apply_matching_profile(
-    backend: &impl Backend,
+    backend: &(impl Backend + ?Sized),
     store: &ProfileStore,
     state_store: &StateStore,
     topology: &Topology,
@@ -92,15 +95,16 @@ fn maybe_apply_matching_profile(
 }
 
 fn apply_profile(
-    backend: &impl Backend,
+    backend: &(impl Backend + ?Sized),
     state_store: &StateStore,
     profile: &Profile,
     topology: &Topology,
 ) -> Result<DaemonOutcome> {
+    let backend_name = backend.capabilities().backend_name;
     let plan =
         runtime::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
     if plan_matches_topology(&plan, topology) {
-        persist_applied_profile(state_store, profile, topology)?;
+        persist_applied_profile(state_store, profile, &backend_name, topology)?;
         tracing::info!(profile = %profile.name, "profile already matches current topology");
         return Ok(DaemonOutcome::Applied);
     }
@@ -141,7 +145,7 @@ fn apply_profile(
     }
 
     let applied = result.applied_state.unwrap_or(refreshed_topology);
-    persist_applied_profile(state_store, profile, &applied)?;
+    persist_applied_profile(state_store, profile, &backend_name, &applied)?;
 
     tracing::info!(profile = %profile.name, "applied profile");
     Ok(DaemonOutcome::Applied)
@@ -150,10 +154,11 @@ fn apply_profile(
 fn persist_applied_profile(
     state_store: &StateStore,
     profile: &Profile,
+    backend_name: &str,
     topology: &Topology,
 ) -> Result<()> {
     let mut state = state_store.load_state()?.unwrap_or_default();
-    runtime::record_applied_profile(&mut state, &profile.name, Some("wlroots"), topology);
+    runtime::record_applied_profile(&mut state, &profile.name, Some(backend_name), topology);
     state.daemon_enabled = true;
     state_store.save_state(&state)?;
 
