@@ -309,7 +309,7 @@ fn compare_mode_preference(
 }
 
 fn refresh_distance(refresh_rate: f64, desired_refresh: u32) -> f64 {
-    (refresh_rate - desired.refresh as f64).abs()
+    (refresh_rate - desired_refresh as f64).abs()
 }
 
 fn current_mode(output: &KScreenOutput) -> Option<Mode> {
