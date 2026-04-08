@@ -82,6 +82,44 @@ Use `--all` to show every saved profile across all setups, grouped by setup fing
 
     #[command(about = "Show detected outputs and current geometry")]
     Detected,
+
+    #[command(about = "Manage the waytorandrd user service")]
+    #[command(after_long_help = "Examples:
+  waytorandr service install
+  waytorandr service start
+  waytorandr service status
+  waytorandr service uninstall")]
+    Service(ServiceArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ServiceArgs {
+    #[command(subcommand)]
+    pub(crate) command: ServiceCommands,
+}
+
+#[derive(Subcommand, Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ServiceCommands {
+    #[command(about = "Install the waytorandrd user service")]
+    Install,
+
+    #[command(about = "Uninstall the waytorandrd user service")]
+    Uninstall,
+
+    #[command(about = "Start the waytorandrd user service")]
+    Start,
+
+    #[command(about = "Stop the waytorandrd user service")]
+    Stop,
+
+    #[command(about = "Restart the waytorandrd user service")]
+    Restart,
+
+    #[command(about = "Show the waytorandrd user service status")]
+    Status,
+
+    #[command(about = "Run waytorandrd in the foreground")]
+    Run,
 }
 
 #[derive(Args)]

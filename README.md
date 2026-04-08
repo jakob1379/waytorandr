@@ -35,6 +35,18 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 - use `waytorandrd` when you want automatic reapplication after dock/undock or output hotplug events
 - the daemon uses the same backend-selection path as the CLI and writes runtime state under the same XDG state directory
 
+For non-Home-Manager setups, `waytorandr` can manage its own user service:
+
+```bash
+waytorandr service install
+waytorandr service start
+waytorandr service status
+```
+
+- `install` writes `~/.config/systemd/user/waytorandrd.service` and enables it
+- `run` starts `waytorandrd` in the foreground
+- `uninstall` removes the user unit again
+
 ## Status
 
 - actively tested on Niri and KDE Plasma/KWin
@@ -81,6 +93,7 @@ The current module scope is intentionally small:
 - it exposes `services.waytorandr.*`
 - `services.waytorandr.enable = true` installs the package in `home.packages`
 - it creates a `systemd --user` service for `waytorandrd`
+- non-Home-Manager users can use `waytorandr service ...` instead
 - it does not provide declarative profile management through Nix
 
 Real profile/default management still happens through the CLI, for example:

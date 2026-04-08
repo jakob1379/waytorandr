@@ -3,6 +3,7 @@ mod commands;
 mod completion;
 mod output;
 mod preset;
+mod service;
 
 use anyhow::Result;
 use clap::CommandFactory;

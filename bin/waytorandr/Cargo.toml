@@ -16,6 +16,7 @@ waytorandr-core = { path = "../../crates/core" }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true
+directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

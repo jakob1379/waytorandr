@@ -7,6 +7,7 @@ use crate::output::{print_plan_summary, print_topology, print_validation_result}
 use crate::preset::{
     common_unavailable_message, mirror_unavailable_message, resolve_virtual_preset,
 };
+use crate::service;
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{OutputState, Topology};
@@ -224,6 +225,7 @@ pub(crate) fn run() -> Result<()> {
         Commands::List(args) => cmd_list(args.all, output_mode),
         Commands::Current => cmd_current(output_mode),
         Commands::Detected => cmd_detected(output_mode),
+        Commands::Service(args) => service::run(args.command, cli.json),
     }
 }
 
