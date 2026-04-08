@@ -74,6 +74,7 @@ impl KScreenBackend {
             state.identity.is_virtual = is_virtual_output(&output.name);
             state.enabled = output.enabled;
             state.mode = current_mode(output);
+            state.available_modes = available_modes(output);
             state.position = output.pos;
             state.scale = output.scale;
             state.transform = transform_from_kscreen(output.rotation);
@@ -327,6 +328,21 @@ fn current_mode(output: &KScreenOutput) -> Option<Mode> {
             height: mode.size.height,
             refresh: rounded_refresh(mode.refresh_rate),
         })
+}
+
+fn available_modes(output: &KScreenOutput) -> Vec<Mode> {
+    let mut modes: Vec<Mode> = output
+        .modes
+        .iter()
+        .map(|mode| Mode {
+            width: mode.size.width,
+            height: mode.size.height,
+            refresh: rounded_refresh(mode.refresh_rate),
+        })
+        .collect();
+    modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
+    modes.dedup();
+    modes
 }
 
 fn rounded_refresh(refresh_rate: f64) -> u32 {

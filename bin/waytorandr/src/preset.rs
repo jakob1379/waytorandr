@@ -12,7 +12,7 @@ pub(crate) fn resolve_virtual_preset(
         } else {
             "common".to_string()
         }),
-        "mirror" => bail!(mirror_unavailable_message()),
+        "mirror" => Some("mirror".to_string()),
         "horizontal" | "vertical" => Some(if reverse {
             format!("{}-reverse", name)
         } else {
@@ -36,8 +36,10 @@ pub(crate) fn resolve_virtual_preset(
     Ok(preset)
 }
 
-pub(crate) fn mirror_unavailable_message() -> &'static str {
-    "true display mirroring is not available through generic wlroots output-management today; use 'wl-mirror' for now. See https://github.com/swaywm/wlr-protocols/issues/101"
+pub(crate) fn mirror_unavailable_message(backend_name: &str) -> String {
+    format!(
+        "native display mirroring is not available through the `{backend_name}` backend; use 'wl-mirror' for now on this compositor. See https://github.com/swaywm/wlr-protocols/issues/101"
+    )
 }
 
 pub(crate) fn virtual_completion_candidates(
@@ -67,6 +69,10 @@ mod tests {
             Some("common-largest".to_string())
         );
         assert_eq!(
+            resolve_virtual_preset("mirror", false, false).unwrap(),
+            Some("mirror".to_string())
+        );
+        assert_eq!(
             resolve_virtual_preset("horizontal", true, false).unwrap(),
             Some("horizontal-reverse".to_string())
         );
@@ -74,9 +80,10 @@ mod tests {
     }
 
     #[test]
-    fn mirror_preset_returns_guidance_error() {
-        let err = resolve_virtual_preset("mirror", false, false).unwrap_err();
+    fn mirror_unavailable_guidance_mentions_backend_and_wl_mirror() {
+        let message = mirror_unavailable_message("wlroots");
 
-        assert!(err.to_string().contains("wl-mirror"));
+        assert!(message.contains("wlroots"));
+        assert!(message.contains("wl-mirror"));
     }
 }

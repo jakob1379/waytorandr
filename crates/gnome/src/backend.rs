@@ -85,11 +85,13 @@ impl GnomeBackend {
                 is_virtual_output(&monitor.connector, output.identity.description.as_deref());
             output.enabled = logical.is_some();
             output.mode = current_mode_for_monitor(monitor);
+            output.available_modes = available_modes_for_monitor(monitor);
             output.position = logical.map(|value| value.position).unwrap_or_default();
             output.scale = logical.map(|value| value.scale).unwrap_or(1.0);
             output.transform = logical
                 .map(|value| transform_from_gnome(value.transform))
                 .unwrap_or_default();
+            output.mirror_target = logical.and_then(|value| value.mirror_target.clone());
             output.backend_data = None;
             outputs.insert(monitor.connector.clone(), output);
         }
@@ -117,28 +119,38 @@ impl GnomeBackend {
         });
 
         let mut logical_monitors = Vec::new();
-        for (name, desired) in enabled_outputs {
-            if desired.mirror_target.is_some() {
-                bail!("GNOME mirroring is not implemented in this backend");
-            }
-
-            let monitor = state
-                .monitor(name)
-                .ok_or_else(|| anyhow!("output `{name}` is not connected on this GNOME session"))?;
-            let mode = resolve_mode(monitor, desired.mode)
-                .with_context(|| format!("failed to resolve mode for output `{name}`"))?;
-
-            logical_monitors.push((
-                desired.position.x,
-                desired.position.y,
-                select_scale(mode, desired.scale),
-                transform_to_gnome(desired.transform),
-                primary_connector.as_deref() == Some(name.as_str()),
-                vec![(
+        for group in build_logical_groups(&enabled_outputs)? {
+            let (group_root_name, group_root_desired) = group
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow!("empty mirrored output group"))?;
+            let group_root_monitor = state.monitor(group_root_name).ok_or_else(|| {
+                anyhow!("output `{group_root_name}` is not connected on this GNOME session")
+            })?;
+            let logical_is_primary = primary_connector
+                .as_deref()
+                .is_some_and(|connector| group.iter().any(|(name, _)| name.as_str() == connector));
+            let mut apply_monitors = Vec::new();
+            for (name, desired) in group {
+                let monitor = state.monitor(name).ok_or_else(|| {
+                    anyhow!("output `{name}` is not connected on this GNOME session")
+                })?;
+                let mode = resolve_mode(monitor, desired.mode)
+                    .with_context(|| format!("failed to resolve mode for output `{name}`"))?;
+                apply_monitors.push((
                     name.clone(),
                     mode.id.clone(),
                     monitor_apply_properties(monitor),
-                )],
+                ));
+            }
+
+            logical_monitors.push((
+                group_root_desired.position.x,
+                group_root_desired.position.y,
+                select_scale(group_root_monitor, group_root_desired.scale),
+                transform_to_gnome(group_root_desired.transform),
+                logical_is_primary,
+                apply_monitors,
             ));
         }
 
@@ -178,6 +190,7 @@ impl Backend for GnomeBackend {
         capabilities.can_apply = true;
         capabilities.supports_transforms = true;
         capabilities.supports_scale = true;
+        capabilities.supports_mirror = true;
         capabilities
     }
 
@@ -296,6 +309,7 @@ impl CurrentState {
     fn logical_by_connector(&self) -> HashMap<&str, LogicalMonitorSnapshot> {
         let mut by_connector = HashMap::new();
         for logical in &self.logical_monitors {
+            let mirror_root = logical.connectors.first().cloned();
             for connector in &logical.connectors {
                 by_connector.insert(
                     connector.as_str(),
@@ -304,6 +318,13 @@ impl CurrentState {
                         scale: logical.scale,
                         transform: logical.transform,
                         primary: logical.primary,
+                        mirror_target: if logical.connectors.len() > 1
+                            && mirror_root.as_deref() != Some(connector.as_str())
+                        {
+                            mirror_root.clone()
+                        } else {
+                            None
+                        },
                     },
                 );
             }
@@ -387,12 +408,13 @@ impl LogicalMonitorConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct LogicalMonitorSnapshot {
     position: Position,
     scale: f64,
     transform: u32,
     primary: bool,
+    mirror_target: Option<String>,
 }
 
 fn current_monitor_mode(monitor: &MonitorConfig) -> Option<&MonitorMode> {
@@ -415,6 +437,21 @@ fn current_mode_for_monitor(monitor: &MonitorConfig) -> Option<Mode> {
         height: mode.height,
         refresh: round_refresh(mode.refresh),
     })
+}
+
+fn available_modes_for_monitor(monitor: &MonitorConfig) -> Vec<Mode> {
+    let mut modes: Vec<Mode> = monitor
+        .modes
+        .iter()
+        .map(|mode| Mode {
+            width: mode.width,
+            height: mode.height,
+            refresh: round_refresh(mode.refresh),
+        })
+        .collect();
+    modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
+    modes.dedup();
+    modes
 }
 
 fn resolve_mode<'a>(monitor: &'a MonitorConfig, desired: Option<Mode>) -> Result<&'a MonitorMode> {
@@ -514,7 +551,10 @@ fn display_name(properties: &PropertyMap) -> Option<String> {
     property_as_str(properties, "display-name").and_then(|value| non_empty(&value))
 }
 
-fn select_scale(mode: &MonitorMode, desired: f64) -> f64 {
+fn select_scale(monitor: &MonitorConfig, desired: f64) -> f64 {
+    let Some(mode) = current_monitor_mode(monitor).or_else(|| monitor.modes.first()) else {
+        return desired;
+    };
     if mode.supported_scales.is_empty() {
         return desired;
     }
@@ -523,6 +563,79 @@ fn select_scale(mode: &MonitorMode, desired: f64) -> f64 {
         .copied()
         .find(|scale| float_eq(*scale, desired))
         .unwrap_or(desired)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct LogicalGroupKey {
+    position: Position,
+    mode: Option<Mode>,
+    scale_bits: u64,
+    transform: Transform,
+}
+
+impl LogicalGroupKey {
+    fn from_output(output: &OutputState) -> Option<Self> {
+        Some(Self {
+            position: output.position,
+            mode: output.mode,
+            scale_bits: output.scale.to_bits(),
+            transform: output.transform,
+        })
+    }
+}
+
+fn build_logical_groups<'a>(
+    enabled_outputs: &[(&'a String, &'a OutputState)],
+) -> Result<Vec<Vec<(&'a String, &'a OutputState)>>> {
+    let by_name: HashMap<&str, &OutputState> = enabled_outputs
+        .iter()
+        .map(|(name, state)| (name.as_str(), *state))
+        .collect();
+    let mut grouped: HashMap<&str, Vec<(&'a String, &'a OutputState)>> = HashMap::new();
+    let mut root_order = Vec::new();
+    let mut implicit_roots: HashMap<LogicalGroupKey, &str> = HashMap::new();
+
+    for (name, desired) in enabled_outputs {
+        let root_name = if let Some(root_name) = desired.mirror_target.as_deref() {
+            root_name
+        } else if let Some(group_key) = LogicalGroupKey::from_output(desired) {
+            implicit_roots.get(&group_key).copied().unwrap_or_else(|| {
+                implicit_roots.insert(group_key, name.as_str());
+                name.as_str()
+            })
+        } else {
+            name.as_str()
+        };
+        let Some(root_state) = by_name.get(root_name) else {
+            bail!("mirrored output `{name}` targets disconnected output `{root_name}`");
+        };
+        if desired.mirror_target.is_some() && root_state.mirror_target.is_some() {
+            bail!("mirrored output `{name}` targets `{root_name}`, which is itself mirrored");
+        }
+        if !root_order.iter().any(|existing| existing == &root_name) {
+            root_order.push(root_name);
+        }
+        grouped
+            .entry(root_name)
+            .or_default()
+            .push((*name, *desired));
+    }
+
+    let mut groups = Vec::new();
+    for root_name in root_order {
+        let mut group = grouped
+            .remove(root_name)
+            .ok_or_else(|| anyhow!("missing mirrored output group for `{root_name}`"))?;
+        group.sort_by(|(left_name, left), (right_name, right)| {
+            left.mirror_target
+                .is_some()
+                .cmp(&right.mirror_target.is_some())
+                .then(left_name.cmp(right_name))
+        });
+        groups.push(group);
+    }
+
+    Ok(groups)
 }
 
 fn refresh_distance(refresh: f64, desired_refresh: u32) -> f64 {
@@ -691,6 +804,15 @@ mod tests {
                             false,
                             vec![1.0, 2.0],
                         ),
+                        mode(
+                            "1920x1080@60",
+                            1920,
+                            1080,
+                            60.0,
+                            false,
+                            false,
+                            vec![1.0, 2.0],
+                        ),
                     ],
                     external_props,
                 ),
@@ -744,6 +866,7 @@ mod tests {
             topology.outputs["DP-1"].mode,
             Some(Mode::new(2560, 1440, 144))
         );
+        assert_eq!(topology.outputs["DP-1"].mirror_target, None);
     }
 
     #[test]
@@ -776,20 +899,58 @@ mod tests {
     }
 
     #[test]
-    fn build_apply_config_rejects_mirroring_requests() {
+    fn build_apply_config_groups_mirrored_outputs_into_one_logical_monitor() {
         let backend = GnomeBackend;
-        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
-            let mut output = OutputState::new("DP-1");
-            output.enabled = true;
-            output.mirror_target = Some("eDP-1".to_string());
-            output
-        })]));
+        let plan = LayoutPlan::new(HashMap::from([
+            ("eDP-1".to_string(), {
+                let mut output = OutputState::new("eDP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(1920, 1080, 60));
+                output
+            }),
+            ("DP-1".to_string(), {
+                let mut output = OutputState::new("DP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(1920, 1080, 60));
+                output.mirror_target = Some("eDP-1".to_string());
+                output
+            }),
+        ]));
 
-        let error = backend
-            .build_apply_config(&sample_state(), &plan)
-            .unwrap_err();
+        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
 
-        assert!(error.to_string().contains("mirroring"));
+        assert_eq!(logical_monitors.len(), 1);
+        assert_eq!(logical_monitors[0].5.len(), 2);
+        assert_eq!(logical_monitors[0].5[0].0, "eDP-1");
+        assert_eq!(logical_monitors[0].5[1].0, "DP-1");
+    }
+
+    #[test]
+    fn build_apply_config_groups_same_origin_outputs_into_one_logical_monitor() {
+        let backend = GnomeBackend;
+        let plan = LayoutPlan::new(HashMap::from([
+            ("eDP-1".to_string(), {
+                let mut output = OutputState::new("eDP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(1920, 1080, 60));
+                output.position = Position::new(0, 0);
+                output
+            }),
+            ("DP-1".to_string(), {
+                let mut output = OutputState::new("DP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(1920, 1080, 60));
+                output.position = Position::new(0, 0);
+                output
+            }),
+        ]));
+
+        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
+
+        assert_eq!(logical_monitors.len(), 1);
+        assert_eq!(logical_monitors[0].5.len(), 2);
+        assert_eq!(logical_monitors[0].5[0].0, "DP-1");
+        assert_eq!(logical_monitors[0].5[1].0, "eDP-1");
     }
 
     #[test]
@@ -798,5 +959,26 @@ mod tests {
         properties.insert("layout-mode".to_string(), OwnedValue::from(2u32));
 
         assert!(layout_properties(&properties).is_empty());
+    }
+
+    #[test]
+    fn export_topology_marks_secondary_monitors_as_mirrored() {
+        let backend = GnomeBackend;
+        let mut mirrored_state = sample_state();
+        mirrored_state.logical_monitors = vec![LogicalMonitorConfig {
+            position: Position::new(0, 0),
+            scale: 1.0,
+            transform: 0,
+            primary: true,
+            connectors: vec!["eDP-1".to_string(), "DP-1".to_string()],
+        }];
+
+        let topology = backend.export_topology(&mirrored_state);
+
+        assert_eq!(topology.outputs["eDP-1"].mirror_target, None);
+        assert_eq!(
+            topology.outputs["DP-1"].mirror_target.as_deref(),
+            Some("eDP-1")
+        );
     }
 }

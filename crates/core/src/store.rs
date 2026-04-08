@@ -353,6 +353,8 @@ pub struct State {
     legacy_default_profile: Option<String>,
     #[serde(default)]
     pub known_outputs: std::collections::HashMap<String, OutputIdentity>,
+    #[serde(default)]
+    pub remembered_setups: std::collections::HashMap<String, Topology>,
     pub backend: Option<String>,
     pub daemon_enabled: bool,
 }

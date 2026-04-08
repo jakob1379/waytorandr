@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
 use crate::output::{print_plan_summary, print_topology, print_validation_result};
-use crate::preset::resolve_virtual_preset;
+use crate::preset::{mirror_unavailable_message, resolve_virtual_preset};
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{OutputState, Topology};
@@ -582,9 +582,13 @@ fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 
 fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
+    let capabilities = backend.capabilities();
+    if preset == "mirror" && !capabilities.supports_mirror {
+        bail!(mirror_unavailable_message(&capabilities.backend_name));
+    }
     let hooks = Hooks::default();
     let state_store = StateStore::new()?;
-    let backend_name = backend.capabilities().backend_name;
+    let backend_name = capabilities.backend_name;
     let cycle = runtime::execute_plan_cycle_with_backend(backend.as_ref(), &hooks, dry_run, || {
         runtime::plan_preset_with_backend(backend.as_ref(), &state_store, preset)
     })

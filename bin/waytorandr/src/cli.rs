@@ -28,9 +28,9 @@ pub(crate) struct Cli {
 pub(crate) enum Commands {
     #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
     #[command(after_long_help = "Virtual configurations:
-  off        Disable all outputs
+  off        Disable external outputs and keep built-in panels on when present
   common     Place all connected outputs at a common resolution on the same origin
-  mirror     Reserved name; prints guidance to use wl-mirror for real mirroring
+  mirror     Mirror all connected outputs on backends with native mirroring support
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
 
@@ -43,9 +43,10 @@ Examples:
   waytorandr set docked --default
   waytorandr set common --dry-run
   waytorandr set common --largest --dry-run
+  waytorandr set mirror --dry-run
   waytorandr set vertical --reverse --dry-run
 
-For true mirroring, use `wl-mirror` until output-management protocols grow real mirroring support.")]
+On backends without native mirroring support, `mirror` prints guidance to use `wl-mirror`.")]
     Set(SetArgs),
 
     #[command(about = "Save the current compositor layout as a profile")]

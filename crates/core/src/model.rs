@@ -12,6 +12,7 @@ impl Default for OutputState {
             identity: OutputIdentity::default(),
             enabled: false,
             mode: None,
+            available_modes: Vec::new(),
             position: Position::default(),
             scale: 1.0,
             transform: Transform::default(),
@@ -75,6 +76,8 @@ pub struct OutputState {
     pub identity: OutputIdentity,
     pub enabled: bool,
     pub mode: Option<Mode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_modes: Vec<Mode>,
     pub position: Position,
     pub scale: f64,
     pub transform: Transform,
