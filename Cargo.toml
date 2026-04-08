@@ -9,6 +9,10 @@ members = [
   "bin/waytorandr",
   "bin/waytorandrd",
 ]
+default-members = [
+  "bin/waytorandr",
+  "bin/waytorandrd",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -29,3 +33,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 directories = "5.0"
 zbus = "4.4"
+
+[profile.dev]
+debug = 1
