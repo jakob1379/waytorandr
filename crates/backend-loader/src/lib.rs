@@ -1,8 +1,17 @@
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-use waytorandr_core::engine::Backend;
+use waytorandr_core::engine::{ApplyResult, Backend, OutputWatcher, TestResult};
+use waytorandr_core::error::{CoreError, CoreResult};
+use waytorandr_core::model::{Capabilities, Topology};
 
 pub fn connect_backend() -> Result<Box<dyn Backend>> {
+    #[cfg(debug_assertions)]
+    if let Some(backend) = connect_test_backend()? {
+        return Ok(Box::new(backend));
+    }
+
     let env = SessionEnvironment::from_process();
     let wayland_display =
         std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
@@ -33,6 +42,127 @@ pub fn connect_backend() -> Result<Box<dyn Backend>> {
         "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {}",
         errors.join("; ")
     ))
+}
+
+const TEST_BACKEND_STATE_ENV: &str = "WAYTORANDR_TEST_BACKEND_STATE";
+const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
+const TEST_BACKEND_SUPPORTS_MIRROR_ENV: &str = "WAYTORANDR_TEST_BACKEND_SUPPORTS_MIRROR";
+
+#[cfg(debug_assertions)]
+fn connect_test_backend() -> Result<Option<TestBackend>> {
+    let Some(path) = std::env::var_os(TEST_BACKEND_STATE_ENV) else {
+        return Ok(None);
+    };
+
+    let path = PathBuf::from(path);
+    let backend_name = std::env::var(TEST_BACKEND_NAME_ENV).unwrap_or_else(|_| "test".to_string());
+    let supports_mirror = std::env::var(TEST_BACKEND_SUPPORTS_MIRROR_ENV)
+        .ok()
+        .and_then(|value| parse_env_bool(&value))
+        .unwrap_or(matches!(backend_name.as_str(), "gnome" | "kscreen"));
+
+    Ok(Some(TestBackend {
+        path,
+        capabilities: test_backend_capabilities(backend_name, supports_mirror),
+    }))
+}
+
+#[cfg(debug_assertions)]
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn test_backend_capabilities(backend_name: String, supports_mirror: bool) -> Capabilities {
+    let mut capabilities = Capabilities::named(backend_name);
+    capabilities.can_enumerate = true;
+    capabilities.can_test = true;
+    capabilities.can_apply = true;
+    capabilities.supports_transforms = true;
+    capabilities.supports_scale = true;
+    capabilities.supports_mirror = supports_mirror;
+    capabilities
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug)]
+struct TestBackend {
+    path: PathBuf,
+    capabilities: Capabilities,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Serialize, Deserialize)]
+struct TestBackendState {
+    topology: Topology,
+}
+
+#[cfg(debug_assertions)]
+impl TestBackend {
+    fn load_state(&self) -> CoreResult<TestBackendState> {
+        let content =
+            std::fs::read_to_string(&self.path).map_err(|source| CoreError::ReadFile {
+                path: self.path.clone(),
+                source,
+            })?;
+        serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
+            path: self.path.clone(),
+            source,
+        })
+    }
+
+    fn save_state(&self, state: &TestBackendState) -> CoreResult<()> {
+        let content = serde_json::to_string_pretty(state).map_err(CoreError::SerializeJson)?;
+        std::fs::write(&self.path, format!("{content}\n")).map_err(|source| CoreError::WriteFile {
+            path: self.path.clone(),
+            source,
+        })
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Backend for TestBackend {
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities.clone()
+    }
+
+    fn enumerate_outputs(&self) -> CoreResult<Topology> {
+        Ok(self.load_state()?.topology)
+    }
+
+    fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
+        Err(CoreError::Backend {
+            source: anyhow!("test backend does not support watch mode"),
+        })
+    }
+
+    fn current_state(&self) -> CoreResult<Topology> {
+        self.enumerate_outputs()
+    }
+
+    fn test(&self, _plan: &waytorandr_core::planner::LayoutPlan) -> CoreResult<TestResult> {
+        let mut result = TestResult::default();
+        result.success = true;
+        Ok(result)
+    }
+
+    fn apply(&self, plan: &waytorandr_core::planner::LayoutPlan) -> CoreResult<ApplyResult> {
+        let topology = Topology {
+            outputs: plan.outputs.clone(),
+        };
+        self.save_state(&TestBackendState {
+            topology: topology.clone(),
+        })?;
+
+        let mut result = ApplyResult::default();
+        result.success = true;
+        result.applied_state = Some(topology);
+        Ok(result)
+    }
 }
 
 fn connect_gnome() -> Result<Box<dyn Backend>> {

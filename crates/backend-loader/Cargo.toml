@@ -12,3 +12,5 @@ waytorandr-gnome = { path = "../gnome" }
 waytorandr-kscreen = { path = "../kscreen" }
 waytorandr-wlroots = { path = "../wlroots" }
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

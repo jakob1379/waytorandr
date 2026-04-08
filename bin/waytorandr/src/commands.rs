@@ -588,10 +588,7 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> 
     if matches!(preset, "mirror" | "largest") && !capabilities.supports_mirror {
         bail!(mirror_unavailable_message(&capabilities.backend_name));
     }
-    if preset == "common"
-        && capabilities.backend_name == "wlroots"
-        && is_niri_session()
-    {
+    if preset == "common" && capabilities.backend_name == "wlroots" && is_niri_session() {
         bail!(common_unavailable_message(&capabilities.backend_name));
     }
     let hooks = Hooks::default();
