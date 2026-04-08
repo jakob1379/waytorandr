@@ -1,12 +1,13 @@
 use std::collections::HashMap;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::OwnedValue;
 
-use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
+use waytorandr_core::engine::{
+    ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
+};
 use waytorandr_core::error::{CoreError, CoreResult};
 use waytorandr_core::model::{Capabilities, Mode, OutputState, Position, Topology, Transform};
 use waytorandr_core::planner::LayoutPlan;
@@ -211,14 +212,11 @@ impl Backend for GnomeBackend {
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
         let initial = self.enumerate_outputs()?.fingerprint();
-        Ok(Box::new(GnomeWatcher {
-            backend: self.clone(),
-            last_fingerprint: Some(initial),
-        }))
-    }
-
-    fn current_state(&self) -> CoreResult<Topology> {
-        self.enumerate_outputs()
+        Ok(Box::new(PollingOutputWatcher::new(
+            self.clone(),
+            POLL_INTERVAL,
+            Some(initial),
+        )))
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
@@ -262,24 +260,6 @@ impl Backend for GnomeBackend {
                 Ok(result)
             }
         }
-    }
-}
-
-struct GnomeWatcher {
-    backend: GnomeBackend,
-    last_fingerprint: Option<String>,
-}
-
-impl OutputWatcher for GnomeWatcher {
-    fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
-        thread::sleep(POLL_INTERVAL);
-        let topology = self.backend.enumerate_outputs()?;
-        let fingerprint = topology.fingerprint();
-        if self.last_fingerprint.as_ref() == Some(&fingerprint) {
-            return Ok(None);
-        }
-        self.last_fingerprint = Some(fingerprint);
-        Ok(Some(topology))
     }
 }
 

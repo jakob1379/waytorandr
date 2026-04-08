@@ -23,12 +23,16 @@ use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
     self, ZwlrOutputModeV1,
 };
 
-use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
+use waytorandr_core::engine::{
+    ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
+};
 use waytorandr_core::error::{CoreError, CoreResult};
 use waytorandr_core::model::{
     normalized_identity_value, Capabilities, Mode, OutputState, Position, Topology, Transform,
 };
 use waytorandr_core::planner::LayoutPlan;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct WlrootsBackend {
     inner: Mutex<WaylandClient>,
@@ -136,14 +140,11 @@ impl Backend for WlrootsBackend {
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
         let initial = self.enumerate_outputs()?.fingerprint();
-        Ok(Box::new(WlrootsWatcher {
-            backend: WlrootsBackend::connect().map_err(|source| CoreError::Backend { source })?,
-            last_fingerprint: Some(initial),
-        }))
-    }
-
-    fn current_state(&self) -> CoreResult<Topology> {
-        self.enumerate_outputs()
+        Ok(Box::new(PollingOutputWatcher::new(
+            WlrootsBackend::connect().map_err(|source| CoreError::Backend { source })?,
+            POLL_INTERVAL,
+            Some(initial),
+        )))
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
@@ -455,24 +456,6 @@ fn is_virtual_description(description: &str) -> bool {
 fn update_identity_field(field: &mut Option<String>, value: &str) {
     if let Some(value) = normalized_identity_value(Some(value)) {
         *field = Some(value);
-    }
-}
-
-struct WlrootsWatcher {
-    backend: WlrootsBackend,
-    last_fingerprint: Option<String>,
-}
-
-impl OutputWatcher for WlrootsWatcher {
-    fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
-        std::thread::sleep(Duration::from_millis(500));
-        let topology = self.backend.enumerate_outputs()?;
-        let fingerprint = topology.fingerprint();
-        if self.last_fingerprint.as_ref() == Some(&fingerprint) {
-            return Ok(None);
-        }
-        self.last_fingerprint = Some(fingerprint);
-        Ok(Some(topology))
     }
 }
 

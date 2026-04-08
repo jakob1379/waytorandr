@@ -1,3 +1,6 @@
+use std::thread;
+use std::time::Duration;
+
 use crate::error::CoreResult;
 use crate::model::{Capabilities, Topology};
 use crate::planner::LayoutPlan;
@@ -7,7 +10,9 @@ pub trait Backend {
     fn capabilities(&self) -> Capabilities;
     fn enumerate_outputs(&self) -> CoreResult<Topology>;
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>>;
-    fn current_state(&self) -> CoreResult<Topology>;
+    fn current_state(&self) -> CoreResult<Topology> {
+        self.enumerate_outputs()
+    }
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult>;
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult>;
 }
@@ -29,16 +34,41 @@ impl<B: Backend + ?Sized> Backend for &B {
         (*self).watch_outputs()
     }
 
-    fn current_state(&self) -> CoreResult<Topology> {
-        (*self).current_state()
-    }
-
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
         (*self).test(plan)
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
         (*self).apply(plan)
+    }
+}
+
+pub struct PollingOutputWatcher<B> {
+    backend: B,
+    interval: Duration,
+    last_fingerprint: Option<String>,
+}
+
+impl<B> PollingOutputWatcher<B> {
+    pub fn new(backend: B, interval: Duration, last_fingerprint: Option<String>) -> Self {
+        Self {
+            backend,
+            interval,
+            last_fingerprint,
+        }
+    }
+}
+
+impl<B: Backend> OutputWatcher for PollingOutputWatcher<B> {
+    fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
+        thread::sleep(self.interval);
+        let topology = self.backend.enumerate_outputs()?;
+        let fingerprint = topology.fingerprint();
+        if self.last_fingerprint.as_ref() == Some(&fingerprint) {
+            return Ok(None);
+        }
+        self.last_fingerprint = Some(fingerprint);
+        Ok(Some(topology))
     }
 }
 
