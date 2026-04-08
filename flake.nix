@@ -10,6 +10,8 @@
 
   outputs = { self, nixpkgs, utils, rust-overlay }:
     let
+      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      workspaceVersion = cargoToml.workspace.package.version;
       homeModule = import ./nix/home-manager/waytorandr.nix { inherit self; };
     in
     utils.lib.eachDefaultSystem (system:
@@ -43,7 +45,7 @@
         ] ++ packageBuildInputs;
         waytorandrPackage = pkgs.rustPlatform.buildRustPackage {
           pname = "waytorandr";
-          version = "0.1.0";
+          version = workspaceVersion;
           src = self;
 
           cargoLock.lockFile = self + /Cargo.lock;

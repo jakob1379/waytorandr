@@ -74,6 +74,10 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Verify release tag matches Cargo workspace version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: bash scripts/check-release-version.sh
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v14
 
