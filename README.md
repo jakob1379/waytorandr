@@ -44,7 +44,7 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 
 ## Important Limits
 
-`common` is a clone layout, not native backend mirroring.
+`common` uses the largest shared resolution across all outputs; it is not native backend mirroring.
 
 - `common` uses one shared mode for all outputs at `(0, 0)`
 - `mirror` uses native backend mirroring at one shared mode
