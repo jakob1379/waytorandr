@@ -227,6 +227,7 @@ impl WaylandClient {
                 state.identity.is_ignored = false;
                 state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
                 state.mode = mode;
+                state.available_modes = available_modes_for_head(&self.state, head);
                 state.position = head.position;
                 state.scale = head.scale;
                 state.transform = head.transform;
@@ -350,6 +351,18 @@ fn preferred_mode_for_head(state: &State, head: &HeadInfo) -> Option<Mode> {
                 .filter_map(|id| state.modes.get(id))
                 .find_map(mode_from_info)
         })
+}
+
+fn available_modes_for_head(state: &State, head: &HeadInfo) -> Vec<Mode> {
+    let mut modes: Vec<Mode> = head
+        .modes
+        .iter()
+        .filter_map(|id| state.modes.get(id))
+        .filter_map(mode_from_info)
+        .collect();
+    modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
+    modes.dedup();
+    modes
 }
 
 fn head_is_enabled(enabled: bool, current_mode: Option<&ObjectId>) -> bool {

@@ -22,6 +22,23 @@ pub fn default_profile_for_setup<'a>(state: &'a State, setup_fingerprint: &str) 
         .or_else(|| state.global_default_profile())
 }
 
+pub fn explicit_default_profile_for_setup<'a>(
+    state: &'a State,
+    setup_fingerprint: &str,
+) -> Option<&'a str> {
+    state
+        .default_profiles
+        .get(setup_fingerprint)
+        .map(String::as_str)
+}
+
+pub fn remembered_topology_for_setup<'a>(
+    state: &'a State,
+    setup_fingerprint: &str,
+) -> Option<&'a Topology> {
+    state.remembered_setups.get(setup_fingerprint)
+}
+
 pub fn select_profile_for_topology(
     topology: &Topology,
     profiles: &[Profile],
@@ -176,6 +193,18 @@ pub fn record_applied_profile(
 ) {
     state.last_profile = Some(profile_name.to_string());
     state.last_topology_fingerprint = Some(topology.fingerprint());
+    state
+        .remembered_setups
+        .insert(topology.setup_fingerprint(), topology.clone());
+    state.backend = backend.map(str::to_string);
+}
+
+pub fn record_observed_topology(state: &mut State, backend: Option<&str>, topology: &Topology) {
+    state.last_profile = None;
+    state.last_topology_fingerprint = Some(topology.fingerprint());
+    state
+        .remembered_setups
+        .insert(topology.setup_fingerprint(), topology.clone());
     state.backend = backend.map(str::to_string);
 }
 
@@ -275,6 +304,32 @@ mod tests {
         assert_eq!(state.last_profile.as_deref(), Some("desk"));
         assert_eq!(state.backend.as_deref(), Some("wlroots"));
         assert!(state.last_topology_fingerprint.is_some());
+        assert_eq!(
+            state
+                .remembered_setups
+                .get(&topology.setup_fingerprint())
+                .map(Topology::fingerprint),
+            Some(topology.fingerprint())
+        );
+    }
+
+    #[test]
+    fn record_observed_topology_clears_last_profile_and_remembers_setup() {
+        let mut state = State::default();
+        state.last_profile = Some("desk".to_string());
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+
+        record_observed_topology(&mut state, Some("wlroots"), &topology);
+
+        assert_eq!(state.last_profile, None);
+        assert_eq!(state.backend.as_deref(), Some("wlroots"));
+        assert_eq!(
+            remembered_topology_for_setup(&state, &topology.setup_fingerprint())
+                .map(Topology::fingerprint),
+            Some(topology.fingerprint())
+        );
     }
 
     #[test]

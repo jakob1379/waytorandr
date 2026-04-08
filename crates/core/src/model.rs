@@ -12,6 +12,7 @@ impl Default for OutputState {
             identity: OutputIdentity::default(),
             enabled: false,
             mode: None,
+            available_modes: Vec::new(),
             position: Position::default(),
             scale: 1.0,
             transform: Transform::default(),
@@ -75,6 +76,8 @@ pub struct OutputState {
     pub identity: OutputIdentity,
     pub enabled: bool,
     pub mode: Option<Mode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_modes: Vec<Mode>,
     pub position: Position,
     pub scale: f64,
     pub transform: Transform,
@@ -88,6 +91,15 @@ impl OutputState {
         let mut state = Self::default();
         state.identity.connector = Some(name.into());
         state
+    }
+
+    pub fn same_layout_as(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.mode == other.mode
+            && self.position == other.position
+            && self.scale == other.scale
+            && self.transform == other.transform
+            && self.mirror_target == other.mirror_target
     }
 
     pub fn fingerprint(&self) -> String {
@@ -407,5 +419,20 @@ mod tests {
         identity.description = Some("Unknown - Unknown - DP-4".to_string());
 
         assert_eq!(identity.primary_key(), "conn:DP-4");
+    }
+
+    #[test]
+    fn same_layout_as_ignores_mode_inventory_and_backend_metadata() {
+        let mut left = OutputState::new("DP-1");
+        left.enabled = true;
+        left.mode = Some(Mode::new(1920, 1080, 60));
+        left.available_modes = vec![Mode::new(1920, 1080, 60)];
+        left.backend_data = Some(serde_json::json!({"side": "left"}));
+
+        let mut right = left.clone();
+        right.available_modes = vec![Mode::new(1280, 720, 60), Mode::new(1920, 1080, 60)];
+        right.backend_data = Some(serde_json::json!({"side": "right"}));
+
+        assert!(left.same_layout_as(&right));
     }
 }

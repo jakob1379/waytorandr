@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/backend-loader",
   "crates/core",
+  "crates/gnome",
   "crates/kscreen",
   "crates/wlroots",
   "bin/waytorandr",
@@ -26,3 +28,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 directories = "5.0"
+zbus = "4.4"

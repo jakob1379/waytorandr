@@ -4,8 +4,11 @@ use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
 use crate::output::{print_plan_summary, print_topology, print_validation_result};
-use crate::preset::resolve_virtual_preset;
-use waytorandr_core::engine::{Backend, ConfigFailureKind, TestResult};
+use crate::preset::{
+    common_unavailable_message, mirror_unavailable_message, resolve_virtual_preset,
+};
+use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{OutputState, Topology};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::{Hooks, Profile};
@@ -581,9 +584,19 @@ fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 
 fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
+    let capabilities = backend.capabilities();
+    if preset == "mirror" && !capabilities.supports_mirror {
+        bail!(mirror_unavailable_message(&capabilities.backend_name));
+    }
+    if matches!(preset, "common" | "common-largest")
+        && capabilities.backend_name == "wlroots"
+        && is_niri_session()
+    {
+        bail!(common_unavailable_message(&capabilities.backend_name));
+    }
     let hooks = Hooks::default();
     let state_store = StateStore::new()?;
-    let backend_name = backend.capabilities().backend_name;
+    let backend_name = capabilities.backend_name;
     let cycle = runtime::execute_plan_cycle_with_backend(backend.as_ref(), &hooks, dry_run, || {
         runtime::plan_preset_with_backend(backend.as_ref(), &state_store, preset)
     })
@@ -778,72 +791,6 @@ fn validate_profile(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-fn connect_backend() -> Result<Box<dyn Backend>> {
-    let wayland_display =
-        std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "<unset>".to_string());
-    let xdg_runtime_dir =
-        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "<unset>".to_string());
-    let display_hint = if wayland_display.contains('/') {
-        "; WAYLAND_DISPLAY should be a socket name like 'wayland-0', not a path"
-    } else {
-        ""
-    };
-    let prefer_kscreen = is_kde_session();
-    let mut errors = Vec::new();
-
-    for (label, attempt) in backend_attempts(prefer_kscreen) {
-        match attempt() {
-            Ok(backend) => return Ok(backend),
-            Err(err) => errors.push(format!("{label}: {err}")),
-        }
-    }
-
-    Err(anyhow!(
-        "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {}",
-        errors.join("; ")
-    ))
-}
-
-fn backend_attempts(prefer_kscreen: bool) -> Vec<(&'static str, fn() -> Result<Box<dyn Backend>>)> {
-    let kscreen = (
-        "kscreen",
-        connect_kscreen as fn() -> Result<Box<dyn Backend>>,
-    );
-    let wlroots = (
-        "wlroots",
-        connect_wlroots as fn() -> Result<Box<dyn Backend>>,
-    );
-    if prefer_kscreen {
-        vec![kscreen, wlroots]
-    } else {
-        vec![wlroots, kscreen]
-    }
-}
-
-fn connect_kscreen() -> Result<Box<dyn Backend>> {
-    waytorandr_kscreen::backend::KScreenBackend::connect()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
-}
-
-fn connect_wlroots() -> Result<Box<dyn Backend>> {
-    waytorandr_wlroots::backend::WlrootsBackend::connect()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
-}
-
-fn is_kde_session() -> bool {
-    [
-        std::env::var("XDG_CURRENT_DESKTOP").ok(),
-        std::env::var("XDG_SESSION_DESKTOP").ok(),
-        std::env::var("DESKTOP_SESSION").ok(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| {
-        let value = value.to_ascii_lowercase();
-        value.contains("kde") || value.contains("plasma")
-    })
-}
-
 fn current_setup_fingerprint() -> Result<Option<String>> {
     let state_store = StateStore::new()?;
     load_current_topology(&state_store).map(|topology| Some(topology.setup_fingerprint()))
@@ -876,6 +823,21 @@ fn save_runtime_state(
     runtime::record_applied_profile(&mut state, profile_name, backend, topology);
     state_store.save_state(&state)?;
     Ok(())
+}
+
+fn is_niri_session() -> bool {
+    session_looks_like_niri([
+        std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        std::env::var("XDG_SESSION_DESKTOP").ok(),
+        std::env::var("DESKTOP_SESSION").ok(),
+    ])
+}
+
+fn session_looks_like_niri(values: impl IntoIterator<Item = Option<String>>) -> bool {
+    values
+        .into_iter()
+        .flatten()
+        .any(|value| value.to_ascii_lowercase().contains("niri"))
 }
 
 #[cfg(test)]
@@ -956,5 +918,19 @@ mod tests {
         assert!(!validation.success);
         assert_eq!(validation.failure, Some("topology_changed"));
         assert_eq!(validation.message.as_deref(), Some("changed"));
+    }
+
+    #[test]
+    fn session_detection_matches_niri_anywhere_in_session_env() {
+        assert!(session_looks_like_niri([
+            Some("sway:niri".to_string()),
+            None,
+            Some("niri".to_string()),
+        ]));
+        assert!(!session_looks_like_niri([
+            Some("GNOME".to_string()),
+            Some("plasma".to_string()),
+            None,
+        ]));
     }
 }
