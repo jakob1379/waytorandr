@@ -112,7 +112,7 @@ impl Planner {
         let has_internal_output = topology
             .outputs
             .values()
-            .any(|state| is_internal_output(state));
+            .any(is_internal_output);
 
         let outputs = topology
             .outputs
@@ -120,11 +120,7 @@ impl Planner {
             .map(|(name, state)| {
                 let mut state = state.clone();
                 state.enabled = has_internal_output && is_internal_output(&state);
-                if state.enabled {
-                    state.position = Position { x: 0, y: 0 };
-                } else {
-                    state.position = Position { x: 0, y: 0 };
-                }
+                state.position = Position { x: 0, y: 0 };
                 state.mirror_target = None;
                 (name.clone(), state)
             })

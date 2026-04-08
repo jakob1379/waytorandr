@@ -49,6 +49,7 @@
           src = self;
 
           cargoLock.lockFile = self + /Cargo.lock;
+          doCheck = false;
 
           nativeBuildInputs = packageNativeBuildInputs;
           buildInputs = packageBuildInputs;

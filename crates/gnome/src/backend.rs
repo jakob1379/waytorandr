@@ -442,7 +442,7 @@ fn available_modes_for_monitor(monitor: &MonitorConfig) -> Vec<Mode> {
     modes
 }
 
-fn resolve_mode<'a>(monitor: &'a MonitorConfig, desired: Option<Mode>) -> Result<&'a MonitorMode> {
+fn resolve_mode(monitor: &MonitorConfig, desired: Option<Mode>) -> Result<&MonitorMode> {
     if let Some(desired) = desired {
         let mut candidates: Vec<&MonitorMode> = monitor
             .modes
