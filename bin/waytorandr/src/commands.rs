@@ -5,7 +5,8 @@ use serde::Serialize;
 use crate::cli::{Cli, Commands};
 use crate::output::{print_plan_summary, print_topology, print_validation_result};
 use crate::preset::{
-    common_unavailable_message, mirror_unavailable_message, resolve_virtual_preset,
+    common_unavailable_message, largest_unavailable_message, mirror_unavailable_message,
+    resolve_virtual_preset,
 };
 use crate::service;
 use waytorandr_backend_loader::connect_backend;
@@ -589,6 +590,9 @@ fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> 
     let capabilities = backend.capabilities();
     if matches!(preset, "mirror" | "largest") && !capabilities.supports_mirror {
         bail!(mirror_unavailable_message(&capabilities.backend_name));
+    }
+    if preset == "largest" && !capabilities.supports_largest_mirror {
+        bail!(largest_unavailable_message(&capabilities.backend_name));
     }
     if preset == "common" && capabilities.backend_name == "wlroots" && is_niri_session() {
         bail!(common_unavailable_message(&capabilities.backend_name));

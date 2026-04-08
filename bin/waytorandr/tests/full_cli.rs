@@ -19,8 +19,11 @@ fn full_cli_command_matrix_across_platforms() -> Result<(), Box<dyn Error>> {
     for platform in platforms {
         let env = TestEnvironment::new(platform)?;
         let supports_native_mirror = platform != "wlroots";
-        let mirror_note = if supports_native_mirror {
+        let supports_largest = platform == "kscreen";
+        let mirror_note = if supports_native_mirror && supports_largest {
             "mirror, largest, common -l"
+        } else if supports_native_mirror {
+            "mirror, largest(expected failure), common -l(expected failure)"
         } else {
             "mirror(expected failure), largest(expected failure), common -l(expected failure)"
         };
@@ -170,39 +173,52 @@ fn full_cli_command_matrix_across_platforms() -> Result<(), Box<dyn Error>> {
                 topology.outputs["eDP-1"].mirror_target.as_deref(),
                 Some("DP-1")
             );
+            if supports_largest {
+                let largest = env.run_json(["set", "largest", "--json"])?;
+                assert_eq!(largest["target"], "largest");
+                let topology = env.backend_topology()?;
+                assert_eq!(
+                    topology.outputs["DP-1"].mode,
+                    Some(Mode::new(2560, 1440, 60))
+                );
+                assert_eq!(
+                    topology.outputs["eDP-1"].mode,
+                    Some(Mode::new(1920, 1080, 60))
+                );
+                assert_eq!(topology.outputs["DP-1"].mirror_target, None);
+                assert_eq!(
+                    topology.outputs["eDP-1"].mirror_target.as_deref(),
+                    Some("DP-1")
+                );
 
-            let largest = env.run_json(["set", "largest", "--json"])?;
-            assert_eq!(largest["target"], "largest");
-            let topology = env.backend_topology()?;
-            assert_eq!(
-                topology.outputs["DP-1"].mode,
-                Some(Mode::new(2560, 1440, 60))
-            );
-            assert_eq!(
-                topology.outputs["eDP-1"].mode,
-                Some(Mode::new(1920, 1080, 60))
-            );
-            assert_eq!(topology.outputs["DP-1"].mirror_target, None);
-            assert_eq!(
-                topology.outputs["eDP-1"].mirror_target.as_deref(),
-                Some("DP-1")
-            );
+                let legacy_largest = env.run_json(["set", "common", "-l", "--json"])?;
+                assert_eq!(legacy_largest["target"], "largest");
+                let topology = env.backend_topology()?;
+                assert_eq!(
+                    topology.outputs["DP-1"].mode,
+                    Some(Mode::new(2560, 1440, 60))
+                );
+                assert_eq!(
+                    topology.outputs["eDP-1"].mode,
+                    Some(Mode::new(1920, 1080, 60))
+                );
+                assert_eq!(
+                    topology.outputs["eDP-1"].mirror_target.as_deref(),
+                    Some("DP-1")
+                );
+            } else {
+                let largest = env.run_json_failure(["set", "largest", "--json"])?;
+                assert!(largest
+                    .stderr
+                    .contains("the `largest` layout is not available"));
+                assert!(largest.stderr.contains("mirror"));
+                assert!(largest.stderr.contains("common"));
 
-            let legacy_largest = env.run_json(["set", "common", "-l", "--json"])?;
-            assert_eq!(legacy_largest["target"], "largest");
-            let topology = env.backend_topology()?;
-            assert_eq!(
-                topology.outputs["DP-1"].mode,
-                Some(Mode::new(2560, 1440, 60))
-            );
-            assert_eq!(
-                topology.outputs["eDP-1"].mode,
-                Some(Mode::new(1920, 1080, 60))
-            );
-            assert_eq!(
-                topology.outputs["eDP-1"].mirror_target.as_deref(),
-                Some("DP-1")
-            );
+                let legacy_largest = env.run_json_failure(["set", "common", "-l", "--json"])?;
+                assert!(legacy_largest
+                    .stderr
+                    .contains("the `largest` layout is not available"));
+            }
         } else {
             let mirror = env.run_json_failure(["set", "mirror", "--json"])?;
             assert!(mirror

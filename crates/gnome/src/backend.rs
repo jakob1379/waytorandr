@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -136,6 +136,7 @@ impl GnomeBackend {
                 .as_deref()
                 .is_some_and(|connector| group.iter().any(|(name, _)| name.as_str() == connector));
             let mut apply_monitors = Vec::new();
+            let mut group_modes = HashSet::new();
             for (name, desired) in group {
                 let monitor = state.monitor(name).ok_or_else(|| {
                     anyhow!("output `{name}` is not connected on this GNOME session")
@@ -146,11 +147,17 @@ impl GnomeBackend {
                     resolve_mode(monitor, desired.mode)
                         .with_context(|| format!("failed to resolve mode for output `{name}`"))?
                 };
+                group_modes.insert(mode_signature(mode));
                 apply_monitors.push((
                     name.clone(),
                     mode.id.clone(),
                     monitor_apply_properties(monitor),
                 ));
+            }
+            if group_modes.len() > 1 {
+                bail!(
+                    "the `gnome` backend cannot mirror outputs with different modes in one logical monitor; use `waytorandr set mirror` or `waytorandr set common` instead"
+                );
             }
 
             logical_monitors.push((
@@ -657,6 +664,10 @@ fn round_refresh(refresh: f64) -> u32 {
     refresh.round().max(0.0) as u32
 }
 
+fn mode_signature(mode: &MonitorMode) -> (u32, u32, u32) {
+    (mode.width, mode.height, round_refresh(mode.refresh))
+}
+
 fn float_eq(left: f64, right: f64) -> bool {
     (left - right).abs() < FLOAT_EPSILON
 }
@@ -934,6 +945,34 @@ mod tests {
         assert_eq!(logical_monitors[0].5.len(), 2);
         assert_eq!(logical_monitors[0].5[0].0, "eDP-1");
         assert_eq!(logical_monitors[0].5[1].0, "DP-1");
+    }
+
+    #[test]
+    fn build_apply_config_rejects_mixed_mode_mirroring() {
+        let backend = GnomeBackend;
+        let plan = LayoutPlan::new(HashMap::from([
+            ("DP-1".to_string(), {
+                let mut output = OutputState::new("DP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(2560, 1440, 60));
+                output
+            }),
+            ("eDP-1".to_string(), {
+                let mut output = OutputState::new("eDP-1");
+                output.enabled = true;
+                output.mode = Some(Mode::new(1920, 1080, 60));
+                output.mirror_target = Some("DP-1".to_string());
+                output
+            }),
+        ]));
+
+        let err = backend
+            .build_apply_config(&sample_state(), &plan)
+            .expect_err("mixed-mode mirroring should be rejected");
+
+        assert!(err
+            .to_string()
+            .contains("cannot mirror outputs with different modes"));
     }
 
     #[test]

@@ -134,6 +134,7 @@ impl Backend for KScreenBackend {
         capabilities.supports_transforms = true;
         capabilities.supports_scale = true;
         capabilities.supports_mirror = true;
+        capabilities.supports_largest_mirror = true;
         capabilities
     }
 

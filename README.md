@@ -61,7 +61,8 @@ waytorandr service status
 - `common` uses one shared mode for all outputs at `(0, 0)`
 - `mirror` uses native backend mirroring at one shared mode
 - `largest` uses native backend mirroring while keeping each output at its largest mode
-- when native mirroring is unavailable, `mirror` and `largest` point you to `wl-mirror`
+- when a backend cannot satisfy `mirror` or `largest`, waytorandr prints backend-specific fallback guidance
+- GNOME/Mutter currently requires every output in one mirrored logical monitor to use the same mode, so `largest` is unavailable there; use `mirror` or `common`
 
 Reference:
 - `https://github.com/swaywm/wlr-protocols/issues/101`

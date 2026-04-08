@@ -85,6 +85,8 @@ fn test_backend_capabilities(backend_name: String, supports_mirror: bool) -> Cap
     capabilities.supports_transforms = true;
     capabilities.supports_scale = true;
     capabilities.supports_mirror = supports_mirror;
+    capabilities.supports_largest_mirror =
+        capabilities.supports_mirror && capabilities.backend_name != "gnome";
     capabilities
 }
 

@@ -43,6 +43,12 @@ pub(crate) fn mirror_unavailable_message(backend_name: &str) -> String {
     )
 }
 
+pub(crate) fn largest_unavailable_message(backend_name: &str) -> String {
+    format!(
+        "the `largest` layout is not available through the `{backend_name}` backend because it requires mirrored outputs to share one mode; use `waytorandr set mirror` or `waytorandr set common` instead"
+    )
+}
+
 pub(crate) fn common_unavailable_message(backend_name: &str) -> String {
     format!(
         "the `common` clone layout is not available through the `{backend_name}` backend on Niri because Niri automatically repositions overlapping outputs instead of keeping them at the same origin; use `wl-mirror` for true mirroring or `horizontal`/`vertical` for compositor-managed layouts"
@@ -108,5 +114,14 @@ mod tests {
         assert!(message.contains("wl-mirror"));
         assert!(message.contains("horizontal"));
         assert!(message.contains("vertical"));
+    }
+
+    #[test]
+    fn largest_unavailable_guidance_mentions_fallback_layouts() {
+        let message = largest_unavailable_message("gnome");
+
+        assert!(message.contains("gnome"));
+        assert!(message.contains("mirror"));
+        assert!(message.contains("common"));
     }
 }

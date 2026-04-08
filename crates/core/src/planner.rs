@@ -109,10 +109,7 @@ impl Planner {
             ));
         }
 
-        let has_internal_output = topology
-            .outputs
-            .values()
-            .any(is_internal_output);
+        let has_internal_output = topology.outputs.values().any(is_internal_output);
 
         let outputs = topology
             .outputs

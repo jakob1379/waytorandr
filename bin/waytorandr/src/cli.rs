@@ -47,7 +47,7 @@ Examples:
   waytorandr set mirror --dry-run
   waytorandr set vertical --reverse --dry-run
 
-On backends without native mirroring support, `mirror` and `largest` print guidance to use `wl-mirror`.")]
+When a backend cannot support `mirror` or `largest`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
     Set(SetArgs),
 
     #[command(about = "Save the current compositor layout as a profile")]
