@@ -30,6 +30,7 @@ pub(crate) enum Commands {
     #[command(after_long_help = "Virtual configurations:
   off        Disable external outputs and keep built-in panels on when present
   common     Clone all connected outputs at the largest common resolution
+  largest    Mirror all connected outputs using each output's largest mode when supported
   mirror     Mirror all connected outputs on backends with native mirroring support
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
@@ -42,11 +43,11 @@ Examples:
   waytorandr set docked
   waytorandr set docked --default
   waytorandr set common --dry-run
-  waytorandr set common --largest --dry-run
+  waytorandr set largest --dry-run
   waytorandr set mirror --dry-run
   waytorandr set vertical --reverse --dry-run
 
-On backends without native mirroring support, `mirror` prints guidance to use `wl-mirror`.")]
+On backends without native mirroring support, `mirror` and `largest` print guidance to use `wl-mirror`.")]
     Set(SetArgs),
 
     #[command(about = "Save the current compositor layout as a profile")]
@@ -109,7 +110,8 @@ pub(crate) struct SetArgs {
     #[arg(
         short = 'l',
         long = "largest",
-        help = "Only with `common`: accepted as a compatibility alias because `common` already uses the largest shared target mode"
+        hide = true,
+        help = "Deprecated compatibility alias for `waytorandr set largest`"
     )]
     pub(crate) largest: bool,
 

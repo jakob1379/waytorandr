@@ -96,7 +96,7 @@ impl Planner {
                 Self::plan_linear(topology, preset, primary_hint)
             }
             "common" => Self::plan_common(topology),
-            "common-largest" => Self::plan_common_largest(topology),
+            "largest" | "common-largest" => Self::plan_largest(topology, primary_hint),
             "mirror" => Self::plan_mirror(topology, primary_hint),
             _ => Err(PlanError::UnsupportedPreset(preset.to_string())),
         }
@@ -219,25 +219,37 @@ impl Planner {
         })
     }
 
-    fn plan_common_largest(topology: &Topology) -> Result<LayoutPlan, PlanError> {
-        let outputs = available_outputs(topology);
-        outputs.first().ok_or_else(|| {
-            PlanError::InvalidConfiguration("No outputs available for common layout".to_string())
-        })?;
-        let target_mode = common_mode(&outputs)?;
+    fn plan_largest(
+        topology: &Topology,
+        primary_hint: Option<&str>,
+    ) -> Result<LayoutPlan, PlanError> {
+        let mut outputs = available_outputs(topology);
+        if outputs.is_empty() {
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs available for largest layout".to_string(),
+            ));
+        }
+
+        let root_idx = largest_root_index(&outputs, primary_hint)?;
+        outputs.rotate_left(root_idx);
+        let root_name = outputs[0].0.clone();
 
         let mut planned = HashMap::new();
         for (name, mut state) in outputs {
             state.enabled = true;
-            state.mode = Some(target_mode);
+            state.mode = Some(best_mode(&state)?);
             state.position = Position { x: 0, y: 0 };
-            state.mirror_target = None;
+            state.mirror_target = if name == root_name {
+                None
+            } else {
+                Some(root_name.clone())
+            };
             planned.insert(name, state);
         }
 
         Ok(LayoutPlan {
             outputs: planned,
-            preset_used: Some("common-largest".to_string()),
+            preset_used: Some("largest".to_string()),
         })
     }
 
@@ -327,6 +339,43 @@ fn common_mode(outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
         .into_iter()
         .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
         .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))
+}
+
+fn best_mode(state: &OutputState) -> Result<Mode, PlanError> {
+    output_modes(state)
+        .into_iter()
+        .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
+        .ok_or_else(|| PlanError::InvalidConfiguration("No mode found for output".to_string()))
+}
+
+fn largest_root_index(
+    outputs: &[(String, OutputState)],
+    primary_hint: Option<&str>,
+) -> Result<usize, PlanError> {
+    if outputs.is_empty() {
+        return Err(PlanError::InvalidConfiguration(
+            "No outputs available for largest layout".to_string(),
+        ));
+    }
+
+    if let Some(primary) = primary_hint {
+        if let Some(idx) = outputs.iter().position(|(name, _)| name == primary) {
+            return Ok(idx);
+        }
+    }
+
+    outputs
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, (_, state))| {
+            best_mode(state)
+                .map(|mode| (mode.width * mode.height, mode.refresh))
+                .ok()
+        })
+        .map(|(idx, _)| idx)
+        .ok_or_else(|| {
+            PlanError::InvalidConfiguration("No outputs available for largest layout".to_string())
+        })
 }
 
 fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
@@ -473,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn common_largest_uses_largest_shared_mode_at_origin() {
+    fn largest_uses_each_outputs_best_mode_and_native_mirroring() {
         let mut a = output("A", 1920, 1080);
         a.available_modes = vec![Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)];
         let mut b = output("B", 2560, 1440);
@@ -482,11 +531,28 @@ mod tests {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
         };
 
-        let plan = Planner::plan_from_preset("common-largest", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset("largest", &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["A"].mode, Some(Mode::new(1920, 1080, 60)));
-        assert_eq!(plan.outputs["B"].mode, Some(Mode::new(1920, 1080, 60)));
+        assert_eq!(plan.outputs["B"].mode, Some(Mode::new(2560, 1440, 60)));
+        assert_eq!(plan.outputs["B"].mirror_target, None);
+        assert_eq!(plan.outputs["A"].mirror_target.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn legacy_common_largest_alias_maps_to_largest_plan() {
+        let mut a = output("A", 1920, 1080);
+        a.available_modes = vec![Mode::new(1920, 1080, 60)];
+        let mut b = output("B", 2560, 1440);
+        b.available_modes = vec![Mode::new(2560, 1440, 60)];
+        let topology = Topology {
+            outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
+        };
+
+        let plan = Planner::plan_from_preset("common-largest", &topology, None).unwrap();
+        assert_eq!(plan.preset_used.as_deref(), Some("largest"));
+        assert_eq!(plan.outputs["B"].mirror_target, None);
     }
 
     #[test]

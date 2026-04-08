@@ -8,10 +8,11 @@ pub(crate) fn resolve_virtual_preset(
     let preset = match name {
         "off" => Some(name.to_string()),
         "common" => Some(if largest {
-            "common-largest".to_string()
+            "largest".to_string()
         } else {
             "common".to_string()
         }),
+        "largest" => Some("largest".to_string()),
         "mirror" => Some("mirror".to_string()),
         "horizontal" | "vertical" => Some(if reverse {
             format!("{}-reverse", name)
@@ -26,11 +27,11 @@ pub(crate) fn resolve_virtual_preset(
     }
 
     if largest && preset.is_none() {
-        bail!("--largest can only be used with virtual 'common' set targets")
+        bail!("--largest is deprecated; use the virtual 'largest' set target instead")
     }
 
     if largest && !matches!(name, "common") {
-        bail!("--largest can only be used with virtual 'common' set targets")
+        bail!("--largest is deprecated; use `waytorandr set largest`")
     }
 
     Ok(preset)
@@ -54,6 +55,7 @@ pub(crate) fn virtual_completion_candidates(
     [
         ("off", "virtual"),
         ("common", "virtual"),
+        ("largest", "virtual"),
         ("mirror", "virtual"),
         ("horizontal", "virtual"),
         ("vertical", "virtual"),
@@ -72,7 +74,11 @@ mod tests {
     fn resolves_virtual_presets_with_flags() {
         assert_eq!(
             resolve_virtual_preset("common", false, true).unwrap(),
-            Some("common-largest".to_string())
+            Some("largest".to_string())
+        );
+        assert_eq!(
+            resolve_virtual_preset("largest", false, false).unwrap(),
+            Some("largest".to_string())
         );
         assert_eq!(
             resolve_virtual_preset("mirror", false, false).unwrap(),

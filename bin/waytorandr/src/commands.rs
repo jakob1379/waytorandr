@@ -465,7 +465,7 @@ fn cmd_set(
             bail!("--reverse requires a virtual 'horizontal' or 'vertical' set target")
         }
         if largest {
-            bail!("--largest requires the virtual 'common' set target")
+            bail!("--largest is deprecated; use `waytorandr set largest`")
         }
         if make_default {
             bail!("--default requires an explicit saved profile target")
@@ -585,10 +585,10 @@ fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 fn execute_virtual_action(preset: &str, dry_run: bool) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
     let capabilities = backend.capabilities();
-    if preset == "mirror" && !capabilities.supports_mirror {
+    if matches!(preset, "mirror" | "largest") && !capabilities.supports_mirror {
         bail!(mirror_unavailable_message(&capabilities.backend_name));
     }
-    if matches!(preset, "common" | "common-largest")
+    if preset == "common"
         && capabilities.backend_name == "wlroots"
         && is_niri_session()
     {
