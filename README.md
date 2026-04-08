@@ -44,19 +44,12 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 
 ## Important Limits
 
-`common` is not true display mirroring.
+`common` is a clone layout, not native backend mirroring.
 
-Native `mirror` support depends on the active backend.
-
-- GNOME/Mutter supports native mirrored logical monitors, so `waytorandr set mirror` works there.
-- KDE Plasma/KWin supports native mirroring through KScreen, so `waytorandr set mirror` works there.
-- Generic wlroots output-management still does not expose portable physical mirroring semantics.
-
-- `common` clones all connected outputs at the same origin using the largest shared mode
-- `largest` uses native mirroring where available and keeps each output at its largest mode
-- `mirror` uses native backend mirroring where available
-- on backends without native mirroring support, use `wl-mirror`
-- on Niri, overlapping outputs are auto-positioned instead of kept overlapped, so `common` is rejected with guidance instead of silently not cloning
+- `common` uses one shared mode for all outputs at `(0, 0)`
+- `mirror` uses native backend mirroring at one shared mode
+- `largest` uses native backend mirroring while keeping each output at its largest mode
+- when native mirroring is unavailable, `mirror` and `largest` point you to `wl-mirror`
 
 Reference:
 - `https://github.com/swaywm/wlr-protocols/issues/101`
