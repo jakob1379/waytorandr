@@ -201,10 +201,7 @@ impl Planner {
             PlanError::InvalidConfiguration("No outputs available for common layout".to_string())
         })?;
 
-        let mode = shared_modes(&outputs)
-            .into_iter()
-            .min_by_key(|mode| (mode.width * mode.height, mode.refresh))
-            .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))?;
+        let mode = common_mode(&outputs)?;
 
         let mut planned = HashMap::new();
         for (name, state) in outputs {
@@ -227,10 +224,7 @@ impl Planner {
         outputs.first().ok_or_else(|| {
             PlanError::InvalidConfiguration("No outputs available for common layout".to_string())
         })?;
-        let target_mode = shared_modes(&outputs)
-            .into_iter()
-            .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
-            .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))?;
+        let target_mode = common_mode(&outputs)?;
 
         let mut planned = HashMap::new();
         for (name, mut state) in outputs {
@@ -326,6 +320,13 @@ fn shared_modes(outputs: &[(String, OutputState)]) -> Vec<Mode> {
     let mut modes: Vec<Mode> = shared.unwrap_or_default().into_iter().collect();
     modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
     modes
+}
+
+fn common_mode(outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
+    shared_modes(outputs)
+        .into_iter()
+        .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
+        .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))
 }
 
 fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
@@ -456,7 +457,7 @@ mod tests {
         let mut a = output("A", 1920, 1080);
         a.available_modes = vec![Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)];
         let mut b = output("B", 2560, 1440);
-        b.available_modes = vec![Mode::new(2560, 1440, 60), Mode::new(1280, 720, 60)];
+        b.available_modes = vec![Mode::new(2560, 1440, 60), Mode::new(1920, 1080, 60)];
         b.enabled = false;
         let topology = Topology {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
@@ -467,8 +468,8 @@ mod tests {
         assert_eq!(plan.outputs["B"].position, Position::new(0, 0));
         assert!(plan.outputs["A"].enabled);
         assert!(plan.outputs["B"].enabled);
-        assert_eq!(plan.outputs["A"].mode, Some(Mode::new(1280, 720, 60)));
-        assert_eq!(plan.outputs["B"].mode, Some(Mode::new(1280, 720, 60)));
+        assert_eq!(plan.outputs["A"].mode, Some(Mode::new(1920, 1080, 60)));
+        assert_eq!(plan.outputs["B"].mode, Some(Mode::new(1920, 1080, 60)));
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub(crate) enum Commands {
     #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
     #[command(after_long_help = "Virtual configurations:
   off        Disable external outputs and keep built-in panels on when present
-  common     Place all connected outputs at a common resolution on the same origin
+  common     Clone all connected outputs at the largest common resolution
   mirror     Mirror all connected outputs on backends with native mirroring support
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
@@ -109,7 +109,7 @@ pub(crate) struct SetArgs {
     #[arg(
         short = 'l',
         long = "largest",
-        help = "Only with `common`: use the largest available shared target mode"
+        help = "Only with `common`: accepted as a compatibility alias because `common` already uses the largest shared target mode"
     )]
     pub(crate) largest: bool,
 

@@ -51,7 +51,7 @@ Native `mirror` support depends on the active backend.
 - GNOME/Mutter supports native mirrored logical monitors, so `waytorandr set mirror` works there.
 - Generic wlroots output-management still does not expose portable physical mirroring semantics.
 
-- `common` places all connected outputs at the same origin with a shared mode
+- `common` clones all connected outputs at the same origin using the largest shared mode
 - `mirror` uses native backend mirroring where available
 - on backends without native mirroring support, use `wl-mirror`
 
