@@ -22,12 +22,16 @@
           cargo
           rustfmt
           clippy
+          clang
+          hyperfine
+          lld
+          sccache
           pkg-config
         ];
         runtimeLibraries = with pkgs; [
           wayland
         ];
-        packageNativeBuildInputs = with pkgs; [ pkg-config ];
+        packageNativeBuildInputs = with pkgs; [ pkg-config clang lld ];
         packageBuildInputs = with pkgs; [
           wayland-protocols
           wlroots
@@ -66,6 +70,11 @@
 
           shellHook = ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibraries}:$LD_LIBRARY_PATH"
+            export SCCACHE_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/sccache"
+            export SCCACHE_BASEDIR="$PWD"
+            if [ -z "$GITHUB_ACTIONS" ]; then
+              export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+            fi
             '';
         };
 

@@ -1,5 +1,9 @@
 name: CI
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
   push:
@@ -21,11 +25,21 @@ jobs:
       - name: Enable Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@v8
 
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          prefix-key: ${{ runner.os }}-nix
+          shared-key: ci
+          cache-on-failure: true
+          cache-all-crates: true
+          cmd-format: nix develop -c cargo {0}
+
       - name: Run clippy
-        run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
+        run: nix develop -c cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Scan for dead code
-        run: env RUSTFLAGS='-Ddead_code' nix develop -c cargo check --workspace --all-targets
+        run: env RUSTFLAGS='-Ddead_code' nix develop -c cargo check --locked --workspace --all-targets
 
   test:
     runs-on: ubuntu-latest
@@ -40,8 +54,18 @@ jobs:
       - name: Enable Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@v8
 
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          prefix-key: ${{ runner.os }}-nix
+          shared-key: ci
+          cache-on-failure: true
+          cache-all-crates: true
+          cmd-format: nix develop -c cargo {0}
+
       - name: Run tests
-        run: nix develop -c cargo test
+        run: nix develop -c cargo test --locked --workspace
 
   build:
     runs-on: ubuntu-latest
