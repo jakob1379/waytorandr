@@ -26,13 +26,25 @@ in
       type = types.package;
       default = defaultPackage;
       defaultText = literalExpression "inputs.waytorandr.packages.${pkgs.system}.waytorandr";
-      description = "Package providing the waytorandr and waytorandrd binaries.";
+      description = ''
+        Package providing the `waytorandr` and `waytorandrd` binaries.
+
+        Enabling the module installs this package into `home.packages`. Profile
+        data still lives in the application's XDG config/state files rather than
+        in Home Manager options.
+      '';
     };
 
     environment = mkOption {
       type = with types; attrsOf str;
       default = { };
-      description = "Environment variables passed to the waytorandrd user service.";
+      description = ''
+        Environment variables passed to the `waytorandrd` user service.
+
+        This is for service runtime configuration only. Saved profiles and
+        defaults are still managed through the CLI and persisted under
+        `$XDG_CONFIG_HOME/waytorandr` and `$XDG_STATE_HOME/waytorandr`.
+      '';
       example = {
         RUST_LOG = "waytorandrd=debug";
       };
@@ -42,7 +54,13 @@ in
       type = types.str;
       default = config.wayland.systemd.target;
       defaultText = literalExpression "config.wayland.systemd.target";
-      description = "Systemd target that should own the waytorandrd user service.";
+      description = ''
+        Systemd user target that should own the `waytorandrd` service.
+
+        The module assumes a working graphical Wayland session. By default this
+        follows `config.wayland.systemd.target`, and the service also requires
+        `WAYLAND_DISPLAY` to be present before it starts.
+      '';
     };
   };
 

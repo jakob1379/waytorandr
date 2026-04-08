@@ -49,9 +49,11 @@ Use `--json` on any `waytorandr` command to emit machine-readable JSON on stdout
 Native `mirror` support depends on the active backend.
 
 - GNOME/Mutter supports native mirrored logical monitors, so `waytorandr set mirror` works there.
+- KDE Plasma/KWin supports native mirroring through KScreen, so `waytorandr set mirror` works there.
 - Generic wlroots output-management still does not expose portable physical mirroring semantics.
 
 - `common` clones all connected outputs at the same origin using the largest shared mode
+- `largest` uses native mirroring where available and keeps each output at its largest mode
 - `mirror` uses native backend mirroring where available
 - on backends without native mirroring support, use `wl-mirror`
 - on Niri, overlapping outputs are auto-positioned instead of kept overlapped, so `common` is rejected with guidance instead of silently not cloning
@@ -71,38 +73,60 @@ nix develop -c cargo test
 
 ### Home Manager
 
-The flake exports a Home Manager module at `homeManagerModules.default` and
-`homeManagerModules.waytorandr`.
+The flake exports a Home Manager module at:
+
+- `homeManagerModules.default`
+- `homeManagerModules.waytorandr`
 
 Implementation files:
 
 - `nix/home-manager/waytorandr.nix`
 - `nix/modules/home-manager.nix`
 
-Read `nix/modules/home-manager.nix` for the option surface and inline option
-descriptions.
+The current module scope is intentionally small:
 
-The module only installs the package and manages the `waytorandrd` user
-service. Profiles remain imperative and are expected to be managed by
-`waytorandr` itself.
+- it exposes `services.waytorandr.*`
+- `services.waytorandr.enable = true` installs the package in `home.packages`
+- it creates a `systemd --user` service for `waytorandrd`
+- it does not provide declarative profile management through Nix
+
+Real profile/default management still happens through the CLI, for example:
+
+- `waytorandr save work-dock`
+- `waytorandr set --default work-dock`
+- `waytorandr list`
+- `waytorandr current`
+
+Persisted data remains in the normal XDG locations:
+
+- `$XDG_CONFIG_HOME/waytorandr/profiles.json`
+- `$XDG_STATE_HOME/waytorandr/state.toml`
+
+If you do not set the XDG variables explicitly, these usually resolve to:
+
+- `~/.config/waytorandr/profiles.json`
+- `~/.local/state/waytorandr/state.toml`
+
+Minimal Home Manager flake example:
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     home-manager.url = "github:nix-community/home-manager";
-    waytorandr.url = "github:jsg/waytorandr";
+    waytorandr.url = "github:jakob1379/waytorandr";
   };
 
-  outputs = inputs@{ nixpkgs, home-manager, waytorandr, ... }: {
+  outputs = { nixpkgs, home-manager, waytorandr, ... }: {
     homeConfigurations."alice" = home-manager.lib.homeManagerConfiguration {
       pkgs = import nixpkgs { system = "x86_64-linux"; };
       modules = [
-        waytorandr.homeManagerModules.default
+        waytorandr.homeManagerModules.waytorandr
         {
           home.username = "alice";
           home.homeDirectory = "/home/alice";
           home.stateVersion = "24.11";
+
           services.waytorandr.enable = true;
         }
       ];
@@ -111,7 +135,43 @@ service. Profiles remain imperative and are expected to be managed by
 }
 ```
 
+Session assumptions and caveats:
+
+- the module assumes a Linux Home Manager setup with `systemd --user`
+- the daemon is started as a user service and is tied to `services.waytorandr.systemdTarget`
+- that target defaults to `config.wayland.systemd.target`, which is commonly `graphical-session.target`
+- the service unit also sets `ConditionEnvironment=WAYLAND_DISPLAY`, so it only starts inside a live Wayland graphical session
+- if your session does not provide Home Manager's Wayland session target wiring, set `services.waytorandr.systemdTarget` explicitly or start the daemon some other way
+
+Backend expectations:
+
+- backend selection is runtime detection, not a Nix module option
+- wlroots compositors are the most direct path
+- KDE Plasma/KWin support is implemented through KScreen
+- GNOME support is implemented through Mutter DisplayConfig
+
+Read `nix/modules/home-manager.nix` for the exact option surface and inline
+descriptions.
+
 Dynamic shell completion is built in. After enabling it for your shell, `waytorandr set <TAB>` and `waytorandr remove <TAB>` include saved profile names.
+
+## Releases
+
+`Cargo.toml` is the canonical version source for this repo.
+
+- `[workspace.package].version` drives all workspace crate versions
+- `flake.nix` reads the package version from `Cargo.toml`
+- GitHub releases are still triggered by Git tags in the form `vX.Y.Z`
+
+Release flow:
+
+1. Update `[workspace.package].version` in `Cargo.toml`.
+2. Commit the version bump.
+3. Create a matching annotated tag such as `git tag -a v0.2.2 -m "v0.2.2"`.
+4. Optionally verify locally with `bash scripts/check-release-version.sh v0.2.2`.
+5. Push the commit and tag.
+
+Tagged CI now fails early if the pushed tag does not match the Cargo workspace version.
 
 ## Project Note
 
