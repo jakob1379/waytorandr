@@ -274,22 +274,8 @@ fn mode_command_for_output(
     let candidate = output
         .modes
         .iter()
-        .filter(|mode| {
-            mode.size.width == desired.width
-                && mode.size.height == desired.height
-                && rounded_refresh(mode.refresh_rate) == desired.refresh
-        })
-        .min_by(|left, right| {
-            refresh_distance(left.refresh_rate, desired.refresh)
-                .partial_cmp(&refresh_distance(right.refresh_rate, desired.refresh))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .or_else(|| {
-            output
-                .modes
-                .iter()
-                .find(|mode| mode.size.width == desired.width && mode.size.height == desired.height)
-        })
+        .filter(|mode| mode.size.width == desired.width && mode.size.height == desired.height)
+        .min_by(|left, right| compare_mode_preference(left, right, desired.refresh))
         .ok_or_else(|| {
             anyhow!(
                 "no KScreen mode matches {}x{}@{} for output `{}`",
@@ -303,8 +289,26 @@ fn mode_command_for_output(
     Ok(Some(candidate.id.clone()))
 }
 
+fn compare_mode_preference(
+    left: &KScreenMode,
+    right: &KScreenMode,
+    desired_refresh: u32,
+) -> std::cmp::Ordering {
+    let left_matches = rounded_refresh(left.refresh_rate) == desired_refresh;
+    let right_matches = rounded_refresh(right.refresh_rate) == desired_refresh;
+
+    right_matches
+        .cmp(&left_matches)
+        .then_with(|| {
+            refresh_distance(left.refresh_rate, desired_refresh)
+                .total_cmp(&refresh_distance(right.refresh_rate, desired_refresh))
+        })
+        .then_with(|| left.refresh_rate.total_cmp(&right.refresh_rate))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
 fn refresh_distance(refresh_rate: f64, desired_refresh: u32) -> f64 {
-    (refresh_rate - desired_refresh as f64).abs()
+    (refresh_rate - desired.refresh as f64).abs()
 }
 
 fn current_mode(output: &KScreenOutput) -> Option<Mode> {
@@ -595,6 +599,28 @@ mod tests {
         let args = build_apply_args(&plan, &config).unwrap();
 
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn mode_command_falls_back_to_nearest_refresh_for_matching_resolution() {
+        let config = sample_config();
+        let output = config
+            .outputs
+            .iter()
+            .find(|output| output.name == "DVI-I-1")
+            .unwrap();
+
+        let mode = mode_command_for_output(
+            output,
+            Some(Mode {
+                width: 2560,
+                height: 1440,
+                refresh: 59,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(mode.as_deref(), Some("4"));
     }
 
     #[test]
