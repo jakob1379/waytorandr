@@ -233,7 +233,7 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
         .iter()
         .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
         .all(|(name, current)| match plan.outputs.get(name) {
-            Some(desired) => desired == current,
+            Some(desired) => desired.same_layout_as(current),
             None => !current.enabled,
         })
 }
@@ -396,6 +396,26 @@ mod tests {
         };
 
         assert!(!plan_matches_topology(&plan, &topology));
+    }
+
+    #[test]
+    fn plan_match_ignores_mode_inventory_changes() {
+        let mut planned = output("DP-1", true);
+        planned.available_modes = vec![waytorandr_core::model::Mode::new(1920, 1080, 60)];
+        planned.mode = Some(waytorandr_core::model::Mode::new(1920, 1080, 60));
+
+        let mut current = planned.clone();
+        current.available_modes = vec![
+            waytorandr_core::model::Mode::new(1280, 720, 60),
+            waytorandr_core::model::Mode::new(1920, 1080, 60),
+        ];
+
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), planned)]));
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), current)]),
+        };
+
+        assert!(plan_matches_topology(&plan, &topology));
     }
 
     #[test]

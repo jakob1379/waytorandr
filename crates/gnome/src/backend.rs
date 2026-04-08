@@ -127,6 +127,10 @@ impl GnomeBackend {
             let group_root_monitor = state.monitor(group_root_name).ok_or_else(|| {
                 anyhow!("output `{group_root_name}` is not connected on this GNOME session")
             })?;
+            let group_root_mode = resolve_mode(group_root_monitor, group_root_desired.mode)
+                .with_context(|| {
+                    format!("failed to resolve mode for output `{group_root_name}`")
+                })?;
             let logical_is_primary = primary_connector
                 .as_deref()
                 .is_some_and(|connector| group.iter().any(|(name, _)| name.as_str() == connector));
@@ -135,8 +139,12 @@ impl GnomeBackend {
                 let monitor = state.monitor(name).ok_or_else(|| {
                     anyhow!("output `{name}` is not connected on this GNOME session")
                 })?;
-                let mode = resolve_mode(monitor, desired.mode)
-                    .with_context(|| format!("failed to resolve mode for output `{name}`"))?;
+                let mode = if name.as_str() == group_root_name.as_str() {
+                    group_root_mode
+                } else {
+                    resolve_mode(monitor, desired.mode)
+                        .with_context(|| format!("failed to resolve mode for output `{name}`"))?
+                };
                 apply_monitors.push((
                     name.clone(),
                     mode.id.clone(),
@@ -147,7 +155,7 @@ impl GnomeBackend {
             logical_monitors.push((
                 group_root_desired.position.x,
                 group_root_desired.position.y,
-                select_scale(group_root_monitor, group_root_desired.scale),
+                resolve_scale(group_root_mode, group_root_desired.scale),
                 transform_to_gnome(group_root_desired.transform),
                 logical_is_primary,
                 apply_monitors,
@@ -551,18 +559,41 @@ fn display_name(properties: &PropertyMap) -> Option<String> {
     property_as_str(properties, "display-name").and_then(|value| non_empty(&value))
 }
 
-fn select_scale(monitor: &MonitorConfig, desired: f64) -> f64 {
-    let Some(mode) = current_monitor_mode(monitor).or_else(|| monitor.modes.first()) else {
-        return desired;
-    };
+fn resolve_scale(mode: &MonitorMode, desired: f64) -> f64 {
     if mode.supported_scales.is_empty() {
         return desired;
     }
-    mode.supported_scales
+    if let Some(exact) = mode
+        .supported_scales
         .iter()
         .copied()
         .find(|scale| float_eq(*scale, desired))
+    {
+        return exact;
+    }
+
+    if mode.preferred_scale > 0.0
+        && mode
+            .supported_scales
+            .iter()
+            .any(|scale| float_eq(*scale, mode.preferred_scale))
+    {
+        return mode.preferred_scale;
+    }
+
+    mode.supported_scales
+        .iter()
+        .copied()
+        .min_by(|left, right| {
+            scale_distance(*left, desired)
+                .total_cmp(&scale_distance(*right, desired))
+                .then_with(|| left.total_cmp(right))
+        })
         .unwrap_or(desired)
+}
+
+fn scale_distance(scale: f64, desired: f64) -> f64 {
+    (scale - desired).abs()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -951,6 +982,24 @@ mod tests {
         assert_eq!(logical_monitors[0].5.len(), 2);
         assert_eq!(logical_monitors[0].5[0].0, "DP-1");
         assert_eq!(logical_monitors[0].5[1].0, "eDP-1");
+    }
+
+    #[test]
+    fn build_apply_config_uses_target_mode_scales_for_logical_monitor() {
+        let backend = GnomeBackend;
+        let plan = LayoutPlan::new(HashMap::from([("eDP-1".to_string(), {
+            let mut output = OutputState::new("eDP-1");
+            output.enabled = true;
+            output.mode = Some(Mode::new(1280, 720, 60));
+            output.scale = 2.0;
+            output
+        })]));
+
+        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
+
+        assert_eq!(logical_monitors.len(), 1);
+        assert_eq!(logical_monitors[0].2, 1.0);
+        assert_eq!(logical_monitors[0].5[0].1, "1280x720@60");
     }
 
     #[test]
