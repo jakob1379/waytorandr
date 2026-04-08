@@ -68,6 +68,11 @@ impl KScreenBackend {
 
     fn export_topology(&self, config: &KScreenConfig) -> Topology {
         let mut outputs = HashMap::new();
+        let output_names_by_id: HashMap<u32, &str> = config
+            .outputs
+            .iter()
+            .map(|output| (output.id, output.name.as_str()))
+            .collect();
 
         for output in config.outputs.iter().filter(|output| output.connected) {
             let mut state = OutputState::new(output.name.clone());
@@ -79,7 +84,7 @@ impl KScreenBackend {
             state.position = output.pos;
             state.scale = output.scale;
             state.transform = transform_from_kscreen(output.rotation);
-            state.mirror_target = None;
+            state.mirror_target = mirror_target_name(output, &output_names_by_id);
             state.backend_data = None;
             outputs.insert(output.name.clone(), state);
         }
@@ -128,6 +133,7 @@ impl Backend for KScreenBackend {
         capabilities.can_apply = true;
         capabilities.supports_transforms = true;
         capabilities.supports_scale = true;
+        capabilities.supports_mirror = true;
         capabilities
     }
 
@@ -170,9 +176,22 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
         .filter(|output| output.connected)
         .map(|output| (output.name.as_str(), output))
         .collect();
+    let output_ids_by_name: HashMap<&str, u32> = config
+        .outputs
+        .iter()
+        .filter(|output| output.connected)
+        .map(|output| (output.name.as_str(), output.id))
+        .collect();
+    let output_names_by_id: HashMap<u32, &str> = config
+        .outputs
+        .iter()
+        .filter(|output| output.connected)
+        .map(|output| (output.id, output.name.as_str()))
+        .collect();
 
     let mut disable_args = Vec::new();
     let mut enable_args = Vec::new();
+    let mut mirror_args = Vec::new();
 
     let mut current_outputs: Vec<&KScreenOutput> = outputs_by_name.values().copied().collect();
     current_outputs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -196,14 +215,12 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
     desired_outputs.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     for (name, desired) in desired_outputs {
-        if desired.mirror_target.is_some() {
-            bail!("KScreen mirroring is not implemented in this backend");
-        }
-
         let current = outputs_by_name
             .get(name.as_str())
             .copied()
             .ok_or_else(|| anyhow!("output `{name}` is not connected on this KScreen session"))?;
+        let current_mirror_target = mirror_target_name(current, &output_names_by_id);
+        let desired_mirror_target = desired.mirror_target.as_deref();
 
         if !current.enabled {
             enable_args.push(format!("output.{name}.enable"));
@@ -215,13 +232,6 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
             if let Some(mode_arg) = mode_arg {
                 enable_args.push(format!("output.{name}.mode.{mode_arg}"));
             }
-        }
-
-        if current.pos != desired.position {
-            enable_args.push(format!(
-                "output.{name}.position.{},{}",
-                desired.position.x, desired.position.y
-            ));
         }
 
         if !float_eq(current.scale, desired.scale) {
@@ -238,9 +248,35 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
                 rotation_query(desired.transform)
             ));
         }
+
+        if current_mirror_target.is_some() && desired_mirror_target.is_none() {
+            enable_args.push(format!("output.{name}.mirror.none"));
+        }
+
+        if desired_mirror_target.is_none() && current.pos != desired.position {
+            enable_args.push(format!(
+                "output.{name}.position.{},{}",
+                desired.position.x, desired.position.y
+            ));
+        }
+
+        if current_mirror_target.as_deref() != desired_mirror_target {
+            if let Some(target_name) = desired_mirror_target {
+                let target_id = output_ids_by_name
+                    .get(target_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "mirrored output `{name}` targets disconnected output `{target_name}`"
+                        )
+                    })?;
+                mirror_args.push(format!("output.{name}.mirror.{target_id}"));
+            }
+        }
     }
 
     disable_args.extend(enable_args);
+    disable_args.extend(mirror_args);
     Ok(disable_args)
 }
 
@@ -308,6 +344,19 @@ fn current_mode(output: &KScreenOutput) -> Option<Mode> {
             height: mode.size.height,
             refresh: rounded_refresh(mode.refresh_rate),
         })
+}
+
+fn mirror_target_name(
+    output: &KScreenOutput,
+    output_names_by_id: &HashMap<u32, &str>,
+) -> Option<String> {
+    if output.replication_source == 0 {
+        return None;
+    }
+
+    output_names_by_id
+        .get(&output.replication_source)
+        .map(|name| (*name).to_string())
 }
 
 fn available_modes(output: &KScreenOutput) -> Vec<Mode> {
@@ -401,6 +450,8 @@ struct KScreenOutput {
     connected: bool,
     #[serde(default)]
     enabled: bool,
+    #[serde(default)]
+    id: u32,
     #[serde(rename = "currentModeId")]
     current_mode_id: Option<String>,
     #[serde(default)]
@@ -409,6 +460,8 @@ struct KScreenOutput {
     pos: Position,
     #[serde(default = "default_scale")]
     scale: f64,
+    #[serde(rename = "replicationSource", default)]
+    replication_source: u32,
     #[serde(default = "default_rotation")]
     rotation: i32,
     #[serde(default)]
@@ -488,10 +541,16 @@ mod tests {
                         "id": "4",
                         "refreshRate": 59.95100021362305,
                         "size": { "height": 1440, "width": 2560 }
+                    },
+                    {
+                        "id": "5",
+                        "refreshRate": 60,
+                        "size": { "height": 1080, "width": 1920 }
                     }
                 ],
                 "name": "DVI-I-1",
                 "pos": { "x": 1920, "y": 0 },
+                "replicationSource": 0,
                 "rotation": 8,
                 "scale": 1.25,
                 "size": { "height": 1440, "width": 2560 }
@@ -539,6 +598,29 @@ mod tests {
         assert_eq!(topology.outputs["DVI-I-1"].transform, Transform::Rot270);
         assert_eq!(topology.outputs["DVI-I-1"].scale, 1.25);
         assert!(!topology.outputs.contains_key("HDMI-A-2"));
+    }
+
+    #[test]
+    fn export_topology_sets_mirror_targets_from_replication_source() {
+        let backend = KScreenBackend {
+            command: OsString::from(KSCREEN_DOCTOR),
+        };
+        let mut config = sample_config();
+        let mirrored = config
+            .outputs
+            .iter_mut()
+            .find(|output| output.name == "DVI-I-1")
+            .unwrap();
+        mirrored.enabled = true;
+        mirrored.replication_source = 1;
+
+        let topology = backend.export_topology(&config);
+
+        assert_eq!(topology.outputs["eDP-1"].mirror_target, None);
+        assert_eq!(
+            topology.outputs["DVI-I-1"].mirror_target.as_deref(),
+            Some("eDP-1")
+        );
     }
 
     #[test]
@@ -595,6 +677,94 @@ mod tests {
         let args = build_apply_args(&plan, &config).unwrap();
 
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn build_apply_args_uses_native_kscreen_mirror_commands() {
+        let config = sample_config();
+
+        let mut laptop = output("eDP-1", true);
+        laptop.mode = Some(Mode {
+            width: 1920,
+            height: 1080,
+            refresh: 60,
+        });
+        laptop.position = Position { x: 0, y: 0 };
+
+        let mut external = output("DVI-I-1", true);
+        external.mode = Some(Mode {
+            width: 1920,
+            height: 1080,
+            refresh: 60,
+        });
+        external.scale = 1.0;
+        external.transform = Transform::Normal;
+        external.mirror_target = Some("eDP-1".to_string());
+
+        let plan = LayoutPlan::new(HashMap::from([
+            ("eDP-1".to_string(), laptop),
+            ("DVI-I-1".to_string(), external),
+        ]));
+
+        let args = build_apply_args(&plan, &config).unwrap();
+
+        assert_eq!(
+            args,
+            vec![
+                "output.DVI-I-1.enable".to_string(),
+                "output.DVI-I-1.mode.5".to_string(),
+                "output.DVI-I-1.scale.1".to_string(),
+                "output.DVI-I-1.rotation.normal".to_string(),
+                "output.DVI-I-1.mirror.1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_apply_args_clears_mirror_before_setting_position() {
+        let mut config = sample_config();
+        let mirrored = config
+            .outputs
+            .iter_mut()
+            .find(|output| output.name == "DVI-I-1")
+            .unwrap();
+        mirrored.enabled = true;
+        mirrored.replication_source = 1;
+
+        let mut laptop = output("eDP-1", true);
+        laptop.mode = Some(Mode {
+            width: 1920,
+            height: 1080,
+            refresh: 60,
+        });
+        laptop.position = Position { x: 0, y: 0 };
+
+        let mut external = output("DVI-I-1", true);
+        external.mode = Some(Mode {
+            width: 1920,
+            height: 1080,
+            refresh: 60,
+        });
+        external.position = Position { x: 1920, y: 0 };
+        external.scale = 1.0;
+        external.transform = Transform::Normal;
+
+        let plan = LayoutPlan::new(HashMap::from([
+            ("eDP-1".to_string(), laptop),
+            ("DVI-I-1".to_string(), external),
+        ]));
+
+        let args = build_apply_args(&plan, &config).unwrap();
+
+        assert_eq!(
+            args,
+            vec![
+                "output.DVI-I-1.mode.5".to_string(),
+                "output.DVI-I-1.scale.1".to_string(),
+                "output.DVI-I-1.rotation.normal".to_string(),
+                "output.DVI-I-1.mirror.none".to_string(),
+            ]
+        );
     }
 
     #[test]
