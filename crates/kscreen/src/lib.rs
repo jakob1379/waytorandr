@@ -1,3 +1,3 @@
-//! KDE KScreen backend using `kscreen-doctor`
+//! KDE `KScreen` backend using `kscreen-doctor`
 
 pub mod backend;

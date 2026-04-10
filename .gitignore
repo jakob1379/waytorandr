@@ -2,3 +2,5 @@ target/
 result
 .desloppify/
 /.codex
+/.direnv/
+*~

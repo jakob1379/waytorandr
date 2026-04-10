@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -26,9 +27,10 @@ use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
 use waytorandr_core::engine::{
     ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
 };
-use waytorandr_core::error::{CoreError, CoreResult};
+use waytorandr_core::error::{BackendConnectionError, CoreError, CoreResult};
 use waytorandr_core::model::{
-    normalized_identity_value, Capabilities, Mode, OutputState, Position, Topology, Transform,
+    normalized_identity_value, BackendKind, Capabilities, Mode, OutputState, Position, Topology,
+    Transform,
 };
 use waytorandr_core::planner::LayoutPlan;
 
@@ -92,14 +94,35 @@ impl Default for HeadInfo {
 }
 
 impl WlrootsBackend {
-    pub fn connect() -> Result<Self> {
-        let connection =
-            Connection::connect_to_env().context("failed to connect to Wayland display")?;
+    /// Connects to the wlroots backend.
+    ///
+    /// # Errors
+    /// Returns an error if the Wayland display or output-management protocol is unavailable.
+    pub fn connect() -> CoreResult<Self> {
+        let connection = Connection::connect_to_env()
+            .context("failed to connect to Wayland display")
+            .map_err(|source| {
+                CoreError::BackendConnection(BackendConnectionError::Initialize {
+                    backend: BackendKind::Wlroots,
+                    source,
+                })
+            })?;
         let (globals, event_queue) = registry_queue_init::<State>(&connection)
-            .context("failed to initialize Wayland registry")?;
+            .context("failed to initialize Wayland registry")
+            .map_err(|source| {
+                CoreError::BackendConnection(BackendConnectionError::Initialize {
+                    backend: BackendKind::Wlroots,
+                    source,
+                })
+            })?;
         let qh = event_queue.handle();
 
-        let manager = bind_manager(&globals, &qh)?;
+        let manager = bind_manager(&globals, &qh).map_err(|source| {
+            CoreError::BackendConnection(BackendConnectionError::Initialize {
+                backend: BackendKind::Wlroots,
+                source,
+            })
+        })?;
         let mut client = WaylandClient {
             event_queue,
             state: State {
@@ -107,8 +130,18 @@ impl WlrootsBackend {
                 ..State::default()
             },
         };
-        client.sync()?;
-        client.sync()?;
+        client.sync().map_err(|source| {
+            CoreError::BackendConnection(BackendConnectionError::Initialize {
+                backend: BackendKind::Wlroots,
+                source,
+            })
+        })?;
+        client.sync().map_err(|source| {
+            CoreError::BackendConnection(BackendConnectionError::Initialize {
+                backend: BackendKind::Wlroots,
+                source,
+            })
+        })?;
 
         Ok(Self {
             inner: Mutex::new(client),
@@ -118,13 +151,8 @@ impl WlrootsBackend {
 
 impl Backend for WlrootsBackend {
     fn capabilities(&self) -> Capabilities {
-        let mut capabilities = Capabilities::named("wlroots");
-        capabilities.can_enumerate = true;
-        capabilities.can_watch = true;
+        let mut capabilities = Capabilities::new(BackendKind::Wlroots);
         capabilities.can_test = true;
-        capabilities.can_apply = true;
-        capabilities.supports_transforms = true;
-        capabilities.supports_scale = true;
         capabilities
     }
 
@@ -139,9 +167,9 @@ impl Backend for WlrootsBackend {
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.fingerprint();
+        let initial = self.enumerate_outputs()?.state_fingerprint();
         Ok(Box::new(PollingOutputWatcher::new(
-            WlrootsBackend::connect().map_err(|source| CoreError::Backend { source })?,
+            WlrootsBackend::connect()?,
             POLL_INTERVAL,
             Some(initial),
         )))
@@ -154,10 +182,7 @@ impl Backend for WlrootsBackend {
         let status = inner
             .submit_with_retry(plan, true, 3)
             .map_err(|source| CoreError::Backend { source })?;
-        let mut result = TestResult::default();
-        result.success = matches!(status, ConfigStatus::Succeeded);
-        result.failure = config_failure(status);
-        result.message = Some(match status {
+        let message = Some(match status {
             ConfigStatus::Succeeded => {
                 format!("wlroots validated {} output changes", plan.outputs.len())
             }
@@ -167,7 +192,12 @@ impl Backend for WlrootsBackend {
                     .to_string()
             }
         });
-        Ok(result)
+        Ok(match status {
+            ConfigStatus::Succeeded => TestResult::supported(message),
+            ConfigStatus::Failed | ConfigStatus::Cancelled => {
+                TestResult::rejected(config_failure(status), message)
+            }
+        })
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
@@ -216,15 +246,14 @@ impl WaylandClient {
             outputs.insert(name.clone(), {
                 let mut state = OutputState::new(name);
                 state.identity.edid_hash = None;
-                state.identity.make = head.make.clone();
-                state.identity.model = head.model.clone();
-                state.identity.serial = head.serial.clone();
-                state.identity.description = head.description.clone();
+                state.identity.make.clone_from(&head.make);
+                state.identity.model.clone_from(&head.model);
+                state.identity.serial.clone_from(&head.serial);
+                state.identity.description.clone_from(&head.description);
                 state.identity.is_virtual = head
                     .description
                     .as_deref()
-                    .map(is_virtual_description)
-                    .unwrap_or(false);
+                    .is_some_and(is_virtual_description);
                 state.identity.is_ignored = false;
                 state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
                 state.mode = mode;
@@ -398,9 +427,10 @@ fn apply_head_config(
             conf_head.set_mode(&existing_mode.mode);
         } else {
             conf_head.set_custom_mode(
-                mode.width as i32,
-                mode.height as i32,
-                (mode.refresh * 1000) as i32,
+                i32::try_from(mode.width).context("wlroots mode width does not fit in i32")?,
+                i32::try_from(mode.height).context("wlroots mode height does not fit in i32")?,
+                i32::try_from(mode.refresh.saturating_mul(1000))
+                    .context("wlroots mode refresh does not fit in i32")?,
             );
         }
     }
@@ -435,7 +465,6 @@ fn transform_to_wl(transform: Transform) -> wl_output::Transform {
 
 fn transform_from_wl(transform: WEnum<wl_output::Transform>) -> Transform {
     match transform {
-        WEnum::Value(wl_output::Transform::Normal) => Transform::Normal,
         WEnum::Value(wl_output::Transform::_90) => Transform::Rot90,
         WEnum::Value(wl_output::Transform::_180) => Transform::Rot180,
         WEnum::Value(wl_output::Transform::_270) => Transform::Rot270,
@@ -443,8 +472,7 @@ fn transform_from_wl(transform: WEnum<wl_output::Transform>) -> Transform {
         WEnum::Value(wl_output::Transform::Flipped90) => Transform::Flipped90,
         WEnum::Value(wl_output::Transform::Flipped180) => Transform::Flipped180,
         WEnum::Value(wl_output::Transform::Flipped270) => Transform::Flipped270,
-        WEnum::Value(_) => Transform::Normal,
-        WEnum::Unknown(_) => Transform::Normal,
+        WEnum::Value(_) | WEnum::Unknown(_) => Transform::Normal,
     }
 }
 
@@ -476,7 +504,7 @@ impl Dispatch<ZwlrOutputManagerV1, ()> for State {
         state: &mut Self,
         _manager: &ZwlrOutputManagerV1,
         event: zwlr_output_manager_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -497,7 +525,7 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
         state: &mut Self,
         head: &ZwlrOutputHeadV1,
         event: zwlr_output_head_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -519,22 +547,22 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
         match event {
             zwlr_output_head_v1::Event::Name { name } => entry.name = Some(name),
             zwlr_output_head_v1::Event::Description { description } => {
-                update_identity_field(&mut entry.description, &description)
+                update_identity_field(&mut entry.description, &description);
             }
             zwlr_output_head_v1::Event::Make { make } => {
-                update_identity_field(&mut entry.make, &make)
+                update_identity_field(&mut entry.make, &make);
             }
             zwlr_output_head_v1::Event::Model { model } => {
-                update_identity_field(&mut entry.model, &model)
+                update_identity_field(&mut entry.model, &model);
             }
             zwlr_output_head_v1::Event::SerialNumber { serial_number } => {
-                update_identity_field(&mut entry.serial, &serial_number)
+                update_identity_field(&mut entry.serial, &serial_number);
             }
             zwlr_output_head_v1::Event::Enabled { enabled } => entry.enabled = enabled != 0,
             zwlr_output_head_v1::Event::Position { x, y } => entry.position = Position { x, y },
             zwlr_output_head_v1::Event::Scale { scale } => entry.scale = scale,
             zwlr_output_head_v1::Event::Transform { transform } => {
-                entry.transform = transform_from_wl(transform)
+                entry.transform = transform_from_wl(transform);
             }
             zwlr_output_head_v1::Event::Mode { mode } => {
                 let mode_id = mode.id();
@@ -551,7 +579,7 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for State {
                 });
             }
             zwlr_output_head_v1::Event::CurrentMode { mode } => {
-                entry.current_mode = Some(mode.id())
+                entry.current_mode = Some(mode.id());
             }
             zwlr_output_head_v1::Event::Finished => {
                 state.heads.remove(&head.id());
@@ -572,7 +600,7 @@ impl Dispatch<ZwlrOutputModeV1, ()> for State {
         state: &mut Self,
         mode: &ZwlrOutputModeV1,
         event: zwlr_output_mode_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -582,10 +610,12 @@ impl Dispatch<ZwlrOutputModeV1, ()> for State {
 
         match event {
             zwlr_output_mode_v1::Event::Size { width, height } => {
-                entry.width = Some(width as u32);
-                entry.height = Some(height as u32);
+                entry.width = u32::try_from(width).ok();
+                entry.height = u32::try_from(height).ok();
             }
-            zwlr_output_mode_v1::Event::Refresh { refresh } => entry.refresh = Some(refresh as u32),
+            zwlr_output_mode_v1::Event::Refresh { refresh } => {
+                entry.refresh = u32::try_from(refresh).ok();
+            }
             zwlr_output_mode_v1::Event::Preferred => entry.preferred = true,
             zwlr_output_mode_v1::Event::Finished => {
                 let head_id = entry.head_id.clone();
@@ -604,7 +634,7 @@ impl Dispatch<ZwlrOutputConfigurationV1, ()> for State {
         state: &mut Self,
         config: &ZwlrOutputConfigurationV1,
         event: zwlr_output_configuration_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -623,22 +653,17 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ()> for State {
         _state: &mut Self,
         _head: &ZwlrOutputConfigurationHeadV1,
         _event: wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_head_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
     }
 }
 
-pub fn probe_backend() -> Option<Box<dyn Backend>> {
-    WlrootsBackend::connect()
-        .ok()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{head_is_enabled, update_identity_field};
+    use wayland_client::backend::ObjectId;
 
     #[test]
     fn current_mode_marks_head_enabled() {

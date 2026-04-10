@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "User daemon for automatically applying waytorandr display profiles"
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["wayland", "display", "profiles", "randr", "monitor"]
+categories = ["command-line-utilities", "config"]
 
 [[bin]]
 name = "waytorandrd"

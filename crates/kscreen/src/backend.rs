@@ -9,8 +9,10 @@ use serde::Deserialize;
 use waytorandr_core::engine::{
     ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
 };
-use waytorandr_core::error::{CoreError, CoreResult};
-use waytorandr_core::model::{Capabilities, Mode, OutputState, Position, Topology, Transform};
+use waytorandr_core::error::{BackendConnectionError, CoreError, CoreResult};
+use waytorandr_core::model::{
+    BackendKind, Capabilities, Mode, OutputState, Position, Topology, Transform,
+};
 use waytorandr_core::planner::LayoutPlan;
 
 const KSCREEN_DOCTOR: &str = "kscreen-doctor";
@@ -30,14 +32,24 @@ pub struct KScreenBackend {
 }
 
 impl KScreenBackend {
-    pub fn connect() -> Result<Self> {
+    /// Connects to the `KScreen` backend.
+    ///
+    /// # Errors
+    /// Returns an error if `kscreen-doctor` is unavailable or the current session cannot be queried.
+    pub fn connect() -> CoreResult<Self> {
         let backend = Self {
             command: std::env::var_os("WAYTORANDR_KSCREEN_DOCTOR")
                 .unwrap_or_else(|| OsString::from(KSCREEN_DOCTOR)),
         };
         backend
             .load_config()
-            .context("failed to query KScreen display configuration")?;
+            .context("failed to query KScreen display configuration")
+            .map_err(|source| {
+                CoreError::BackendConnection(BackendConnectionError::Initialize {
+                    backend: BackendKind::KScreen,
+                    source,
+                })
+            })?;
         Ok(backend)
     }
 
@@ -66,7 +78,7 @@ impl KScreenBackend {
         })
     }
 
-    fn export_topology(&self, config: &KScreenConfig) -> Topology {
+    fn export_topology(config: &KScreenConfig) -> Topology {
         let mut outputs = HashMap::new();
         let output_names_by_id: HashMap<u32, &str> = config
             .outputs
@@ -99,7 +111,7 @@ impl KScreenBackend {
             let mut result = ApplyResult::default();
             result.success = true;
             result.message = Some("configuration already matches current state".to_string());
-            result.applied_state = Some(self.export_topology(&config));
+            result.applied_state = Some(Self::export_topology(&config));
             return Ok(result);
         }
 
@@ -119,20 +131,15 @@ impl KScreenBackend {
         let mut result = ApplyResult::default();
         result.success = true;
         result.message = Some(format!("KScreen applied {} display changes", args.len()));
-        result.applied_state = Some(self.export_topology(&applied));
+        result.applied_state = Some(Self::export_topology(&applied));
         Ok(result)
     }
 }
 
 impl Backend for KScreenBackend {
     fn capabilities(&self) -> Capabilities {
-        let mut capabilities = Capabilities::named("kscreen");
-        capabilities.can_enumerate = true;
-        capabilities.can_watch = true;
+        let mut capabilities = Capabilities::new(BackendKind::KScreen);
         capabilities.can_test = false;
-        capabilities.can_apply = true;
-        capabilities.supports_transforms = true;
-        capabilities.supports_scale = true;
         capabilities.supports_mirror = true;
         capabilities.supports_largest_mirror = true;
         capabilities
@@ -142,11 +149,11 @@ impl Backend for KScreenBackend {
         let config = self
             .load_config()
             .map_err(|source| CoreError::Backend { source })?;
-        Ok(self.export_topology(&config))
+        Ok(Self::export_topology(&config))
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.fingerprint();
+        let initial = self.enumerate_outputs()?.state_fingerprint();
         Ok(Box::new(PollingOutputWatcher::new(
             self.clone(),
             POLL_INTERVAL,
@@ -155,13 +162,10 @@ impl Backend for KScreenBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
-        let mut result = TestResult::default();
-        result.success = true;
-        result.message = Some(format!(
+        Ok(TestResult::unsupported(Some(format!(
             "KScreen does not provide a dry-run API; {} output changes were planned",
             plan.outputs.len()
-        ));
-        Ok(result)
+        ))))
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
@@ -198,10 +202,10 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
     current_outputs.sort_by(|left, right| left.name.cmp(&right.name));
 
     for output in current_outputs {
-        let disable = match plan.outputs.get(&output.name) {
-            Some(desired) => !desired.enabled,
-            None => true,
-        };
+        let disable = !plan
+            .outputs
+            .get(&output.name)
+            .is_some_and(|desired| desired.enabled);
 
         if disable && output.enabled {
             disable_args.push(format!("output.{}.disable", output.name));
@@ -326,7 +330,7 @@ fn compare_mode_preference(
 }
 
 fn refresh_distance(refresh_rate: f64, desired_refresh: u32) -> f64 {
-    (refresh_rate - desired_refresh as f64).abs()
+    (refresh_rate - f64::from(desired_refresh)).abs()
 }
 
 fn current_mode(output: &KScreenOutput) -> Option<Mode> {
@@ -376,7 +380,14 @@ fn available_modes(output: &KScreenOutput) -> Vec<Mode> {
 }
 
 fn rounded_refresh(refresh_rate: f64) -> u32 {
-    refresh_rate.round().max(0.0) as u32
+    let refresh = refresh_rate.round();
+    if refresh < 0.0 {
+        0
+    } else if refresh > f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        refresh.to_string().parse().unwrap_or_default()
+    }
 }
 
 fn float_eq(left: f64, right: f64) -> bool {
@@ -421,7 +432,6 @@ fn transform_from_kscreen(rotation: i32) -> Transform {
         ROTATION_FLIPPED_90 => Transform::Flipped90,
         ROTATION_FLIPPED_180 => Transform::Flipped180,
         ROTATION_FLIPPED_270 => Transform::Flipped270,
-        ROTATION_NONE => Transform::Normal,
         _ => Transform::Normal,
     }
 }
@@ -489,12 +499,6 @@ fn default_scale() -> f64 {
 
 fn default_rotation() -> i32 {
     ROTATION_NONE
-}
-
-pub fn probe_backend() -> Option<Box<dyn Backend>> {
-    KScreenBackend::connect()
-        .ok()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
 }
 
 #[cfg(test)]
@@ -581,11 +585,7 @@ mod tests {
 
     #[test]
     fn export_topology_uses_connected_outputs_only() {
-        let backend = KScreenBackend {
-            command: OsString::from(KSCREEN_DOCTOR),
-        };
-
-        let topology = backend.export_topology(&sample_config());
+        let topology = KScreenBackend::export_topology(&sample_config());
 
         assert_eq!(topology.outputs.len(), 2);
         assert_eq!(
@@ -597,15 +597,12 @@ mod tests {
             })
         );
         assert_eq!(topology.outputs["DVI-I-1"].transform, Transform::Rot270);
-        assert_eq!(topology.outputs["DVI-I-1"].scale, 1.25);
+        assert!((topology.outputs["DVI-I-1"].scale - 1.25).abs() < 0.000_1);
         assert!(!topology.outputs.contains_key("HDMI-A-2"));
     }
 
     #[test]
     fn export_topology_sets_mirror_targets_from_replication_source() {
-        let backend = KScreenBackend {
-            command: OsString::from(KSCREEN_DOCTOR),
-        };
         let mut config = sample_config();
         let mirrored = config
             .outputs
@@ -615,7 +612,7 @@ mod tests {
         mirrored.enabled = true;
         mirrored.replication_source = 1;
 
-        let topology = backend.export_topology(&config);
+        let topology = KScreenBackend::export_topology(&config);
 
         assert_eq!(topology.outputs["eDP-1"].mirror_target, None);
         assert_eq!(

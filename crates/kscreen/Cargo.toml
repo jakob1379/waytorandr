@@ -5,10 +5,14 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "KScreen backend for waytorandr"
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["wayland", "display", "profiles", "randr", "monitor"]
+categories = ["command-line-utilities", "config"]
 
 [dependencies]
 waytorandr-core = { path = "../core" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true

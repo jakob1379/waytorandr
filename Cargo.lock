@@ -1350,7 +1350,6 @@ name = "waytorandr-gnome"
 version = "0.3.1"
 dependencies = [
  "anyhow",
- "tracing",
  "waytorandr-core",
  "zbus",
 ]
@@ -1362,7 +1361,6 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "tracing",
  "waytorandr-core",
 ]
 
