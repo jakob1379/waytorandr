@@ -7,17 +7,42 @@ use crate::planner::LayoutPlan;
 use crate::profile::{Hook, Hooks};
 
 pub trait Backend {
+    #[must_use]
+    /// Returns backend capabilities.
     fn capabilities(&self) -> Capabilities;
+
+    /// Enumerates the current outputs.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot read the current output state.
     fn enumerate_outputs(&self) -> CoreResult<Topology>;
+
+    /// Returns an output watcher.
+    ///
+    /// # Errors
+    /// Returns an error if watch mode is unavailable.
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>>;
-    fn current_state(&self) -> CoreResult<Topology> {
-        self.enumerate_outputs()
-    }
+
+    /// Validates a layout plan.
+    ///
+    /// Validation outcomes are returned as `TestResult` values.
+    ///
+    /// # Errors
+    /// Returns an error only if backend validation transport fails.
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult>;
+
+    /// Applies a layout plan.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot apply the plan.
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult>;
 }
 
 pub trait OutputWatcher {
+    /// Polls for output changes.
+    ///
+    /// # Errors
+    /// Returns an error if the backend watcher fails.
     fn poll_changed(&mut self) -> CoreResult<Option<Topology>>;
 }
 
@@ -50,6 +75,7 @@ pub struct PollingOutputWatcher<B> {
 }
 
 impl<B> PollingOutputWatcher<B> {
+    #[must_use]
     pub fn new(backend: B, interval: Duration, last_fingerprint: Option<String>) -> Self {
         Self {
             backend,
@@ -63,7 +89,7 @@ impl<B: Backend> OutputWatcher for PollingOutputWatcher<B> {
     fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
         thread::sleep(self.interval);
         let topology = self.backend.enumerate_outputs()?;
-        let fingerprint = topology.fingerprint();
+        let fingerprint = topology.state_fingerprint();
         if self.last_fingerprint.as_ref() == Some(&fingerprint) {
             return Ok(None);
         }
@@ -78,12 +104,68 @@ pub enum ConfigFailureKind {
     TopologyChanged,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationStatus {
+    Supported,
+    Rejected,
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TestResult {
     pub success: bool,
+    pub status: ValidationStatus,
     pub failure: Option<ConfigFailureKind>,
     pub message: Option<String>,
+}
+
+impl Default for TestResult {
+    fn default() -> Self {
+        Self {
+            success: false,
+            status: ValidationStatus::Unsupported,
+            failure: None,
+            message: None,
+        }
+    }
+}
+
+impl TestResult {
+    #[must_use]
+    pub fn supported(message: Option<String>) -> Self {
+        Self {
+            success: true,
+            status: ValidationStatus::Supported,
+            failure: None,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub fn rejected(failure: Option<ConfigFailureKind>, message: Option<String>) -> Self {
+        Self {
+            success: false,
+            status: ValidationStatus::Rejected,
+            failure,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub fn unsupported(message: Option<String>) -> Self {
+        Self {
+            success: false,
+            status: ValidationStatus::Unsupported,
+            failure: None,
+            message,
+        }
+    }
+
+    #[must_use]
+    pub fn is_supported(&self) -> bool {
+        self.status == ValidationStatus::Supported
+    }
 }
 
 #[derive(Debug, Default)]
@@ -100,39 +182,50 @@ pub struct Engine<B: Backend> {
 }
 
 impl<B: Backend> Engine<B> {
+    #[must_use]
     pub(crate) fn new(backend: B) -> Self {
         Self { backend }
     }
 
+    #[must_use]
     pub(crate) fn capabilities(&self) -> Capabilities {
         self.backend.capabilities()
     }
 
+    /// Validates a plan against the backend.
+    ///
+    /// Validation outcomes are returned as `TestResult` values.
+    ///
+    /// # Errors
+    /// Returns an error only if backend validation fails.
     pub(crate) fn test_plan(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
         if !self.capabilities().can_test {
-            return Ok(TestResult {
-                success: true,
-                failure: None,
-                message: Some("Backend does not support test mode".to_string()),
-            });
+            return Ok(TestResult::unsupported(Some(
+                "Backend does not support test mode".to_string(),
+            )));
         }
         self.backend.test(plan)
     }
 
+    /// Applies a plan and runs the configured hooks.
+    ///
+    /// # Errors
+    /// Returns an error if the backend apply step fails.
     pub(crate) fn apply_plan(&self, plan: &LayoutPlan, hooks: &Hooks) -> CoreResult<ApplyResult> {
-        tracing::info!("Applying plan for {} outputs", plan.outputs.len());
+        let count = plan.outputs.len();
+        tracing::info!("Applying plan for {count} outputs");
 
         for hook in &hooks.pre_apply {
-            tracing::debug!("Running pre-apply hook: {}", hook.command);
+            let command = &hook.command;
+            tracing::debug!("Running pre-apply hook: {command}");
         }
 
-        let pre_results = self.run_hooks(&hooks.pre_apply, "pre-apply");
+        let pre_results = Self::run_hooks(&hooks.pre_apply, "pre-apply");
         if !pre_results.iter().all(|r| r.success) {
             let message = pre_results
                 .iter()
                 .find(|result| !result.success)
-                .map(format_hook_failure)
-                .unwrap_or_else(|| "Pre-apply hooks failed".to_string());
+                .map_or_else(|| "Pre-apply hooks failed".to_string(), format_hook_failure);
             return Ok(ApplyResult {
                 success: false,
                 failure: Some(ConfigFailureKind::Rejected),
@@ -144,14 +237,14 @@ impl<B: Backend> Engine<B> {
         let result = self.backend.apply(plan)?;
 
         if result.success {
-            let post_results = self.run_hooks(&hooks.post_apply, "post-apply");
+            let post_results = Self::run_hooks(&hooks.post_apply, "post-apply");
             tracing::debug!(
                 ran = post_results.len(),
                 failed = post_results.iter().filter(|result| !result.success).count(),
                 "Post-apply hooks completed"
             );
         } else {
-            let failure_results = self.run_hooks(&hooks.on_failure, "failure");
+            let failure_results = Self::run_hooks(&hooks.on_failure, "failure");
             tracing::debug!(
                 ran = failure_results.len(),
                 failed = failure_results
@@ -165,16 +258,16 @@ impl<B: Backend> Engine<B> {
         Ok(result)
     }
 
-    fn run_hooks(&self, hooks: &[Hook], phase: &str) -> Vec<HookResult> {
+    fn run_hooks(hooks: &[Hook], phase: &str) -> Vec<HookResult> {
         let mut results = Vec::new();
         for hook in hooks {
-            let result = self.execute_hook(hook, phase);
+            let result = Self::execute_hook(hook, phase);
             results.push(result);
         }
         results
     }
 
-    fn execute_hook(&self, hook: &Hook, phase: &str) -> HookResult {
+    fn execute_hook(hook: &Hook, phase: &str) -> HookResult {
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
 
@@ -235,12 +328,12 @@ impl<B: Backend> Engine<B> {
                     }
                 }
             },
-            Err(e) => HookResult {
+            Err(err) => HookResult {
                 success: false,
                 exit_code: None,
                 elapsed_secs: 0.0,
                 stdout: String::new(),
-                stderr: format!("Failed to spawn: {}", e),
+                stderr: format!("Failed to spawn: {err}"),
                 phase: Some(phase.to_string()),
                 command: Some(hook.command.clone()),
             },
@@ -254,7 +347,8 @@ fn format_hook_failure(result: &HookResult) -> String {
     if result.stderr.is_empty() {
         format!("{phase} hook '{command}' failed")
     } else {
-        format!("{phase} hook '{command}' failed: {}", result.stderr)
+        let stderr = &result.stderr;
+        format!("{phase} hook '{command}' failed: {stderr}")
     }
 }
 
@@ -274,7 +368,7 @@ pub struct HookResult {
 mod tests {
     use super::*;
     use crate::error::CoreError;
-    use crate::model::OutputState;
+    use crate::model::{BackendKind, OutputState};
     use crate::profile::{Hook, Hooks};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -286,10 +380,8 @@ mod tests {
 
     impl Backend for TestBackend {
         fn capabilities(&self) -> Capabilities {
-            let mut capabilities = Capabilities::named("test");
-            capabilities.can_enumerate = true;
+            let mut capabilities = Capabilities::new(BackendKind::Test);
             capabilities.can_test = true;
-            capabilities.can_apply = true;
             capabilities
         }
 
@@ -303,15 +395,8 @@ mod tests {
             })
         }
 
-        fn current_state(&self) -> CoreResult<Topology> {
-            Ok(Topology::default())
-        }
-
         fn test(&self, _plan: &LayoutPlan) -> CoreResult<TestResult> {
-            Ok(TestResult {
-                success: true,
-                ..TestResult::default()
-            })
+            Ok(TestResult::supported(None))
         }
 
         fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
@@ -329,9 +414,10 @@ mod tests {
     fn test_hooks(log_path: &std::path::Path) -> Hooks {
         let hook = |label: &str| {
             let mut hook = Hook::new("sh");
+            let log_path = log_path.display();
             hook.args = vec![
                 "-c".to_string(),
-                format!("printf '%s\\n' {} >> {}", label, log_path.display()),
+                format!("printf '%s\\n' {label} >> {log_path}"),
             ];
             hook.timeout_secs = 5;
             hook
@@ -405,15 +491,15 @@ mod tests {
             state
         })]));
 
-        let mut no_test_capabilities = Capabilities::named("test");
-        no_test_capabilities.can_apply = true;
+        let no_test_capabilities = Capabilities::new(BackendKind::Test);
         let backend = NoTestBackend {
             capabilities: no_test_capabilities,
         };
         let engine = Engine::new(backend);
         let result = engine.test_plan(&plan).unwrap();
 
-        assert!(result.success);
+        assert!(!result.success);
+        assert_eq!(result.status, ValidationStatus::Unsupported);
         assert_eq!(
             result.message.as_deref(),
             Some("Backend does not support test mode")
@@ -437,10 +523,6 @@ mod tests {
             Err(CoreError::Backend {
                 source: anyhow::anyhow!("not used in tests"),
             })
-        }
-
-        fn current_state(&self) -> CoreResult<Topology> {
-            Ok(Topology::default())
         }
 
         fn test(&self, _plan: &LayoutPlan) -> CoreResult<TestResult> {

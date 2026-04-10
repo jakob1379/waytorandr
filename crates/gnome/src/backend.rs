@@ -8,8 +8,10 @@ use zbus::zvariant::OwnedValue;
 use waytorandr_core::engine::{
     ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
 };
-use waytorandr_core::error::{CoreError, CoreResult};
-use waytorandr_core::model::{Capabilities, Mode, OutputState, Position, Topology, Transform};
+use waytorandr_core::error::{BackendConnectionError, CoreError, CoreResult};
+use waytorandr_core::model::{
+    BackendKind, Capabilities, Mode, OutputState, Position, Topology, Transform,
+};
 use waytorandr_core::planner::LayoutPlan;
 
 const DISPLAY_CONFIG_DESTINATION: &str = "org.gnome.Mutter.DisplayConfig";
@@ -48,15 +50,24 @@ type ApplyLogicalMonitorTuple = (i32, i32, f64, u32, bool, Vec<ApplyMonitorTuple
 pub struct GnomeBackend;
 
 impl GnomeBackend {
-    pub fn connect() -> Result<Self> {
+    /// Connects to the GNOME backend.
+    ///
+    /// # Errors
+    /// Returns an error if the session bus or Mutter `DisplayConfig` service is unavailable.
+    pub fn connect() -> CoreResult<Self> {
         let backend = Self;
-        backend
-            .load_state()
-            .context("failed to query Mutter DisplayConfig state")?;
+        Self::load_state()
+            .context("failed to query Mutter DisplayConfig state")
+            .map_err(|source| {
+                CoreError::BackendConnection(BackendConnectionError::Initialize {
+                    backend: BackendKind::Gnome,
+                    source,
+                })
+            })?;
         Ok(backend)
     }
 
-    fn load_state(&self) -> Result<CurrentState> {
+    fn load_state() -> Result<CurrentState> {
         let connection = Connection::session().context("failed to connect to the session bus")?;
         let proxy = Proxy::new(
             &connection,
@@ -71,7 +82,7 @@ impl GnomeBackend {
         Ok(CurrentState::from_reply(reply))
     }
 
-    fn export_topology(&self, state: &CurrentState) -> Topology {
+    fn export_topology(state: &CurrentState) -> Topology {
         let logical_by_connector = state.logical_by_connector();
         let mut outputs = HashMap::new();
 
@@ -87,11 +98,11 @@ impl GnomeBackend {
             output.enabled = logical.is_some();
             output.mode = current_mode_for_monitor(monitor);
             output.available_modes = available_modes_for_monitor(monitor);
-            output.position = logical.map(|value| value.position).unwrap_or_default();
-            output.scale = logical.map(|value| value.scale).unwrap_or(1.0);
-            output.transform = logical
-                .map(|value| transform_from_gnome(value.transform))
-                .unwrap_or_default();
+            output.position = logical.map_or_else(Position::default, |value| value.position);
+            output.scale = logical.map_or(1.0, |value| value.scale);
+            output.transform = logical.map_or_else(Transform::default, |value| {
+                transform_from_gnome(value.transform)
+            });
             output.mirror_target = logical.and_then(|value| value.mirror_target.clone());
             output.backend_data = None;
             outputs.insert(monitor.connector.clone(), output);
@@ -101,7 +112,6 @@ impl GnomeBackend {
     }
 
     fn build_apply_config(
-        &self,
         state: &CurrentState,
         plan: &LayoutPlan,
     ) -> Result<(u32, Vec<ApplyLogicalMonitorTuple>, PropertyMap)> {
@@ -177,9 +187,9 @@ impl GnomeBackend {
         ))
     }
 
-    fn submit(&self, plan: &LayoutPlan, method: u32) -> Result<()> {
-        let state = self.load_state()?;
-        let (serial, logical_monitors, properties) = self.build_apply_config(&state, plan)?;
+    fn submit(plan: &LayoutPlan, method: u32) -> Result<()> {
+        let state = Self::load_state()?;
+        let (serial, logical_monitors, properties) = Self::build_apply_config(&state, plan)?;
         let connection = Connection::session().context("failed to connect to the session bus")?;
         let proxy = Proxy::new(
             &connection,
@@ -199,26 +209,19 @@ impl GnomeBackend {
 
 impl Backend for GnomeBackend {
     fn capabilities(&self) -> Capabilities {
-        let mut capabilities = Capabilities::named("gnome");
-        capabilities.can_enumerate = true;
-        capabilities.can_watch = true;
+        let mut capabilities = Capabilities::new(BackendKind::Gnome);
         capabilities.can_test = true;
-        capabilities.can_apply = true;
-        capabilities.supports_transforms = true;
-        capabilities.supports_scale = true;
         capabilities.supports_mirror = true;
         capabilities
     }
 
     fn enumerate_outputs(&self) -> CoreResult<Topology> {
-        let state = self
-            .load_state()
-            .map_err(|source| CoreError::Backend { source })?;
-        Ok(self.export_topology(&state))
+        let state = Self::load_state().map_err(|source| CoreError::Backend { source })?;
+        Ok(Self::export_topology(&state))
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.fingerprint();
+        let initial = self.enumerate_outputs()?.state_fingerprint();
         Ok(Box::new(PollingOutputWatcher::new(
             self.clone(),
             POLL_INTERVAL,
@@ -227,28 +230,20 @@ impl Backend for GnomeBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
-        match self.submit(plan, METHOD_VERIFY) {
-            Ok(()) => {
-                let mut result = TestResult::default();
-                result.success = true;
-                result.message = Some(format!(
-                    "GNOME validated {} output changes",
-                    plan.outputs.len()
-                ));
-                Ok(result)
-            }
-            Err(source) => {
-                let mut result = TestResult::default();
-                result.success = false;
-                result.failure = classify_apply_failure(&source);
-                result.message = Some(format!("GNOME rejected the configuration: {source:#}"));
-                Ok(result)
-            }
+        match Self::submit(plan, METHOD_VERIFY) {
+            Ok(()) => Ok(TestResult::supported(Some(format!(
+                "GNOME validated {} output changes",
+                plan.outputs.len()
+            )))),
+            Err(source) => Ok(TestResult::rejected(
+                Some(classify_apply_failure(&source)),
+                Some(format!("GNOME rejected the configuration: {source:#}")),
+            )),
         }
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
-        match self.submit(plan, METHOD_TEMPORARY) {
+        match Self::submit(plan, METHOD_TEMPORARY) {
             Ok(()) => {
                 let applied_state = self.enumerate_outputs()?;
                 let mut result = ApplyResult::default();
@@ -260,7 +255,7 @@ impl Backend for GnomeBackend {
             Err(source) => {
                 let mut result = ApplyResult::default();
                 result.success = false;
-                result.failure = classify_apply_failure(&source);
+                result.failure = Some(classify_apply_failure(&source));
                 result.message = Some(format!(
                     "GNOME failed to apply the configuration: {source:#}"
                 ));
@@ -368,8 +363,8 @@ impl MonitorMode {
         let (id, width, height, refresh, preferred_scale, supported_scales, properties) = tuple;
         Self {
             id,
-            width: width.max(0) as u32,
-            height: height.max(0) as u32,
+            width: u32::try_from(width.max(0)).unwrap_or_default(),
+            height: u32::try_from(height.max(0)).unwrap_or_default(),
             refresh,
             preferred_scale,
             supported_scales,
@@ -416,12 +411,12 @@ fn current_monitor_mode(monitor: &MonitorConfig) -> Option<&MonitorMode> {
     monitor
         .modes
         .iter()
-        .find(|mode| property_as_bool(&mode.properties, "is-current").unwrap_or(false))
+        .find(|mode| property_as_bool(&mode.properties, "is-current") == Some(true))
         .or_else(|| {
             monitor
                 .modes
                 .iter()
-                .find(|mode| property_as_bool(&mode.properties, "is-preferred").unwrap_or(false))
+                .find(|mode| property_as_bool(&mode.properties, "is-preferred") == Some(true))
         })
         .or_else(|| monitor.modes.first())
 }
@@ -592,13 +587,13 @@ struct LogicalGroupKey {
 }
 
 impl LogicalGroupKey {
-    fn from_output(output: &OutputState) -> Option<Self> {
-        Some(Self {
+    fn from_output(output: &OutputState) -> Self {
+        Self {
             position: output.position,
             mode: output.mode,
             scale_bits: output.scale.to_bits(),
             transform: output.transform,
-        })
+        }
     }
 }
 
@@ -616,13 +611,12 @@ fn build_logical_groups<'a>(
     for (name, desired) in enabled_outputs {
         let root_name = if let Some(root_name) = desired.mirror_target.as_deref() {
             root_name
-        } else if let Some(group_key) = LogicalGroupKey::from_output(desired) {
+        } else {
+            let group_key = LogicalGroupKey::from_output(desired);
             implicit_roots.get(&group_key).copied().unwrap_or_else(|| {
                 implicit_roots.insert(group_key, name.as_str());
                 name.as_str()
             })
-        } else {
-            name.as_str()
         };
         let Some(root_state) = by_name.get(root_name) else {
             bail!("mirrored output `{name}` targets disconnected output `{root_name}`");
@@ -630,7 +624,7 @@ fn build_logical_groups<'a>(
         if desired.mirror_target.is_some() && root_state.mirror_target.is_some() {
             bail!("mirrored output `{name}` targets `{root_name}`, which is itself mirrored");
         }
-        if !root_order.iter().any(|existing| existing == &root_name) {
+        if !root_order.contains(&root_name) {
             root_order.push(root_name);
         }
         grouped
@@ -657,11 +651,18 @@ fn build_logical_groups<'a>(
 }
 
 fn refresh_distance(refresh: f64, desired_refresh: u32) -> f64 {
-    (refresh - desired_refresh as f64).abs()
+    (refresh - f64::from(desired_refresh)).abs()
 }
 
 fn round_refresh(refresh: f64) -> u32 {
-    refresh.round().max(0.0) as u32
+    let refresh = refresh.round();
+    if refresh < 0.0 {
+        0
+    } else if refresh > f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        refresh.to_string().parse().unwrap_or_default()
+    }
 }
 
 fn mode_signature(mode: &MonitorMode) -> (u32, u32, u32) {
@@ -712,23 +713,17 @@ fn is_virtual_output(connector: &str, description: Option<&str>) -> bool {
         || description.contains("headless")
 }
 
-fn classify_apply_failure(error: &anyhow::Error) -> Option<ConfigFailureKind> {
+fn classify_apply_failure(error: &anyhow::Error) -> ConfigFailureKind {
     let message = error.to_string().to_ascii_lowercase();
     if message.contains("stale")
         || message.contains("serial")
         || message.contains("changed")
         || message.contains("out of date")
     {
-        Some(ConfigFailureKind::TopologyChanged)
+        ConfigFailureKind::TopologyChanged
     } else {
-        Some(ConfigFailureKind::Rejected)
+        ConfigFailureKind::Rejected
     }
-}
-
-pub fn probe_backend() -> Option<Box<dyn Backend>> {
-    GnomeBackend::connect()
-        .ok()
-        .map(|backend| Box::new(backend) as Box<dyn Backend>)
 }
 
 #[cfg(test)]
@@ -784,99 +779,97 @@ mod tests {
             OwnedValue::from(true),
         );
 
-        CurrentState::from_reply((
-            7,
-            vec![
+        let monitors = vec![
+            (
                 (
-                    (
-                        "eDP-1".to_string(),
-                        "LEN".to_string(),
-                        "0x40ad".to_string(),
-                        "0x00000000".to_string(),
+                    "eDP-1".to_string(),
+                    "LEN".to_string(),
+                    "0x40ad".to_string(),
+                    "0x00000000".to_string(),
+                ),
+                vec![
+                    mode("1920x1080@60", 1920, 1080, 60.0, true, true, vec![1.0, 2.0]),
+                    mode("1280x720@60", 1280, 720, 60.0, false, false, vec![1.0]),
+                ],
+                builtin_props,
+            ),
+            (
+                (
+                    "DP-1".to_string(),
+                    "ACR".to_string(),
+                    "VG270U P".to_string(),
+                    "serial".to_string(),
+                ),
+                vec![
+                    mode(
+                        "2560x1440@144",
+                        2560,
+                        1440,
+                        144.0,
+                        true,
+                        true,
+                        vec![1.0, 2.0],
                     ),
-                    vec![
-                        mode("1920x1080@60", 1920, 1080, 60.0, true, true, vec![1.0, 2.0]),
-                        mode("1280x720@60", 1280, 720, 60.0, false, false, vec![1.0]),
-                    ],
-                    builtin_props,
-                ),
-                (
-                    (
-                        "DP-1".to_string(),
-                        "ACR".to_string(),
-                        "VG270U P".to_string(),
-                        "serial".to_string(),
+                    mode(
+                        "2560x1440@60",
+                        2560,
+                        1440,
+                        60.0,
+                        false,
+                        false,
+                        vec![1.0, 2.0],
                     ),
-                    vec![
-                        mode(
-                            "2560x1440@144",
-                            2560,
-                            1440,
-                            144.0,
-                            true,
-                            true,
-                            vec![1.0, 2.0],
-                        ),
-                        mode(
-                            "2560x1440@60",
-                            2560,
-                            1440,
-                            60.0,
-                            false,
-                            false,
-                            vec![1.0, 2.0],
-                        ),
-                        mode(
-                            "1920x1080@60",
-                            1920,
-                            1080,
-                            60.0,
-                            false,
-                            false,
-                            vec![1.0, 2.0],
-                        ),
-                    ],
-                    external_props,
-                ),
-            ],
-            vec![
-                (
-                    0,
-                    0,
-                    1.0,
-                    0,
-                    true,
-                    vec![(
-                        "eDP-1".to_string(),
-                        "LEN".to_string(),
-                        "0x40ad".to_string(),
-                        "0x00000000".to_string(),
-                    )],
-                    PropertyMap::new(),
-                ),
-                (
-                    1920,
-                    0,
-                    1.0,
-                    0,
-                    false,
-                    vec![(
-                        "DP-1".to_string(),
-                        "ACR".to_string(),
-                        "VG270U P".to_string(),
-                        "serial".to_string(),
-                    )],
-                    PropertyMap::new(),
-                ),
-            ],
-            properties,
-        ))
+                    mode(
+                        "1920x1080@60",
+                        1920,
+                        1080,
+                        60.0,
+                        false,
+                        false,
+                        vec![1.0, 2.0],
+                    ),
+                ],
+                external_props,
+            ),
+        ];
+
+        let logical_monitors = vec![
+            (
+                0,
+                0,
+                1.0,
+                0,
+                true,
+                vec![(
+                    "eDP-1".to_string(),
+                    "LEN".to_string(),
+                    "0x40ad".to_string(),
+                    "0x00000000".to_string(),
+                )],
+                PropertyMap::new(),
+            ),
+            (
+                1920,
+                0,
+                1.0,
+                0,
+                false,
+                vec![(
+                    "DP-1".to_string(),
+                    "ACR".to_string(),
+                    "VG270U P".to_string(),
+                    "serial".to_string(),
+                )],
+                PropertyMap::new(),
+            ),
+        ];
+
+        CurrentState::from_reply((7, monitors, logical_monitors, properties))
     }
 
     #[test]
     fn export_topology_marks_enabled_outputs_from_logical_monitors() {
-        let backend = GnomeBackend;
-        let topology = backend.export_topology(&sample_state());
+        let topology = GnomeBackend::export_topology(&sample_state());
 
         assert_eq!(
             topology.outputs["eDP-1"].identity.make.as_deref(),
@@ -893,7 +886,6 @@ mod tests {
 
     #[test]
     fn build_apply_config_preserves_current_primary_and_layout_mode() {
-        let backend = GnomeBackend;
         let plan = LayoutPlan::new(HashMap::from([
             ("eDP-1".to_string(), {
                 let mut output = OutputState::new("eDP-1");
@@ -911,7 +903,7 @@ mod tests {
         ]));
 
         let (serial, logical_monitors, properties) =
-            backend.build_apply_config(&sample_state(), &plan).unwrap();
+            GnomeBackend::build_apply_config(&sample_state(), &plan).unwrap();
 
         assert_eq!(serial, 7);
         assert_eq!(logical_monitors.len(), 2);
@@ -922,7 +914,6 @@ mod tests {
 
     #[test]
     fn build_apply_config_groups_mirrored_outputs_into_one_logical_monitor() {
-        let backend = GnomeBackend;
         let plan = LayoutPlan::new(HashMap::from([
             ("eDP-1".to_string(), {
                 let mut output = OutputState::new("eDP-1");
@@ -939,7 +930,8 @@ mod tests {
             }),
         ]));
 
-        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
+        let (_, logical_monitors, _) =
+            GnomeBackend::build_apply_config(&sample_state(), &plan).unwrap();
 
         assert_eq!(logical_monitors.len(), 1);
         assert_eq!(logical_monitors[0].5.len(), 2);
@@ -949,7 +941,6 @@ mod tests {
 
     #[test]
     fn build_apply_config_rejects_mixed_mode_mirroring() {
-        let backend = GnomeBackend;
         let plan = LayoutPlan::new(HashMap::from([
             ("DP-1".to_string(), {
                 let mut output = OutputState::new("DP-1");
@@ -966,8 +957,7 @@ mod tests {
             }),
         ]));
 
-        let err = backend
-            .build_apply_config(&sample_state(), &plan)
+        let err = GnomeBackend::build_apply_config(&sample_state(), &plan)
             .expect_err("mixed-mode mirroring should be rejected");
 
         assert!(err
@@ -977,7 +967,6 @@ mod tests {
 
     #[test]
     fn build_apply_config_groups_same_origin_outputs_into_one_logical_monitor() {
-        let backend = GnomeBackend;
         let plan = LayoutPlan::new(HashMap::from([
             ("eDP-1".to_string(), {
                 let mut output = OutputState::new("eDP-1");
@@ -995,7 +984,8 @@ mod tests {
             }),
         ]));
 
-        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
+        let (_, logical_monitors, _) =
+            GnomeBackend::build_apply_config(&sample_state(), &plan).unwrap();
 
         assert_eq!(logical_monitors.len(), 1);
         assert_eq!(logical_monitors[0].5.len(), 2);
@@ -1005,7 +995,6 @@ mod tests {
 
     #[test]
     fn build_apply_config_uses_target_mode_scales_for_logical_monitor() {
-        let backend = GnomeBackend;
         let plan = LayoutPlan::new(HashMap::from([("eDP-1".to_string(), {
             let mut output = OutputState::new("eDP-1");
             output.enabled = true;
@@ -1014,10 +1003,11 @@ mod tests {
             output
         })]));
 
-        let (_, logical_monitors, _) = backend.build_apply_config(&sample_state(), &plan).unwrap();
+        let (_, logical_monitors, _) =
+            GnomeBackend::build_apply_config(&sample_state(), &plan).unwrap();
 
         assert_eq!(logical_monitors.len(), 1);
-        assert_eq!(logical_monitors[0].2, 1.0);
+        assert!((logical_monitors[0].2 - 1.0).abs() < 0.000_1);
         assert_eq!(logical_monitors[0].5[0].1, "1280x720@60");
     }
 
@@ -1031,7 +1021,6 @@ mod tests {
 
     #[test]
     fn export_topology_marks_secondary_monitors_as_mirrored() {
-        let backend = GnomeBackend;
         let mut mirrored_state = sample_state();
         mirrored_state.logical_monitors = vec![LogicalMonitorConfig {
             position: Position::new(0, 0),
@@ -1041,7 +1030,7 @@ mod tests {
             connectors: vec!["eDP-1".to_string(), "DP-1".to_string()],
         }];
 
-        let topology = backend.export_topology(&mirrored_state);
+        let topology = GnomeBackend::export_topology(&mirrored_state);
 
         assert_eq!(topology.outputs["eDP-1"].mirror_target, None);
         assert_eq!(

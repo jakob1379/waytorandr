@@ -2,8 +2,9 @@ use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use waytorandr_backend_loader::connect_backend;
-use waytorandr_core::runtime;
-use waytorandr_core::store::{ProfileStore, StateStore};
+use waytorandr_core::state::StateStore;
+use waytorandr_core::store::ProfileStore;
+use waytorandr_core::workflow;
 
 mod daemon;
 
@@ -18,23 +19,28 @@ fn main() -> Result<()> {
 
     let backend = connect_backend()?;
     let capabilities = backend.capabilities();
-    let store = ProfileStore::new()?;
-    let state_store = StateStore::new()?;
+    let store = ProfileStore::bootstrap()?;
+    let state_store = StateStore::bootstrap()?;
     let mut watcher = backend.watch_outputs()?;
 
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    runtime::record_daemon_started(&mut state, &capabilities.backend_name);
-    state_store.save_state(&state)?;
+    workflow::record_daemon_started_in_store(&state_store, capabilities.backend)?;
 
-    daemon::handle_topology_change(backend.as_ref(), &store, &state_store)?;
+    if let Err(err) = daemon::enforce_topology_policy(backend.as_ref(), &store, &state_store) {
+        tracing::error!(error = %err, "failed to apply matching profile");
+    }
 
-    tracing::info!(backend = %capabilities.backend_name, "daemon ready, watching outputs");
+    tracing::info!(backend = %capabilities.backend, "daemon ready, watching outputs");
 
     loop {
         if let Some(topology) = watcher.poll_changed()? {
-            let topology = state_store.normalize_topology_and_persist(&topology)?;
+            workflow::persist_observed_runtime_state(
+                &state_store,
+                Some(capabilities.backend),
+                &topology,
+            )?;
             tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
-            if let Err(err) = daemon::handle_topology_change(backend.as_ref(), &store, &state_store)
+            if let Err(err) =
+                daemon::enforce_topology_policy(backend.as_ref(), &store, &state_store)
             {
                 tracing::error!(error = %err, "failed to apply matching profile");
             }
@@ -44,16 +50,17 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use waytorandr_core::store::State;
+    use waytorandr_core::state::State;
 
     #[test]
     fn record_daemon_start_marks_backend_and_enablement() {
         let mut state = State::default();
-
-        runtime::record_daemon_started(&mut state, "wlroots");
+        state.record_daemon_started(waytorandr_core::model::BackendKind::Wlroots);
 
         assert!(state.daemon_enabled);
-        assert_eq!(state.backend.as_deref(), Some("wlroots"));
+        assert_eq!(
+            state.backend,
+            Some(waytorandr_core::model::BackendKind::Wlroots)
+        );
     }
 }

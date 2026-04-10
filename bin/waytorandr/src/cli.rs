@@ -7,12 +7,13 @@ use crate::completion::{complete_saved_profiles, complete_set_targets};
 #[command(name = "waytorandr")]
 #[command(about = "Wayland-native display profile manager")]
 #[command(long_about = "Save, set, and switch Wayland display layouts.")]
+#[command(version)]
 #[command(subcommand_required = true)]
 #[command(arg_required_else_help = true)]
 #[command(
     after_long_help = "Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples."
 )]
-pub(crate) struct Cli {
+pub struct Cli {
     #[arg(
         long = "json",
         global = true,
@@ -25,12 +26,12 @@ pub(crate) struct Cli {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum Commands {
+pub enum Commands {
     #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
     #[command(after_long_help = "Virtual configurations:
   off        Disable external outputs and keep built-in panels on when present
-  common     Clone all connected outputs at the largest common resolution
-  largest    Mirror all connected outputs using each output's largest mode when supported
+  common     Clone all connected outputs at the largest common resolution (not native mirroring)
+  largest    Clone all connected outputs at the same origin using each output's largest mode
   mirror     Mirror all connected outputs on backends with native mirroring support
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
@@ -47,7 +48,7 @@ Examples:
   waytorandr set mirror --dry-run
   waytorandr set vertical --reverse --dry-run
 
-When a backend cannot support `mirror` or `largest`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
+When a backend cannot support `mirror`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
     Set(SetArgs),
 
     #[command(about = "Save the current compositor layout as a profile")]
@@ -83,6 +84,9 @@ Use `--all` to show every saved profile across all setups, grouped by setup fing
     #[command(about = "Show detected outputs and current geometry")]
     Detected,
 
+    #[command(about = "Show the waytorandr version")]
+    Version,
+
     #[command(about = "Manage the waytorandrd user service")]
     #[command(after_long_help = "Examples:
   waytorandr service install
@@ -93,13 +97,13 @@ Use `--all` to show every saved profile across all setups, grouped by setup fing
 }
 
 #[derive(Args)]
-pub(crate) struct ServiceArgs {
+pub struct ServiceArgs {
     #[command(subcommand)]
     pub(crate) command: ServiceCommands,
 }
 
 #[derive(Subcommand, Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ServiceCommands {
+pub enum ServiceCommands {
     #[command(about = "Install the waytorandrd user service")]
     Install,
 
@@ -123,7 +127,7 @@ pub(crate) enum ServiceCommands {
 }
 
 #[derive(Args)]
-pub(crate) struct SetArgs {
+pub struct SetArgs {
     #[arg(
         value_name = "profile",
         help = "Saved profile or virtual configuration; omit to set setup default or best match",
@@ -162,7 +166,7 @@ pub(crate) struct SetArgs {
 }
 
 #[derive(Args)]
-pub(crate) struct SaveArgs {
+pub struct SaveArgs {
     #[arg(
         value_name = "profile",
         default_value = "default",
@@ -186,7 +190,7 @@ pub(crate) struct SaveArgs {
 }
 
 #[derive(Args)]
-pub(crate) struct RemoveArgs {
+pub struct RemoveArgs {
     #[arg(
         value_name = "profile",
         help = "Profile name to remove",
@@ -203,7 +207,7 @@ pub(crate) struct RemoveArgs {
 }
 
 #[derive(Args)]
-pub(crate) struct MutatingArgs {
+pub struct MutatingArgs {
     #[arg(
         short = 'n',
         long = "dry-run",
@@ -213,7 +217,7 @@ pub(crate) struct MutatingArgs {
 }
 
 #[derive(Args)]
-pub(crate) struct ListArgs {
+pub struct ListArgs {
     #[arg(
         short = 'a',
         long = "all",
@@ -225,6 +229,7 @@ pub(crate) struct ListArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
     use clap::CommandFactory;
     use clap::Parser;
 
@@ -243,5 +248,21 @@ mod tests {
     fn global_json_flag_parses_after_subcommand() {
         let cli = Cli::parse_from(["waytorandr", "list", "--json"]);
         assert!(cli.json);
+    }
+
+    #[test]
+    fn version_subcommand_parses() {
+        let cli = Cli::parse_from(["waytorandr", "version"]);
+        assert!(matches!(cli.command, Commands::Version));
+    }
+
+    #[test]
+    fn version_flag_is_supported() {
+        let err = Cli::try_parse_from(["waytorandr", "--version"])
+            .err()
+            .expect("--version should trigger clap version output");
+
+        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+        assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")));
     }
 }

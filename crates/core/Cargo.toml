@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "Core library for waytorandr"
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["wayland", "display", "profiles", "randr", "monitor"]
+categories = ["command-line-utilities", "config"]
 
 [dependencies]
 toml.workspace = true

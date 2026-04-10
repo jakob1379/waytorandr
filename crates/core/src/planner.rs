@@ -1,19 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::model::{identities_match, Mode, OutputState, Position, Topology};
+use crate::model::{Mode, OutputState, Position, Topology, VirtualPreset};
 use crate::profile::Profile;
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct LayoutPlan {
     pub outputs: HashMap<String, OutputState>,
-    pub preset_used: Option<String>,
+    pub preset_used: Option<VirtualPreset>,
 }
 
 #[derive(Debug)]
 pub enum PlanError {
-    UnsupportedPreset(String),
     MissingOutput(String),
     InvalidConfiguration(String),
 }
@@ -21,9 +20,8 @@ pub enum PlanError {
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlanError::UnsupportedPreset(p) => write!(f, "Unsupported preset: {}", p),
-            PlanError::MissingOutput(o) => write!(f, "Missing output: {}", o),
-            PlanError::InvalidConfiguration(s) => write!(f, "Invalid configuration: {}", s),
+            PlanError::MissingOutput(o) => write!(f, "Missing output: {o}"),
+            PlanError::InvalidConfiguration(s) => write!(f, "Invalid configuration: {s}"),
         }
     }
 }
@@ -33,6 +31,7 @@ impl std::error::Error for PlanError {}
 pub struct Planner;
 
 impl LayoutPlan {
+    #[must_use]
     pub fn new(outputs: HashMap<String, OutputState>) -> Self {
         Self {
             outputs,
@@ -40,13 +39,18 @@ impl LayoutPlan {
         }
     }
 
-    pub fn with_preset_used(mut self, preset_used: impl Into<String>) -> Self {
-        self.preset_used = Some(preset_used.into());
+    #[must_use]
+    pub fn with_preset_used(mut self, preset_used: VirtualPreset) -> Self {
+        self.preset_used = Some(preset_used);
         self
     }
 }
 
 impl Planner {
+    /// Build a layout plan from a matched profile.
+    ///
+    /// # Errors
+    /// Returns `MissingOutput` when a matched topology name cannot be resolved.
     pub fn plan_from_profile(
         profile: &Profile,
         matched_outputs: &HashMap<String, String>,
@@ -54,17 +58,9 @@ impl Planner {
     ) -> Result<LayoutPlan, PlanError> {
         let mut planned: HashMap<String, OutputState> = HashMap::new();
 
-        for topo_name in matched_outputs.keys() {
+        for (topo_name, layout_name) in matched_outputs {
             let output_state = topology.outputs.get(topo_name);
-            let config = profile.layout.get(topo_name).cloned().or_else(|| {
-                output_state.and_then(|state| {
-                    profile
-                        .layout
-                        .values()
-                        .find(|config| identities_match(&config.state.identity, &state.identity))
-                        .cloned()
-                })
-            });
+            let config = profile.layout.get(layout_name).cloned();
 
             let state = match (config, output_state) {
                 (Some(mut cfg), Some(output)) => {
@@ -85,20 +81,24 @@ impl Planner {
         })
     }
 
+    /// Build a layout plan from a named preset.
+    ///
+    /// # Errors
+    /// Returns `InvalidConfiguration` when the topology cannot satisfy the preset.
     pub fn plan_from_preset(
-        preset: &str,
+        preset: VirtualPreset,
         topology: &Topology,
         primary_hint: Option<&str>,
     ) -> Result<LayoutPlan, PlanError> {
         match preset {
-            "off" => Self::plan_off(topology),
-            "horizontal" | "vertical" | "horizontal-reverse" | "vertical-reverse" => {
-                Self::plan_linear(topology, preset, primary_hint)
-            }
-            "common" => Self::plan_common(topology),
-            "largest" | "common-largest" => Self::plan_largest(topology, primary_hint),
-            "mirror" => Self::plan_mirror(topology, primary_hint),
-            _ => Err(PlanError::UnsupportedPreset(preset.to_string())),
+            VirtualPreset::Off => Self::plan_off(topology),
+            VirtualPreset::Horizontal
+            | VirtualPreset::HorizontalReverse
+            | VirtualPreset::Vertical
+            | VirtualPreset::VerticalReverse => Self::plan_linear(topology, preset, primary_hint),
+            VirtualPreset::Common => Self::plan_common(topology),
+            VirtualPreset::Largest => Self::plan_largest(topology, primary_hint),
+            VirtualPreset::Mirror => Self::plan_mirror(topology, primary_hint),
         }
     }
 
@@ -125,17 +125,20 @@ impl Planner {
 
         Ok(LayoutPlan {
             outputs,
-            preset_used: Some("off".to_string()),
+            preset_used: Some(VirtualPreset::Off),
         })
     }
 
     fn plan_linear(
         topology: &Topology,
-        preset: &str,
+        preset: VirtualPreset,
         primary_hint: Option<&str>,
     ) -> Result<LayoutPlan, PlanError> {
-        let reverse = preset.ends_with("-reverse");
-        let base_preset = preset.trim_end_matches("-reverse");
+        let reverse = preset.is_reverse();
+        let is_horizontal = matches!(
+            preset,
+            VirtualPreset::Horizontal | VirtualPreset::HorizontalReverse
+        );
 
         let mut outputs = available_outputs(topology);
         if outputs.is_empty() {
@@ -154,10 +157,9 @@ impl Planner {
             outputs.reverse();
         }
 
-        let is_horizontal = base_preset == "horizontal";
         let max_width = outputs
             .iter()
-            .filter_map(|(_, state)| state.mode.map(|mode| mode.width as i32))
+            .filter_map(|(_, state)| state.mode.and_then(|mode| i32::try_from(mode.width).ok()))
             .max()
             .unwrap_or(0);
         let mut x = 0i32;
@@ -168,15 +170,17 @@ impl Planner {
             let position_x = if is_horizontal {
                 x
             } else {
-                let width = state.mode.map(|mode| mode.width as i32).unwrap_or(0);
+                let width = state
+                    .mode
+                    .map_or(0, |mode| i32::try_from(mode.width).unwrap_or(i32::MAX));
                 (max_width - width) / 2
             };
             state.position = Position { x: position_x, y };
             if let Some(mode) = &state.mode {
                 if is_horizontal {
-                    x += mode.width as i32;
+                    x += i32::try_from(mode.width).unwrap_or(i32::MAX);
                 } else {
-                    y += mode.height as i32;
+                    y += i32::try_from(mode.height).unwrap_or(i32::MAX);
                 }
             }
             state.mirror_target = None;
@@ -184,7 +188,7 @@ impl Planner {
 
         Ok(LayoutPlan {
             outputs: outputs.into_iter().collect(),
-            preset_used: Some(preset.to_string()),
+            preset_used: Some(preset),
         })
     }
 
@@ -208,41 +212,31 @@ impl Planner {
 
         Ok(LayoutPlan {
             outputs: planned,
-            preset_used: Some("common".to_string()),
+            preset_used: Some(VirtualPreset::Common),
         })
     }
 
     fn plan_largest(
         topology: &Topology,
-        primary_hint: Option<&str>,
+        _primary_hint: Option<&str>,
     ) -> Result<LayoutPlan, PlanError> {
-        let mut outputs = available_outputs(topology);
-        if outputs.is_empty() {
-            return Err(PlanError::InvalidConfiguration(
-                "No outputs available for largest layout".to_string(),
-            ));
-        }
-
-        let root_idx = largest_root_index(&outputs, primary_hint)?;
-        outputs.rotate_left(root_idx);
-        let root_name = outputs[0].0.clone();
+        let outputs = available_outputs(topology);
+        outputs.first().ok_or_else(|| {
+            PlanError::InvalidConfiguration("No outputs available for largest layout".to_string())
+        })?;
 
         let mut planned = HashMap::new();
         for (name, mut state) in outputs {
             state.enabled = true;
             state.mode = Some(best_mode(&state)?);
             state.position = Position { x: 0, y: 0 };
-            state.mirror_target = if name == root_name {
-                None
-            } else {
-                Some(root_name.clone())
-            };
+            state.mirror_target = None;
             planned.insert(name, state);
         }
 
         Ok(LayoutPlan {
             outputs: planned,
-            preset_used: Some("largest".to_string()),
+            preset_used: Some(VirtualPreset::Largest),
         })
     }
 
@@ -288,7 +282,7 @@ impl Planner {
 
         Ok(LayoutPlan {
             outputs: planned,
-            preset_used: Some("mirror".to_string()),
+            preset_used: Some(VirtualPreset::Mirror),
         })
     }
 }
@@ -302,6 +296,10 @@ fn available_outputs(topology: &Topology) -> Vec<(String, OutputState)> {
         .collect();
     outputs.sort_by(|a, b| a.0.cmp(&b.0));
     outputs
+}
+
+fn mode_area(mode: Mode) -> u64 {
+    u64::from(mode.width) * u64::from(mode.height)
 }
 
 fn output_modes(state: &OutputState) -> Vec<Mode> {
@@ -323,52 +321,22 @@ fn shared_modes(outputs: &[(String, OutputState)]) -> Vec<Mode> {
     }
 
     let mut modes: Vec<Mode> = shared.unwrap_or_default().into_iter().collect();
-    modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
+    modes.sort_by_key(|mode| (mode_area(*mode), mode.refresh));
     modes
 }
 
 fn common_mode(outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
     shared_modes(outputs)
         .into_iter()
-        .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
+        .max_by_key(|mode| (mode_area(*mode), mode.refresh))
         .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))
 }
 
 fn best_mode(state: &OutputState) -> Result<Mode, PlanError> {
     output_modes(state)
         .into_iter()
-        .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
+        .max_by_key(|mode| (mode_area(*mode), mode.refresh))
         .ok_or_else(|| PlanError::InvalidConfiguration("No mode found for output".to_string()))
-}
-
-fn largest_root_index(
-    outputs: &[(String, OutputState)],
-    primary_hint: Option<&str>,
-) -> Result<usize, PlanError> {
-    if outputs.is_empty() {
-        return Err(PlanError::InvalidConfiguration(
-            "No outputs available for largest layout".to_string(),
-        ));
-    }
-
-    if let Some(primary) = primary_hint {
-        if let Some(idx) = outputs.iter().position(|(name, _)| name == primary) {
-            return Ok(idx);
-        }
-    }
-
-    outputs
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, (_, state))| {
-            best_mode(state)
-                .map(|mode| (mode.width * mode.height, mode.refresh))
-                .ok()
-        })
-        .map(|(idx, _)| idx)
-        .ok_or_else(|| {
-            PlanError::InvalidConfiguration("No outputs available for largest layout".to_string())
-        })
 }
 
 fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result<Mode, PlanError> {
@@ -378,7 +346,7 @@ fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result
         .values()
         .filter(|state| state.enabled && !state.identity.is_ignored && !state.identity.is_virtual)
         .filter_map(|state| state.mode)
-        .min_by_key(|mode| (mode.width * mode.height, mode.refresh));
+        .min_by_key(|mode| (mode_area(*mode), mode.refresh));
 
     if shared.is_empty() {
         return Err(PlanError::InvalidConfiguration(
@@ -395,7 +363,7 @@ fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result
             .iter()
             .copied()
             .filter(|mode| mode.width <= active_floor.width && mode.height <= active_floor.height)
-            .max_by_key(|mode| (mode.width * mode.height, mode.refresh))
+            .max_by_key(|mode| (mode_area(*mode), mode.refresh))
         {
             return Ok(closest_not_larger);
         }
@@ -403,7 +371,7 @@ fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result
 
     shared
         .into_iter()
-        .min_by_key(|mode| (mode.width * mode.height, mode.refresh))
+        .min_by_key(|mode| (mode_area(*mode), mode.refresh))
         .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))
 }
 
@@ -428,7 +396,8 @@ fn is_internal_output(state: &OutputState) -> bool {
         || description.contains("internal display")
 }
 
-pub fn detect_preset(topology: &Topology) -> Option<String> {
+#[must_use]
+pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     let enabled: Vec<_> = topology
         .outputs
         .values()
@@ -448,13 +417,13 @@ pub fn detect_preset(topology: &Topology) -> Option<String> {
     let same_x = positions.iter().all(|(x, _)| *x == positions[0].0);
 
     if same_y && !same_x {
-        return Some("horizontal".to_string());
+        return Some(VirtualPreset::Horizontal);
     }
     if same_x && !same_y {
-        return Some("vertical".to_string());
+        return Some(VirtualPreset::Vertical);
     }
     if enabled.iter().any(|state| state.mirror_target.is_some()) {
-        return Some("mirror".to_string());
+        return Some(VirtualPreset::Mirror);
     }
 
     None
@@ -463,8 +432,8 @@ pub fn detect_preset(topology: &Topology) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Mode, OutputIdentity, OutputState, Position, Transform};
-    use crate::profile::{OutputConfig, OutputMatcher, Profile};
+    use crate::model::{Mode, OutputIdentity, OutputState, Position, Transform, VirtualPreset};
+    use crate::profile::{Hooks, OutputConfig, OutputMatcher, Profile};
 
     fn output(connector: &str, width: u32, height: u32) -> OutputState {
         let mut state = OutputState::new(connector);
@@ -489,7 +458,8 @@ mod tests {
             ]),
         };
 
-        let plan = Planner::plan_from_preset("horizontal-reverse", &topology, None).unwrap();
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::HorizontalReverse, &topology, None).unwrap();
         assert_eq!(plan.outputs["B"].position.x, 0);
         assert_eq!(plan.outputs["A"].position.x, 200);
     }
@@ -505,7 +475,7 @@ mod tests {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
         };
 
-        let plan = Planner::plan_from_preset("common", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Common, &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(0, 0));
         assert!(plan.outputs["A"].enabled);
@@ -515,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn largest_uses_each_outputs_best_mode_and_native_mirroring() {
+    fn largest_overlaps_outputs_at_each_outputs_best_mode() {
         let mut a = output("A", 1920, 1080);
         a.available_modes = vec![Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)];
         let mut b = output("B", 2560, 1440);
@@ -524,27 +494,12 @@ mod tests {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
         };
 
-        let plan = Planner::plan_from_preset("largest", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Largest, &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["A"].mode, Some(Mode::new(1920, 1080, 60)));
         assert_eq!(plan.outputs["B"].mode, Some(Mode::new(2560, 1440, 60)));
-        assert_eq!(plan.outputs["B"].mirror_target, None);
-        assert_eq!(plan.outputs["A"].mirror_target.as_deref(), Some("B"));
-    }
-
-    #[test]
-    fn legacy_common_largest_alias_maps_to_largest_plan() {
-        let mut a = output("A", 1920, 1080);
-        a.available_modes = vec![Mode::new(1920, 1080, 60)];
-        let mut b = output("B", 2560, 1440);
-        b.available_modes = vec![Mode::new(2560, 1440, 60)];
-        let topology = Topology {
-            outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
-        };
-
-        let plan = Planner::plan_from_preset("common-largest", &topology, None).unwrap();
-        assert_eq!(plan.preset_used.as_deref(), Some("largest"));
+        assert_eq!(plan.outputs["A"].mirror_target, None);
         assert_eq!(plan.outputs["B"].mirror_target, None);
     }
 
@@ -558,7 +513,7 @@ mod tests {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
         };
 
-        let plan = Planner::plan_from_preset("mirror", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Mirror, &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["A"].mirror_target, None);
@@ -585,7 +540,7 @@ mod tests {
             outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
         };
 
-        let plan = Planner::plan_from_preset("mirror", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Mirror, &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].mode, Some(Mode::new(1920, 1080, 60)));
         assert_eq!(plan.outputs["B"].mode, Some(Mode::new(1920, 1080, 60)));
     }
@@ -603,7 +558,7 @@ mod tests {
             ]),
         };
 
-        let plan = Planner::plan_from_preset("off", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Off, &topology, None).unwrap();
         assert!(plan.outputs["eDP-1"].enabled);
         assert!(!plan.outputs["DP-1"].enabled);
     }
@@ -617,7 +572,7 @@ mod tests {
             ]),
         };
 
-        let plan = Planner::plan_from_preset("off", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Off, &topology, None).unwrap();
         assert!(!plan.outputs["A"].enabled);
         assert!(!plan.outputs["B"].enabled);
     }
@@ -633,7 +588,7 @@ mod tests {
             ]),
         };
 
-        let plan = Planner::plan_from_preset("horizontal", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Horizontal, &topology, None).unwrap();
         assert!(plan.outputs["A"].enabled);
         assert!(plan.outputs["B"].enabled);
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
@@ -650,7 +605,7 @@ mod tests {
             ]),
         };
 
-        let plan = Planner::plan_from_preset("vertical", &topology, None).unwrap();
+        let plan = Planner::plan_from_preset(VirtualPreset::Vertical, &topology, None).unwrap();
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(440, 1440));
         assert_eq!(plan.outputs["C"].position, Position::new(760, 2880));
@@ -712,11 +667,10 @@ mod tests {
                     preset: None,
                 },
             )]),
-            hooks: Default::default(),
-            options: Default::default(),
+            hooks: Hooks::default(),
         };
 
-        let matched_outputs = HashMap::from([("DP-1".to_string(), "DP-1".to_string())]);
+        let matched_outputs = HashMap::from([("DP-1".to_string(), "DP-4".to_string())]);
         let plan = Planner::plan_from_profile(&profile, &matched_outputs, &topology)
             .expect("plan should build");
 
@@ -726,5 +680,18 @@ mod tests {
             plan.outputs["DP-1"].identity.connector.as_deref(),
             Some("DP-1")
         );
+    }
+
+    #[test]
+    fn detect_preset_returns_virtual_preset() {
+        let mut a = output("A", 100, 50);
+        a.position = Position::new(0, 0);
+        let mut b = output("B", 200, 50);
+        b.position = Position::new(100, 0);
+        let topology = Topology {
+            outputs: HashMap::from([("A".to_string(), a), ("B".to_string(), b)]),
+        };
+
+        assert_eq!(detect_preset(&topology), Some(VirtualPreset::Horizontal));
     }
 }

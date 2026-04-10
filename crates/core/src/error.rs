@@ -1,5 +1,34 @@
 use std::path::PathBuf;
 
+use crate::model::BackendKind;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendConnectionError {
+    #[error("unknown backend label `{label}`")]
+    UnknownBackendLabel { label: String },
+    #[error("failed to initialize {backend} backend: {source}")]
+    Initialize {
+        backend: BackendKind,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error(
+        "failed to connect to a supported backend (WAYLAND_DISPLAY={wayland_display}, XDG_RUNTIME_DIR={xdg_runtime_dir}{display_hint}); attempts: {attempts:?}"
+    )]
+    NoSupportedBackend {
+        wayland_display: String,
+        xdg_runtime_dir: String,
+        display_hint: String,
+        attempts: Vec<BackendConnectionAttempt>,
+    },
+}
+
+#[derive(Debug)]
+pub struct BackendConnectionAttempt {
+    pub backend: BackendKind,
+    pub error: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("cannot determine config directory")]
@@ -67,6 +96,8 @@ pub enum CoreError {
         #[source]
         source: anyhow::Error,
     },
+    #[error(transparent)]
+    BackendConnection(#[from] BackendConnectionError),
     #[error("plan error")]
     Plan {
         #[from]

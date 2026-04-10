@@ -15,12 +15,14 @@ pub struct MatchResult {
 pub struct Matcher;
 
 impl Matcher {
+    #[must_use]
     pub fn match_profile(topology: &Topology, profiles: &[Profile]) -> Option<MatchResult> {
         Self::matching_profiles(topology, profiles)
             .into_iter()
             .next()
     }
 
+    #[must_use]
     pub fn matching_profiles(topology: &Topology, profiles: &[Profile]) -> Vec<MatchResult> {
         let mut candidates: Vec<MatchResult> = profiles
             .iter()
@@ -38,15 +40,16 @@ impl Matcher {
     }
 
     fn score_profile(topology: &Topology, profile: &Profile) -> Option<MatchResult> {
-        let mut matched_outputs: HashMap<String, String> = HashMap::new();
+        let mut matched_topology_outputs: HashMap<String, OutputState> = HashMap::new();
         let mut unmatched_required: Vec<String> = Vec::new();
         let mut total_score = 0u32;
 
         for matcher in &profile.match_rules {
-            let matched = Self::find_matching_output(&matcher.identity, topology, &matched_outputs);
+            let matched =
+                Self::find_matching_output(&matcher.identity, topology, &matched_topology_outputs);
             match matched {
                 Some((topo_name, output)) => {
-                    matched_outputs.insert(topo_name.clone(), topo_name.clone());
+                    matched_topology_outputs.insert(topo_name.clone(), output.clone());
                     total_score += Self::identity_match_score(&matcher.identity, &output.identity);
                 }
                 None if matcher.required => {
@@ -63,16 +66,14 @@ impl Matcher {
         let topology_names: std::collections::HashSet<String> =
             topology.outputs.keys().cloned().collect();
         let matched_names: std::collections::HashSet<String> =
-            matched_outputs.values().cloned().collect();
+            matched_topology_outputs.keys().cloned().collect();
         let extra_outputs: Vec<String> = topology_names
             .difference(&matched_names)
             .filter(|name| {
-                let name: &String = name;
                 topology
                     .outputs
-                    .get(name)
-                    .map(|o| !o.identity.is_ignored && !o.identity.is_virtual)
-                    .unwrap_or(false)
+                    .get(*name)
+                    .is_some_and(|o| !o.identity.is_ignored && !o.identity.is_virtual)
             })
             .cloned()
             .collect();
@@ -80,6 +81,14 @@ impl Matcher {
         if profile.match_rules.is_empty() && !extra_outputs.is_empty() {
             return None;
         }
+
+        let matched_outputs: HashMap<String, String> = matched_topology_outputs
+            .into_iter()
+            .map(|(topo_name, output)| {
+                Self::find_matching_layout_entry(profile, &output.identity)
+                    .map(|layout_name| (topo_name, layout_name))
+            })
+            .collect::<Option<HashMap<_, _>>>()?;
 
         Some(MatchResult {
             profile: profile.clone(),
@@ -93,7 +102,7 @@ impl Matcher {
     fn find_matching_output(
         identity: &OutputIdentity,
         topology: &Topology,
-        already_matched: &HashMap<String, String>,
+        already_matched: &HashMap<String, OutputState>,
     ) -> Option<(String, OutputState)> {
         let mut best_match: Option<(String, OutputState, u8)> = None;
 
@@ -120,6 +129,15 @@ impl Matcher {
         best_match.map(|(name, state, _)| (name, state))
     }
 
+    fn find_matching_layout_entry(profile: &Profile, identity: &OutputIdentity) -> Option<String> {
+        profile
+            .layout
+            .iter()
+            .find(|(_, config)| identities_match(&config.state.identity, identity))
+            .map(|(name, _)| name.clone())
+    }
+
+    #[must_use]
     pub fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> bool {
         identities_match(query, candidate)
     }
@@ -164,7 +182,7 @@ impl Matcher {
 mod tests {
     use super::*;
     use crate::model::{Mode, Position, Transform};
-    use crate::profile::OutputMatcher;
+    use crate::profile::{Hooks, OutputMatcher};
 
     fn make_topology() -> Topology {
         let mut outputs = HashMap::new();
@@ -207,9 +225,14 @@ mod tests {
                 required: true,
                 position_hint: None,
             }],
-            layout: Default::default(),
-            hooks: Default::default(),
-            options: Default::default(),
+            layout: HashMap::from([(
+                "layout-1".to_string(),
+                crate::profile::OutputConfig {
+                    state: topo.outputs["DP-1"].clone(),
+                    preset: None,
+                },
+            )]),
+            hooks: Hooks::default(),
         };
 
         let result = Matcher::match_profile(&topo, &[profile]);
@@ -217,6 +240,10 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.profile.name, "test");
         assert!(result.unmatched_required.is_empty());
+        assert_eq!(
+            result.matched_outputs.get("DP-1").map(String::as_str),
+            Some("layout-1")
+        );
     }
 
     #[test]
@@ -233,9 +260,14 @@ mod tests {
                 required: true,
                 position_hint: None,
             }],
-            layout: Default::default(),
-            hooks: Default::default(),
-            options: Default::default(),
+            layout: HashMap::from([(
+                "layout-1".to_string(),
+                crate::profile::OutputConfig {
+                    state: topo.outputs["DP-1"].clone(),
+                    preset: None,
+                },
+            )]),
+            hooks: Hooks::default(),
         };
 
         let result = Matcher::match_profile(&topo, &[profile]);

@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 
+use super::output::write_json;
 use crate::cli::ServiceCommands;
 
 const UNIT_NAME: &str = "waytorandrd.service";
@@ -59,7 +60,7 @@ struct JsonServiceStatusResponse {
     load_state: Option<String>,
 }
 
-pub(crate) fn run(command: ServiceCommands, json: bool) -> Result<()> {
+pub(super) fn run(command: ServiceCommands, json: bool) -> Result<()> {
     match command {
         ServiceCommands::Install => cmd_install(json),
         ServiceCommands::Uninstall => cmd_uninstall(json),
@@ -87,7 +88,7 @@ fn cmd_install(json: bool) -> Result<()> {
     run_systemctl(&["enable", UNIT_NAME])?;
 
     if json {
-        return print_json(&JsonServiceActionResponse {
+        return write_json(&JsonServiceActionResponse {
             command: "service-install",
             unit: UNIT_NAME,
             installed: true,
@@ -98,9 +99,9 @@ fn cmd_install(json: bool) -> Result<()> {
         });
     }
 
-    println!("Installed user service '{}'", UNIT_NAME);
+    println!("Installed user service '{UNIT_NAME}'");
     println!("Unit file: {}", unit_path.display());
-    println!("Enabled for '{}'", INSTALL_TARGET);
+    println!("Enabled for '{INSTALL_TARGET}'");
     Ok(())
 }
 
@@ -114,7 +115,7 @@ fn cmd_uninstall(json: bool) -> Result<()> {
     }
 
     if json {
-        return print_json(&JsonServiceActionResponse {
+        return write_json(&JsonServiceActionResponse {
             command: "service-uninstall",
             unit: UNIT_NAME,
             installed: false,
@@ -126,9 +127,9 @@ fn cmd_uninstall(json: bool) -> Result<()> {
     }
 
     if was_installed {
-        println!("Uninstalled user service '{}'", UNIT_NAME);
+        println!("Uninstalled user service '{UNIT_NAME}'");
     } else {
-        println!("User service '{}' is not installed", UNIT_NAME);
+        println!("User service '{UNIT_NAME}' is not installed");
     }
     Ok(())
 }
@@ -138,14 +139,14 @@ fn cmd_systemctl(action: &'static str, json: bool) -> Result<()> {
     let status = read_status()?;
 
     if json {
-        return print_json(&JsonServiceActionResponse {
+        return write_json(&JsonServiceActionResponse {
             command: json_command_name(action),
             unit: UNIT_NAME,
             installed: status.installed,
             path: status.fragment_path.clone(),
             unit_file_state: status.unit_file_state.clone(),
             active_state: status.active_state.clone(),
-            sub_state: status.sub_state.clone(),
+            sub_state: status.sub_state,
         });
     }
 
@@ -157,7 +158,7 @@ fn cmd_systemctl(action: &'static str, json: bool) -> Result<()> {
 fn cmd_status(json: bool) -> Result<()> {
     let status = read_status()?;
     if json {
-        return print_json(&JsonServiceStatusResponse {
+        return write_json(&JsonServiceStatusResponse {
             command: "service-status",
             unit: status.unit,
             installed: status.installed,
@@ -199,10 +200,11 @@ fn unit_path() -> Result<PathBuf> {
 }
 
 fn daemon_binary_path() -> Result<PathBuf> {
-    resolve_daemon_binary_from_current_exe(std::env::current_exe()?)
+    let current_exe = std::env::current_exe()?;
+    resolve_daemon_binary_from_current_exe(current_exe.as_path())
 }
 
-fn resolve_daemon_binary_from_current_exe(current_exe: PathBuf) -> Result<PathBuf> {
+fn resolve_daemon_binary_from_current_exe(current_exe: &Path) -> Result<PathBuf> {
     let current_dir = current_exe
         .parent()
         .ok_or_else(|| anyhow!("unable to determine current binary directory"))?;
@@ -247,7 +249,7 @@ fn ensure_output_success(output: &Output, command: &str) -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let message = if !stderr.is_empty() { stderr } else { stdout };
+    let message = if stderr.is_empty() { stdout } else { stderr };
     if message.is_empty() {
         bail!("{command} failed with status {}", output.status);
     }
@@ -323,24 +325,24 @@ fn parse_systemctl_show(text: &str) -> ServiceStatus {
 }
 
 fn print_status_summary(status: &ServiceStatus) {
-    println!("Service: {}", status.unit);
+    println!("Service: {unit}", unit = status.unit);
     println!("Installed: {}", yes_no(status.installed));
     if let Some(state) = &status.unit_file_state {
-        println!("Enabled: {}", state);
+        println!("Enabled: {state}");
     }
     if let Some(active) = &status.active_state {
         if let Some(sub) = &status.sub_state {
-            println!("Active: {} ({})", active, sub);
+            println!("Active: {active} ({sub})");
         } else {
-            println!("Active: {}", active);
+            println!("Active: {active}");
         }
     }
     if let Some(path) = &status.fragment_path {
-        println!("Unit file: {}", path);
+        println!("Unit file: {path}");
     }
 }
 
-fn yes_no(value: bool) -> &'static str {
+const fn yes_no(value: bool) -> &'static str {
     if value {
         "yes"
     } else {
@@ -350,10 +352,9 @@ fn yes_no(value: bool) -> &'static str {
 
 fn capitalize(value: &str) -> String {
     let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 fn json_command_name(action: &str) -> &'static str {
@@ -363,11 +364,6 @@ fn json_command_name(action: &str) -> &'static str {
         "restart" => "service-restart",
         _ => "service",
     }
-}
-
-fn print_json<T: Serialize>(value: &T) -> Result<()> {
-    println!("{}", serde_json::to_string(value)?);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -401,7 +397,7 @@ mod tests {
 
     #[test]
     fn resolve_daemon_binary_requires_sibling_binary() {
-        let err = resolve_daemon_binary_from_current_exe(PathBuf::from("/tmp/waytorandr"))
+        let err = resolve_daemon_binary_from_current_exe(&PathBuf::from("/tmp/waytorandr"))
             .expect_err("missing sibling should fail");
 
         assert!(err

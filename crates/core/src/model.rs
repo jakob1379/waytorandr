@@ -1,6 +1,94 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendKind {
+    Gnome,
+    KScreen,
+    Wlroots,
+    Test,
+    #[default]
+    Unknown,
+}
+
+impl BackendKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gnome => "gnome",
+            Self::KScreen => "kscreen",
+            Self::Wlroots => "wlroots",
+            Self::Test => "test",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_native_mirror_backend(self) -> bool {
+        matches!(self, Self::Gnome | Self::KScreen)
+    }
+
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let lowered = name.trim().to_ascii_lowercase();
+        match lowered.as_str() {
+            "gnome" => Some(Self::Gnome),
+            "kscreen" => Some(Self::KScreen),
+            "wlroots" => Some(Self::Wlroots),
+            "test" => Some(Self::Test),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for BackendKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum VirtualPreset {
+    Off,
+    Common,
+    Largest,
+    Mirror,
+    Horizontal,
+    HorizontalReverse,
+    Vertical,
+    VerticalReverse,
+}
+
+impl VirtualPreset {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Common => "common",
+            Self::Largest => "largest",
+            Self::Mirror => "mirror",
+            Self::Horizontal => "horizontal",
+            Self::HorizontalReverse => "horizontal-reverse",
+            Self::Vertical => "vertical",
+            Self::VerticalReverse => "vertical-reverse",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_reverse(self) -> bool {
+        matches!(self, Self::HorizontalReverse | Self::VerticalReverse)
+    }
+}
+
+impl std::fmt::Display for VirtualPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Topology {
     pub outputs: HashMap<String, OutputState>,
@@ -23,23 +111,27 @@ impl Default for OutputState {
 }
 
 impl Topology {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn fingerprint(&self) -> String {
         let mut parts: Vec<String> = self
             .outputs
             .keys()
             .map(|k| {
                 let o = &self.outputs[k];
-                format!("{}:{}", k, if o.enabled { "on" } else { "off" })
+                let enabled = if o.enabled { "on" } else { "off" };
+                format!("{k}:{enabled}")
             })
             .collect();
         parts.sort();
         parts.join(";")
     }
 
+    #[must_use]
     pub fn setup_fingerprint(&self) -> String {
         let mut parts: Vec<String> = self
             .outputs
@@ -51,18 +143,16 @@ impl Topology {
         parts.join(";")
     }
 
+    #[must_use]
     pub fn state_fingerprint(&self) -> String {
         let mut parts: Vec<String> = self
             .outputs
             .iter()
             .map(|(name, output)| {
-                format!(
-                    "{}:{}:{}:{}",
-                    name,
-                    output.fingerprint(),
-                    output.position.x,
-                    output.position.y
-                )
+                let fingerprint = output.fingerprint();
+                let x = output.position.x;
+                let y = output.position.y;
+                format!("{name}:{fingerprint}:{x}:{y}")
             })
             .collect();
         parts.sort();
@@ -87,41 +177,42 @@ pub struct OutputState {
 }
 
 impl OutputState {
+    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         let mut state = Self::default();
         state.identity.connector = Some(name.into());
         state
     }
 
+    #[must_use]
     pub fn same_layout_as(&self, other: &Self) -> bool {
         self.enabled == other.enabled
             && self.mode == other.mode
             && self.position == other.position
-            && self.scale == other.scale
+            && self.scale.partial_cmp(&other.scale) == Some(std::cmp::Ordering::Equal)
             && self.transform == other.transform
             && self.mirror_target == other.mirror_target
     }
 
+    #[must_use]
     pub fn fingerprint(&self) -> String {
-        format!(
-            "{}:{}:{}x{}@{}:{}:{}",
-            self.identity.primary_key(),
-            if self.enabled { "on" } else { "off" },
-            self.mode
-                .as_ref()
-                .map(|m| m.width.to_string())
-                .unwrap_or_default(),
-            self.mode
-                .as_ref()
-                .map(|m| m.height.to_string())
-                .unwrap_or_default(),
-            self.mode
-                .as_ref()
-                .map(|m| m.refresh.to_string())
-                .unwrap_or_default(),
-            self.scale,
-            self.transform,
-        )
+        let key = self.identity.primary_key();
+        let enabled = if self.enabled { "on" } else { "off" };
+        let width = self
+            .mode
+            .as_ref()
+            .map_or_else(String::new, |m| m.width.to_string());
+        let height = self
+            .mode
+            .as_ref()
+            .map_or_else(String::new, |m| m.height.to_string());
+        let refresh = self
+            .mode
+            .as_ref()
+            .map_or_else(String::new, |m| m.refresh.to_string());
+        let scale = self.scale;
+        let transform = self.transform;
+        format!("{key}:{enabled}:{width}x{height}@{refresh}:{scale}:{transform}")
     }
 }
 
@@ -140,11 +231,13 @@ pub struct OutputIdentity {
     pub is_ignored: bool,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(v: &bool) -> bool {
     !*v
 }
 
 impl OutputIdentity {
+    #[must_use]
     pub fn new(connector: impl Into<String>) -> Self {
         Self {
             connector: Some(connector.into()),
@@ -152,9 +245,10 @@ impl OutputIdentity {
         }
     }
 
+    #[must_use]
     pub fn primary_key(&self) -> String {
         if let Some(hash) = &self.edid_hash {
-            return format!("edid:{}", hash);
+            return format!("edid:{hash}");
         }
         let parts: Vec<String> = [
             normalized_identity_value(self.make.as_deref()),
@@ -165,15 +259,17 @@ impl OutputIdentity {
         .flatten()
         .collect();
         if !parts.is_empty() {
-            return format!("id:{}", parts.join(":"));
+            let joined = parts.join(":");
+            return format!("id:{joined}");
         }
         if let Some(conn) = normalized_identity_value(self.connector.as_deref()) {
-            return format!("conn:{}", conn);
+            return format!("conn:{conn}");
         }
-        normalized_identity_value(self.description.as_deref())
-            .unwrap_or_else(|| "unknown".to_string())
+        let description = normalized_identity_value(self.description.as_deref());
+        description.unwrap_or_else(|| "unknown".to_string())
     }
 
+    #[must_use]
     pub fn match_strength(&self) -> u8 {
         let mut strength = 0u8;
         if self.edid_hash.is_some() {
@@ -197,6 +293,7 @@ impl OutputIdentity {
         strength
     }
 
+    #[must_use]
     pub fn with_fallback(&self, fallback: &OutputIdentity) -> OutputIdentity {
         Self {
             edid_hash: self
@@ -220,6 +317,7 @@ impl OutputIdentity {
     }
 }
 
+#[must_use]
 pub fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> bool {
     if let Some(query_hash) = &query.edid_hash {
         if let Some(cand_hash) = &candidate.edid_hash {
@@ -284,6 +382,7 @@ pub fn identities_match(query: &OutputIdentity, candidate: &OutputIdentity) -> b
         && normalized_identity_value(query.description.as_deref()).is_none()
 }
 
+#[must_use]
 pub fn normalized_identity_value(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     if value.is_empty() {
@@ -312,6 +411,7 @@ pub struct Position {
 }
 
 impl Position {
+    #[must_use]
     pub fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
@@ -325,6 +425,7 @@ pub struct Mode {
 }
 
 impl Mode {
+    #[must_use]
     pub fn new(width: u32, height: u32, refresh: u32) -> Self {
         Self {
             width,
@@ -369,42 +470,47 @@ pub struct Scale(pub f64);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Capabilities {
-    pub can_enumerate: bool,
-    pub can_watch: bool,
     pub can_test: bool,
-    pub can_apply: bool,
-    pub supports_transforms: bool,
-    pub supports_scale: bool,
     pub supports_mirror: bool,
     pub supports_largest_mirror: bool,
-    pub supports_brightness: bool,
-    pub supports_gamma: bool,
-    pub backend_name: String,
+    pub backend: BackendKind,
 }
 
 impl Default for Capabilities {
     fn default() -> Self {
         Self {
-            can_enumerate: false,
-            can_watch: false,
             can_test: false,
-            can_apply: false,
-            supports_transforms: false,
-            supports_scale: false,
             supports_mirror: false,
             supports_largest_mirror: false,
-            supports_brightness: false,
-            supports_gamma: false,
-            backend_name: "unknown".to_string(),
+            backend: BackendKind::Unknown,
         }
     }
 }
 
 impl Capabilities {
-    pub fn named(backend_name: impl Into<String>) -> Self {
+    #[must_use]
+    pub fn new(backend: BackendKind) -> Self {
         Self {
-            backend_name: backend_name.into(),
+            backend,
             ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn backend_name(&self) -> &'static str {
+        self.backend.as_str()
+    }
+
+    #[must_use]
+    pub fn virtual_preset_unavailable_message(&self, preset: VirtualPreset) -> Option<String> {
+        match preset {
+            VirtualPreset::Mirror if !self.supports_mirror => Some(
+                format!(
+                    "native display mirroring is not available through the `{}` backend; use 'wl-mirror' for now on this compositor. See https://github.com/swaywm/wlr-protocols/issues/101",
+                    self.backend
+                ),
+            ),
+            _ => None,
         }
     }
 }
@@ -436,5 +542,28 @@ mod tests {
         right.backend_data = Some(serde_json::json!({"side": "right"}));
 
         assert!(left.same_layout_as(&right));
+    }
+
+    #[test]
+    fn virtual_preset_policy_is_centralized() {
+        let capabilities = Capabilities {
+            can_test: true,
+            supports_mirror: false,
+            supports_largest_mirror: false,
+            backend: BackendKind::Wlroots,
+        };
+
+        assert!(capabilities
+            .virtual_preset_unavailable_message(VirtualPreset::Mirror)
+            .is_some());
+        assert!(capabilities
+            .virtual_preset_unavailable_message(VirtualPreset::Largest)
+            .is_none());
+        assert!(capabilities
+            .virtual_preset_unavailable_message(VirtualPreset::Common)
+            .is_none());
+        assert!(capabilities
+            .virtual_preset_unavailable_message(VirtualPreset::Horizontal)
+            .is_none());
     }
 }

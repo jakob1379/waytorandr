@@ -1,23 +1,30 @@
 use anyhow::{bail, Result};
 
-pub(crate) fn resolve_virtual_preset(
+use waytorandr_core::model::VirtualPreset;
+
+pub fn resolve_virtual_preset(
     name: &str,
     reverse: bool,
     largest: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<VirtualPreset>> {
     let preset = match name {
-        "off" => Some(name.to_string()),
+        "off" => Some(VirtualPreset::Off),
         "common" => Some(if largest {
-            "largest".to_string()
+            VirtualPreset::Largest
         } else {
-            "common".to_string()
+            VirtualPreset::Common
         }),
-        "largest" => Some("largest".to_string()),
-        "mirror" => Some("mirror".to_string()),
-        "horizontal" | "vertical" => Some(if reverse {
-            format!("{}-reverse", name)
+        "largest" => Some(VirtualPreset::Largest),
+        "mirror" => Some(VirtualPreset::Mirror),
+        "horizontal" => Some(if reverse {
+            VirtualPreset::HorizontalReverse
         } else {
-            name.to_string()
+            VirtualPreset::Horizontal
+        }),
+        "vertical" => Some(if reverse {
+            VirtualPreset::VerticalReverse
+        } else {
+            VirtualPreset::Vertical
         }),
         _ => None,
     };
@@ -37,25 +44,7 @@ pub(crate) fn resolve_virtual_preset(
     Ok(preset)
 }
 
-pub(crate) fn mirror_unavailable_message(backend_name: &str) -> String {
-    format!(
-        "native display mirroring is not available through the `{backend_name}` backend; use 'wl-mirror' for now on this compositor. See https://github.com/swaywm/wlr-protocols/issues/101"
-    )
-}
-
-pub(crate) fn largest_unavailable_message(backend_name: &str) -> String {
-    format!(
-        "the `largest` layout is not available through the `{backend_name}` backend because it requires mirrored outputs to share one mode; use `waytorandr set mirror` or `waytorandr set common` instead"
-    )
-}
-
-pub(crate) fn common_unavailable_message(backend_name: &str) -> String {
-    format!(
-        "the `common` clone layout is not available through the `{backend_name}` backend on Niri because Niri automatically repositions overlapping outputs instead of keeping them at the same origin; use `wl-mirror` for true mirroring or `horizontal`/`vertical` for compositor-managed layouts"
-    )
-}
-
-pub(crate) fn virtual_completion_candidates(
+pub fn virtual_completion_candidates(
     current: &str,
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
@@ -70,58 +59,4 @@ pub(crate) fn virtual_completion_candidates(
     .filter(|(name, _)| name.starts_with(current))
     .map(|(name, tag)| clap_complete::engine::CompletionCandidate::new(name).tag(Some(tag.into())))
     .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolves_virtual_presets_with_flags() {
-        assert_eq!(
-            resolve_virtual_preset("common", false, true).unwrap(),
-            Some("largest".to_string())
-        );
-        assert_eq!(
-            resolve_virtual_preset("largest", false, false).unwrap(),
-            Some("largest".to_string())
-        );
-        assert_eq!(
-            resolve_virtual_preset("mirror", false, false).unwrap(),
-            Some("mirror".to_string())
-        );
-        assert_eq!(
-            resolve_virtual_preset("horizontal", true, false).unwrap(),
-            Some("horizontal-reverse".to_string())
-        );
-        assert_eq!(resolve_virtual_preset("desk", false, false).unwrap(), None);
-    }
-
-    #[test]
-    fn mirror_unavailable_guidance_mentions_backend_and_wl_mirror() {
-        let message = mirror_unavailable_message("wlroots");
-
-        assert!(message.contains("wlroots"));
-        assert!(message.contains("wl-mirror"));
-    }
-
-    #[test]
-    fn common_unavailable_guidance_mentions_niri_and_alternatives() {
-        let message = common_unavailable_message("wlroots");
-
-        assert!(message.contains("wlroots"));
-        assert!(message.contains("Niri"));
-        assert!(message.contains("wl-mirror"));
-        assert!(message.contains("horizontal"));
-        assert!(message.contains("vertical"));
-    }
-
-    #[test]
-    fn largest_unavailable_guidance_mentions_fallback_layouts() {
-        let message = largest_unavailable_message("gnome");
-
-        assert!(message.contains("gnome"));
-        assert!(message.contains("mirror"));
-        assert!(message.contains("common"));
-    }
 }
