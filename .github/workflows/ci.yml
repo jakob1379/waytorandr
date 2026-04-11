@@ -90,8 +90,28 @@ jobs:
       - name: Package release artifacts
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
+          set -euo pipefail
           mkdir -p dist
+
+          nix build .#deb --out-link result-deb
+          nix build .#apk --out-link result-apk
+          nix build .#aut --out-link result-aut
+          nix build .#aur --out-link result-aur
+          nix build .#rpm --out-link result-rpm
+          nix build .#flatpak --out-link result-flatpak
+          nix build .#snap --out-link result-snap
+
           tar -C result/bin -czf "dist/waytorandr-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" waytorandr waytorandrd
+
+          cp result-deb/*.deb dist/
+          cp result-apk/*.apk dist/
+          cp result-aut/*.pkg.tar.zst dist/
+          cp result-rpm/*.rpm dist/
+          cp result-flatpak/*.flatpak dist/
+          cp result-snap/*.snap dist/
+          cp result-aur/PKGBUILD "dist/waytorandr-${GITHUB_REF_NAME}-PKGBUILD"
+          cp result-aur/.SRCINFO "dist/waytorandr-${GITHUB_REF_NAME}.SRCINFO"
+
           sha256sum dist/* > dist/SHA256SUMS
 
       - name: Upload release artifacts

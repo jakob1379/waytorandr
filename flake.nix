@@ -102,13 +102,6 @@
           if isPortableHost
           then pkgs.pkgsCross.musl64.stdenv.cc.cc.libgcc
           else null;
-        appImageRuntime =
-          if !isPortableHost
-          then null
-          else pkgs.fetchurl {
-            url = "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64";
-            hash = "sha256-okGdzkdWg5WuecAf+ppaNB3TOVgTUv8QTQc1J1Qxd+U=";
-          };
         mkBundledPortableRoot =
           {
             name,
@@ -155,20 +148,6 @@
             interpreterPath = "/snap/waytorandr/current/lib/waytorandr/ld-musl-x86_64.so.1";
             runtimeLibPath = "/snap/waytorandr/current/lib/waytorandr";
           };
-        appImagePortableRoot =
-          if !isPortableHost
-          then null
-          else pkgs.runCommand "waytorandr-appimage-root-${workspaceVersion}" { } ''
-            mkdir -p "$out/bin" "$out/lib/waytorandr"
-
-            cp ${portablePackage}/bin/waytorandr "$out/bin/waytorandr"
-            cp ${portablePackage}/bin/waytorandrd "$out/bin/waytorandrd"
-            cp ${portableMuslRoot}/lib/libc.so "$out/lib/waytorandr/libc.so"
-            cp ${portableMuslRoot}/lib/libc.so "$out/lib/waytorandr/ld-musl-x86_64.so.1"
-            cp ${portableLibgccRoot}/x86_64-unknown-linux-musl/lib/libgcc_s.so.1 "$out/lib/waytorandr/libgcc_s.so.1"
-            chmod 0755 "$out/bin/waytorandr" "$out/bin/waytorandrd" "$out/lib/waytorandr/libc.so" "$out/lib/waytorandr/ld-musl-x86_64.so.1"
-            chmod 0644 "$out/lib/waytorandr/libgcc_s.so.1"
-          '';
         mkNfpmPackage =
           {
             format,
@@ -395,59 +374,6 @@
 
             mksquashfs "$snap_root" "$out/waytorandr_${workspaceVersion}_amd64.snap" -all-root -noappend -quiet
           '';
-        appImagePackage =
-          if !isPortableHost
-          then null
-          else pkgs.runCommand "waytorandr-appimage-${workspaceVersion}" {
-            nativeBuildInputs = with pkgs; [ file squashfsTools ];
-          } ''
-            appdir="$TMPDIR/waytorandr.AppDir"
-            rootfs="$TMPDIR/waytorandr.squashfs"
-            mkdir -p "$appdir/usr/bin" "$appdir/usr/lib/waytorandr" "$appdir/usr/share/doc/waytorandr" "$out"
-
-            cp ${appImagePortableRoot}/bin/waytorandr "$appdir/usr/bin/waytorandr"
-            cp ${appImagePortableRoot}/bin/waytorandrd "$appdir/usr/bin/waytorandrd"
-            cp ${appImagePortableRoot}/lib/waytorandr/ld-musl-x86_64.so.1 "$appdir/usr/lib/waytorandr/ld-musl-x86_64.so.1"
-            cp ${appImagePortableRoot}/lib/waytorandr/libc.so "$appdir/usr/lib/waytorandr/libc.so"
-            cp ${appImagePortableRoot}/lib/waytorandr/libgcc_s.so.1 "$appdir/usr/lib/waytorandr/libgcc_s.so.1"
-            cp ${./README.md} "$appdir/usr/share/doc/waytorandr/README.md"
-            cp ${./LICENSE} "$appdir/usr/share/doc/waytorandr/LICENSE"
-            chmod 0755 "$appdir/usr/bin/waytorandr" "$appdir/usr/bin/waytorandrd" "$appdir/usr/lib/waytorandr/ld-musl-x86_64.so.1" "$appdir/usr/lib/waytorandr/libc.so"
-            chmod 0644 "$appdir/usr/lib/waytorandr/libgcc_s.so.1" "$appdir/usr/share/doc/waytorandr/README.md" "$appdir/usr/share/doc/waytorandr/LICENSE"
-
-            cat > "$appdir/AppRun" <<'EOF'
-            #!/bin/sh
-            appdir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-            export PATH="$appdir/usr/bin:$PATH"
-            exec "$appdir/usr/lib/waytorandr/ld-musl-x86_64.so.1" --library-path "$appdir/usr/lib/waytorandr" "$appdir/usr/bin/waytorandr" "$@"
-            EOF
-            chmod 0755 "$appdir/AppRun"
-
-            cat > "$appdir/waytorandr.desktop" <<EOF
-            [Desktop Entry]
-            Type=Application
-            Name=waytorandr
-            Exec=waytorandr
-            Icon=waytorandr
-            Categories=System;Utility;
-            Terminal=true
-            Comment=${workspaceDescription}
-            EOF
-
-            cat > "$appdir/waytorandr.svg" <<'EOF'
-            <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-              <rect width="128" height="128" rx="24" fill="#1f4b99"/>
-              <path d="M24 38h80v52H24z" fill="#f3f5f7"/>
-              <path d="M24 82h80v8H24z" fill="#5b6470"/>
-              <path d="M37 51h20l7 18 7-18h20l-13 26H50z" fill="#1f4b99"/>
-            </svg>
-            EOF
-            ln -s waytorandr.svg "$appdir/.DirIcon"
-
-            mksquashfs "$appdir" "$rootfs" -root-owned -noappend -quiet
-            cat ${appImageRuntime} "$rootfs" > "$out/waytorandr-${workspaceVersion}-x86_64.AppImage"
-            chmod 0755 "$out/waytorandr-${workspaceVersion}-x86_64.AppImage"
-          '';
         linuxPortablePackages = lib.optionalAttrs isPortableHost {
           portable = portablePackage;
           aut = autPackage;
@@ -459,7 +385,6 @@
           pkgbuild = aurPackage;
           flatpak = flatpakPackage;
           snap = snapPackage;
-          appimage = appImagePackage;
         };
       in
       {

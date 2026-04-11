@@ -49,7 +49,6 @@ nix build .#apk
 nix build .#aut       # Arch Linux package alias
 nix build .#aur       # AUR-ready PKGBUILD and .SRCINFO
 nix build .#rpm
-nix build .#appimage
 nix build .#flatpak
 nix build .#snap
 ```
