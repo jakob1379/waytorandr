@@ -47,6 +47,9 @@ Build distro-oriented release artifacts on `x86_64-linux`:
 nix build .#deb
 nix build .#apk
 nix build .#aut       # Arch Linux package alias
+nix build .#aur       # AUR-ready PKGBUILD and .SRCINFO
+nix build .#rpm
+nix build .#appimage
 nix build .#flatpak
 nix build .#snap
 ```
