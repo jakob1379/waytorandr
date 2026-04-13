@@ -1,12 +1,11 @@
-self:
-{
+self: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     getExe'
     literalExpression
     mkEnableOption
@@ -17,8 +16,7 @@ let
 
   cfg = config.services.waytorandr;
   defaultPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.waytorandr;
-in
-{
+in {
   options.services.waytorandr = {
     enable = mkEnableOption "waytorandr and its automatic waytorandrd daemon";
 
@@ -37,7 +35,7 @@ in
 
     environment = mkOption {
       type = with types; attrsOf str;
-      default = { };
+      default = {};
       description = ''
         Environment variables passed to the `waytorandrd` user service.
 
@@ -69,16 +67,16 @@ in
       (lib.hm.assertions.assertPlatform "services.waytorandr" pkgs lib.platforms.linux)
     ];
 
-    home.packages = [ cfg.package ];
+    home.packages = [cfg.package];
 
     systemd.user.services.waytorandrd = {
       Unit = {
         Description = "Wayland display profile daemon";
         Documentation = "https://github.com/jsg/waytorandr";
         ConditionEnvironment = "WAYLAND_DISPLAY";
-        PartOf = [ cfg.systemdTarget ];
-        Requires = [ cfg.systemdTarget ];
-        After = [ cfg.systemdTarget ];
+        PartOf = [cfg.systemdTarget];
+        Requires = [cfg.systemdTarget];
+        After = [cfg.systemdTarget];
       };
 
       Service = {
@@ -90,7 +88,7 @@ in
       };
 
       Install = {
-        WantedBy = [ cfg.systemdTarget ];
+        WantedBy = [cfg.systemdTarget];
       };
     };
   };

@@ -8,6 +8,9 @@
 
 ## Normal Development Loop
 
+- List shortcuts: `nix develop -c just`
+- Format everything: `nix develop -c just fmt`
+- Lint everything: `nix develop -c just lint`
 - Format: `nix develop -c cargo fmt --all`
 - Lint: `nix develop -c cargo clippy --all-targets --all-features`
 - Test the full workspace: `nix develop -c cargo test -q`

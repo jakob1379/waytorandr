@@ -8,18 +8,22 @@
     };
   };
 
-  outputs = { self, nixpkgs, utils, rust-overlay }:
-    let
-      workspace = import ./nix/workspace.nix { inherit self; };
-      homeModule = import ./nix/home-manager/waytorandr.nix { inherit self; };
-    in
-    utils.lib.eachDefaultSystem (system:
-      let
+  outputs = {
+    self,
+    nixpkgs,
+    utils,
+    rust-overlay,
+  }: let
+    workspace = import ./nix/workspace.nix {inherit self;};
+    homeModule = import ./nix/home-manager/waytorandr.nix {inherit self;};
+  in
+    utils.lib.eachDefaultSystem (
+      system: let
         perSystem = import ./nix/per-system.nix {
           inherit self nixpkgs rust-overlay system workspace;
         };
       in
-      perSystem
+        perSystem
     )
     // {
       homeModules = {
