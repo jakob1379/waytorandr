@@ -4,17 +4,16 @@
   rust-overlay,
   system,
   workspace,
-}:
-
-let
-  overlays = [ rust-overlay.overlays.default ];
-  pkgs = import nixpkgs { inherit system overlays; };
+}: let
+  overlays = [rust-overlay.overlays.default];
+  pkgs = import nixpkgs {inherit system overlays;};
   context = import ./package-context.nix {
     inherit self pkgs system workspace;
   };
   packages = import ./release-packages.nix {
     inherit pkgs workspace;
-    inherit (context)
+    inherit
+      (context)
       distroPortableRoot
       flatpakPortableRoot
       isPortableHost
@@ -26,15 +25,16 @@ let
   };
   devShell = import ./dev-shell.nix {
     inherit pkgs;
-    inherit (context)
+    inherit
+      (context)
       devShellBuildInputs
       devShellTools
       runtimeLibraries
       rust
       ;
   };
-in
-{
+in {
   inherit devShell;
-  packages = packages // { default = packages.waytorandr; };
+  formatter = pkgs.alejandra;
+  packages = packages // {default = packages.waytorandr;};
 }
