@@ -6,6 +6,7 @@ let
   isPortableHost = system == "x86_64-linux";
 
   devShellTools = with pkgs; [
+    just
     rust
     cargo
     rustfmt
