@@ -85,7 +85,15 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@v8
 
       - name: Build package
-        run: nix build
+        run: |
+          set -euo pipefail
+
+          if [ -n "${ACT:-}" ]; then
+            export CARGO_BUILD_JOBS=1
+            nix build --option sandbox false --max-jobs 1 --cores 1
+          else
+            nix build
+          fi
 
       - name: Package release artifacts
         if: startsWith(github.ref, 'refs/tags/v')
