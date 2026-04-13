@@ -1,7 +1,10 @@
-{ self, pkgs, system, workspace }:
-
-let
-  lib = pkgs.lib;
+{
+  self,
+  pkgs,
+  system,
+  workspace,
+}: let
+  inherit (pkgs) lib;
   rust = pkgs.rust-bin.stable.latest.default;
   isPortableHost = system == "x86_64-linux";
 
@@ -11,6 +14,11 @@ let
     cargo
     rustfmt
     clippy
+    alejandra
+    deadnix
+    statix
+    shellcheck
+    shfmt
     clang
     hyperfine
     lld
@@ -22,50 +30,52 @@ let
     wayland
   ];
 
-  packageNativeBuildInputs = with pkgs; [ pkg-config clang lld ];
+  packageNativeBuildInputs = with pkgs; [pkg-config clang lld];
 
-  packageBuildInputs = with pkgs; [
-    wayland-protocols
-    wlroots
-    libxkbcommon.dev
-  ] ++ runtimeLibraries;
+  packageBuildInputs = with pkgs;
+    [
+      wayland-protocols
+      wlroots
+      libxkbcommon.dev
+    ]
+    ++ runtimeLibraries;
 
-  devShellBuildInputs = with pkgs; [
-    systemd.dev
-    libdrm.dev
-  ] ++ packageBuildInputs;
+  devShellBuildInputs = with pkgs;
+    [
+      systemd.dev
+      libdrm.dev
+    ]
+    ++ packageBuildInputs;
 
   commonMeta = with lib; {
-    description = workspace.description;
-    homepage = workspace.homepage;
+    inherit (workspace) description homepage;
     license = licenses.mit;
     platforms = platforms.linux;
   };
 
-  mkWaytorandrPackage =
-    {
-      pname ? "waytorandr",
-      rustPlatform ? pkgs.rustPlatform,
-      stdenv ? pkgs.stdenv,
-      nativeBuildInputs ? packageNativeBuildInputs,
-      buildInputs ? packageBuildInputs,
-      cargoBuildTarget ? null,
-    }:
+  mkWaytorandrPackage = {
+    pname ? "waytorandr",
+    rustPlatform ? pkgs.rustPlatform,
+    stdenv ? pkgs.stdenv,
+    nativeBuildInputs ? packageNativeBuildInputs,
+    buildInputs ? packageBuildInputs,
+    cargoBuildTarget ? null,
+  }:
     rustPlatform.buildRustPackage ({
-      inherit pname stdenv nativeBuildInputs buildInputs;
-      version = workspace.version;
-      src = self;
+        inherit pname stdenv nativeBuildInputs buildInputs;
+        inherit (workspace) version;
+        src = self;
 
-      cargoLock.lockFile = self + /Cargo.lock;
-      doCheck = false;
+        cargoLock.lockFile = self + /Cargo.lock;
+        doCheck = false;
 
-      meta = commonMeta;
-    }
-    // lib.optionalAttrs (cargoBuildTarget != null) {
-      CARGO_BUILD_TARGET = cargoBuildTarget;
-    });
+        meta = commonMeta;
+      }
+      // lib.optionalAttrs (cargoBuildTarget != null) {
+        CARGO_BUILD_TARGET = cargoBuildTarget;
+      });
 
-  waytorandrPackage = mkWaytorandrPackage { };
+  waytorandrPackage = mkWaytorandrPackage {};
 
   portableTarget =
     if isPortableHost
@@ -75,14 +85,14 @@ let
   portablePackage =
     if !isPortableHost
     then null
-    else mkWaytorandrPackage {
-      pname = "waytorandr-portable";
-      rustPlatform = pkgs.pkgsCross.musl64.rustPlatform;
-      stdenv = pkgs.pkgsCross.musl64.stdenv;
-      nativeBuildInputs = with pkgs; [ pkg-config clang lld ];
-      buildInputs = [ ];
-      cargoBuildTarget = portableTarget;
-    };
+    else
+      mkWaytorandrPackage {
+        pname = "waytorandr-portable";
+        inherit (pkgs.pkgsCross.musl64) rustPlatform stdenv;
+        nativeBuildInputs = with pkgs; [pkg-config clang lld];
+        buildInputs = [];
+        cargoBuildTarget = portableTarget;
+      };
 
   portableMuslRoot =
     if isPortableHost
@@ -94,14 +104,13 @@ let
     then pkgs.pkgsCross.musl64.stdenv.cc.cc.libgcc
     else null;
 
-  mkBundledPortableRoot =
-    {
-      name,
-      interpreterPath,
-      runtimeLibPath,
-    }:
+  mkBundledPortableRoot = {
+    name,
+    interpreterPath,
+    runtimeLibPath,
+  }:
     pkgs.runCommand name {
-      nativeBuildInputs = [ pkgs.patchelf ];
+      nativeBuildInputs = [pkgs.patchelf];
     } ''
       mkdir -p "$out/bin" "$out/lib/waytorandr"
 
@@ -120,31 +129,33 @@ let
   distroPortableRoot =
     if !isPortableHost
     then null
-    else mkBundledPortableRoot {
-      name = "waytorandr-distro-root-${workspace.version}";
-      interpreterPath = "/usr/lib/waytorandr/ld-musl-x86_64.so.1";
-      runtimeLibPath = "/usr/lib/waytorandr";
-    };
+    else
+      mkBundledPortableRoot {
+        name = "waytorandr-distro-root-${workspace.version}";
+        interpreterPath = "/usr/lib/waytorandr/ld-musl-x86_64.so.1";
+        runtimeLibPath = "/usr/lib/waytorandr";
+      };
 
   flatpakPortableRoot =
     if !isPortableHost
     then null
-    else mkBundledPortableRoot {
-      name = "waytorandr-flatpak-root-${workspace.version}";
-      interpreterPath = "/app/lib/waytorandr/ld-musl-x86_64.so.1";
-      runtimeLibPath = "/app/lib/waytorandr";
-    };
+    else
+      mkBundledPortableRoot {
+        name = "waytorandr-flatpak-root-${workspace.version}";
+        interpreterPath = "/app/lib/waytorandr/ld-musl-x86_64.so.1";
+        runtimeLibPath = "/app/lib/waytorandr";
+      };
 
   snapPortableRoot =
     if !isPortableHost
     then null
-    else mkBundledPortableRoot {
-      name = "waytorandr-snap-root-${workspace.version}";
-      interpreterPath = "/snap/waytorandr/current/lib/waytorandr/ld-musl-x86_64.so.1";
-      runtimeLibPath = "/snap/waytorandr/current/lib/waytorandr";
-    };
-in
-{
+    else
+      mkBundledPortableRoot {
+        name = "waytorandr-snap-root-${workspace.version}";
+        interpreterPath = "/snap/waytorandr/current/lib/waytorandr/ld-musl-x86_64.so.1";
+        runtimeLibPath = "/snap/waytorandr/current/lib/waytorandr";
+      };
+in {
   inherit
     devShellBuildInputs
     devShellTools

@@ -216,8 +216,14 @@ fn exercise_virtual_workflows(
     let topology = env.backend_topology()?;
     assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 0));
     assert_eq!(topology.outputs["eDP-1"].position, Position::new(0, 0));
-    assert_eq!(topology.outputs["DP-1"].mode, Some(Mode::new(2560, 1440, 60)));
-    assert_eq!(topology.outputs["eDP-1"].mode, Some(Mode::new(1920, 1080, 60)));
+    assert_eq!(
+        topology.outputs["DP-1"].mode,
+        Some(Mode::new(2560, 1440, 60))
+    );
+    assert_eq!(
+        topology.outputs["eDP-1"].mode,
+        Some(Mode::new(1920, 1080, 60))
+    );
     assert!(topology
         .outputs
         .values()
@@ -228,8 +234,14 @@ fn exercise_virtual_workflows(
     let topology = env.backend_topology()?;
     assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 0));
     assert_eq!(topology.outputs["eDP-1"].position, Position::new(0, 0));
-    assert_eq!(topology.outputs["DP-1"].mode, Some(Mode::new(2560, 1440, 60)));
-    assert_eq!(topology.outputs["eDP-1"].mode, Some(Mode::new(1920, 1080, 60)));
+    assert_eq!(
+        topology.outputs["DP-1"].mode,
+        Some(Mode::new(2560, 1440, 60))
+    );
+    assert_eq!(
+        topology.outputs["eDP-1"].mode,
+        Some(Mode::new(1920, 1080, 60))
+    );
     assert!(topology
         .outputs
         .values()

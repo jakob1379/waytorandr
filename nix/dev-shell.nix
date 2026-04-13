@@ -5,7 +5,6 @@
   devShellTools,
   devShellBuildInputs,
 }:
-
 pkgs.mkShell {
   inherit rust;
 
