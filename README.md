@@ -41,6 +41,18 @@ nix build
 ./result/bin/waytorandr --help
 ```
 
+Build distro-oriented release artifacts on `x86_64-linux`:
+
+```bash
+nix build .#deb
+nix build .#apk
+nix build .#aut       # Arch Linux package alias
+nix build .#aur       # AUR-ready PKGBUILD and .SRCINFO
+nix build .#rpm
+nix build .#flatpak
+nix build .#snap
+```
+
 Inspect the current layout and save a profile:
 
 ```bash
