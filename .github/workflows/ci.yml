@@ -23,7 +23,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@v14
 
       - name: Enable Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@v8
+        uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -52,7 +52,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@v14
 
       - name: Enable Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@v8
+        uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -82,7 +82,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@v14
 
       - name: Enable Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@v8
+        uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Build package
         run: |
