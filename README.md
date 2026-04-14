@@ -13,7 +13,7 @@ It includes:
 
 - Save the current compositor layout as a named profile
 - Reapply a saved profile or a built-in virtual layout
-- Set a preferred default profile per hardware setup
+- Set a preferred default profile for each display fingerprint
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
 - Offer dynamic shell completion for saved profile names and `set` targets
@@ -97,12 +97,16 @@ reference and examples.
 
 > [!TIP]
 > Use `--json` on supported commands when you want stable machine-readable output.
+> `waytorandr service run` does not support `--json`.
+> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
 
 ## Daemon
 
-`waytorandrd` watches for topology changes and reapplies the configured default
-profile for the current setup, or the best matching saved profile when no setup
-default exists.
+`waytorandrd` watches for physical display changes such as dock, undock, and
+hotplug events. It does not react to compositor-only layout changes on an
+unchanged set of connected displays. When the physical setup changes, it
+reapplies the configured default profile for the current fingerprint, or the best
+matching saved profile when no default profile is set for that fingerprint.
 
 For non-Home-Manager setups, `waytorandr` can manage a user service directly:
 
