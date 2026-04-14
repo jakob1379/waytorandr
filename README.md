@@ -193,9 +193,9 @@ Reference:
 Use the Nix dev shell for local work:
 
 ```bash
-nix develop -c cargo fmt --all
-nix develop -c cargo test -q
-nix build
+nix develop -c prek install
+nix develop -c prek run --all-files
+nix develop -c just check
 ```
 
 More development details live in `DEVELOPMENT.md`.

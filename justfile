@@ -25,10 +25,13 @@ fmt-check-nix:
 fmt-check-shell:
     shfmt -d scripts
 
-lint: lint-rust lint-nix lint-shell
+lint: lint-rust lint-rust-dead-code lint-nix lint-shell
 
 lint-rust:
-    cargo clippy --all-targets --all-features
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+lint-rust-dead-code:
+    env RUSTFLAGS='-Ddead_code' cargo check --locked --workspace --all-targets
 
 lint-nix:
     deadnix .
@@ -38,7 +41,7 @@ lint-shell:
     shellcheck scripts/*.sh
 
 test:
-    cargo test -q
+    cargo test --locked --workspace -q
 
 test-cli:
     ./scripts/test-cli-integration.sh
