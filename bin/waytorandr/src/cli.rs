@@ -60,7 +60,7 @@ When a backend cannot support `mirror`, waytorandr prints backend-specific guida
   waytorandr save docked --dry-run
 
 If the profile name is omitted, `default` is used.
-Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the preferred default.")]
+Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this fingerprint.")]
     Save(SaveArgs),
 
     #[command(about = "Remove a saved profile")]
@@ -123,6 +123,9 @@ pub enum ServiceCommands {
     Status,
 
     #[command(about = "Run waytorandrd in the foreground")]
+    #[command(
+        help_template = "Run waytorandrd in the foreground\n\nUsage: {usage}\n\nThis command does not support --json.\n\nOptions:\n  -h, --help  Print help\n"
+    )]
     Run,
 }
 
@@ -145,7 +148,7 @@ pub struct SetArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Only with saved profiles: also set the profile as the default for this hardware setup"
+        help = "Only with saved profiles: also set the profile as the default profile for this fingerprint"
     )]
     pub(crate) make_default: bool,
 
@@ -177,7 +180,7 @@ pub struct SaveArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Also set the saved profile as the default profile"
+        help = "Also set the saved profile as the default profile for this fingerprint"
     )]
     pub(crate) make_default: bool,
 
@@ -229,8 +232,8 @@ pub struct ListArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::error::ErrorKind;
     use clap::CommandFactory;
+    use clap::error::ErrorKind;
     use clap::Parser;
 
     #[test]
@@ -264,5 +267,23 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::DisplayVersion);
         assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn service_run_help_hides_json_flag() {
+        let mut cli = Cli::command();
+        let service = cli
+            .find_subcommand_mut("service")
+            .expect("service subcommand");
+        let mut run = service
+            .find_subcommand_mut("run")
+            .expect("service run subcommand")
+            .clone();
+        let mut help = Vec::new();
+        run.write_long_help(&mut help).expect("write help");
+        let help = String::from_utf8(help).expect("utf8 help");
+
+        assert!(help.contains("does not support --json"));
+        assert!(!help.contains("Emit command output as JSON on stdout"));
     }
 }

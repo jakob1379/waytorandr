@@ -404,4 +404,13 @@ mod tests {
             .to_string()
             .contains("could not find a sibling 'waytorandrd' binary"));
     }
+
+    #[test]
+    fn run_rejects_json_output() {
+        let err = cmd_run(true).expect_err("json should be rejected for service run");
+
+        assert!(err
+            .to_string()
+            .contains("--json is not supported with `waytorandr service run`"));
+    }
 }

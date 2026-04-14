@@ -55,7 +55,7 @@ pub(super) fn cmd_save(
         println!("Would save profile '{name}':");
         print_plan_summary(&plan);
         if make_default {
-            println!("Would also set '{name}' as the default profile");
+            println!("Would also set '{name}' as the default profile for this fingerprint");
         }
         return Ok(());
     }
@@ -79,7 +79,7 @@ pub(super) fn cmd_save(
 
     println!("Saved profile '{name}'");
     if make_default {
-        println!("Set '{name}' as default profile");
+        println!("Set '{name}' as the default profile for this fingerprint");
     }
     Ok(())
 }
@@ -161,7 +161,8 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
                 command: "remove",
                 profile: name.to_string(),
                 dry_run: true,
-                removed: exists,
+                removed: None,
+                would_remove: Some(exists),
             });
         }
 
@@ -184,7 +185,8 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
             command: "remove",
             profile: name.to_string(),
             dry_run: false,
-            removed,
+            removed: Some(removed),
+            would_remove: None,
         });
     }
 

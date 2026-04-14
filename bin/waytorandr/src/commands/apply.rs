@@ -85,7 +85,10 @@ pub(super) struct JsonRemoveResponse {
     pub(super) command: &'static str,
     pub(super) profile: String,
     pub(super) dry_run: bool,
-    pub(super) removed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) removed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) would_remove: Option<bool>,
 }
 
 const fn is_false(value: &bool) -> bool {
@@ -320,7 +323,7 @@ pub(super) fn emit_action_outcome(
         }
         if outcome.default_set {
             println!(
-                "Would also set '{}' as default profile for this hardware setup",
+                "Would also set '{}' as the default profile for this fingerprint",
                 outcome.target
             );
         }
@@ -337,7 +340,10 @@ pub(super) fn emit_action_outcome(
     );
     print_plan_summary(&outcome.plan);
     if outcome.default_set {
-        println!("Set '{}' as default profile", outcome.target);
+        println!(
+            "Set '{}' as the default profile for this fingerprint",
+            outcome.target
+        );
     }
     Ok(())
 }

@@ -279,11 +279,13 @@ fn exercise_virtual_workflows(
 
 fn exercise_remove_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let remove_dry_run = env.run_json(["remove", "desk-alt", "--dry-run", "--json"])?;
-    assert_eq!(remove_dry_run["removed"], true);
+    assert_eq!(remove_dry_run["would_remove"], true);
+    assert_eq!(remove_dry_run.get("removed"), None);
     assert_saved_profiles(env, &["desk", "desk-alt"])?;
 
     let remove = env.run_json(["remove", "desk-alt", "--json"])?;
     assert_eq!(remove["removed"], true);
+    assert_eq!(remove.get("would_remove"), None);
     assert_saved_profiles(env, &["desk"])?;
 
     let list_text = env.run_text(["list", "--all"])?;
