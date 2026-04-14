@@ -39,7 +39,7 @@ pub trait Backend {
 }
 
 pub trait OutputWatcher {
-    /// Polls for output changes.
+    /// Polls for physical output changes.
     ///
     /// # Errors
     /// Returns an error if the backend watcher fails.
@@ -71,16 +71,16 @@ impl<B: Backend + ?Sized> Backend for &B {
 pub struct PollingOutputWatcher<B> {
     backend: B,
     interval: Duration,
-    last_fingerprint: Option<String>,
+    last_setup_fingerprint: Option<String>,
 }
 
 impl<B> PollingOutputWatcher<B> {
     #[must_use]
-    pub fn new(backend: B, interval: Duration, last_fingerprint: Option<String>) -> Self {
+    pub fn new(backend: B, interval: Duration, last_setup_fingerprint: Option<String>) -> Self {
         Self {
             backend,
             interval,
-            last_fingerprint,
+            last_setup_fingerprint,
         }
     }
 }
@@ -89,11 +89,11 @@ impl<B: Backend> OutputWatcher for PollingOutputWatcher<B> {
     fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
         thread::sleep(self.interval);
         let topology = self.backend.enumerate_outputs()?;
-        let fingerprint = topology.state_fingerprint();
-        if self.last_fingerprint.as_ref() == Some(&fingerprint) {
+        let setup_fingerprint = topology.setup_fingerprint();
+        if self.last_setup_fingerprint.as_ref() == Some(&setup_fingerprint) {
             return Ok(None);
         }
-        self.last_fingerprint = Some(fingerprint);
+        self.last_setup_fingerprint = Some(setup_fingerprint);
         Ok(Some(topology))
     }
 }
@@ -536,5 +536,98 @@ mod tests {
                 source: anyhow::anyhow!("not used in tests"),
             })
         }
+    }
+
+    #[derive(Clone)]
+    struct SequenceBackend {
+        states: Arc<Mutex<Vec<Topology>>>,
+    }
+
+    impl Backend for SequenceBackend {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::new(BackendKind::Test)
+        }
+
+        fn enumerate_outputs(&self) -> CoreResult<Topology> {
+            let mut states = self.states.lock().unwrap();
+            if states.len() > 1 {
+                Ok(states.remove(0))
+            } else {
+                Ok(states.first().cloned().unwrap_or_default())
+            }
+        }
+
+        fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
+            Err(CoreError::Backend {
+                source: anyhow::anyhow!("not used in tests"),
+            })
+        }
+
+        fn test(&self, _plan: &LayoutPlan) -> CoreResult<TestResult> {
+            Err(CoreError::Backend {
+                source: anyhow::anyhow!("not used in tests"),
+            })
+        }
+
+        fn apply(&self, _plan: &LayoutPlan) -> CoreResult<ApplyResult> {
+            Err(CoreError::Backend {
+                source: anyhow::anyhow!("not used in tests"),
+            })
+        }
+    }
+
+    fn topology_with_output(enabled: bool, x: i32) -> Topology {
+        let mut output = OutputState::new("DP-1");
+        output.enabled = enabled;
+        output.position.x = x;
+        Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output)]),
+        }
+    }
+
+    #[test]
+    fn polling_output_watcher_ignores_non_physical_layout_changes() {
+        let initial = topology_with_output(true, 0);
+        let moved = topology_with_output(true, 640);
+        let backend = SequenceBackend {
+            states: Arc::new(Mutex::new(vec![moved])),
+        };
+        let mut watcher = PollingOutputWatcher::new(
+            backend,
+            Duration::from_millis(0),
+            Some(initial.setup_fingerprint()),
+        );
+
+        let changed = watcher.poll_changed().unwrap();
+
+        assert!(changed.is_none());
+    }
+
+    #[test]
+    fn polling_output_watcher_reports_physical_setup_changes() {
+        let initial = topology_with_output(true, 0);
+        let mut changed_topology = Topology::default();
+        changed_topology.outputs.insert("DP-1".to_string(), {
+            let mut output = OutputState::new("DP-1");
+            output.enabled = true;
+            output
+        });
+        changed_topology.outputs.insert("HDMI-A-1".to_string(), {
+            let mut output = OutputState::new("HDMI-A-1");
+            output.enabled = true;
+            output
+        });
+        let backend = SequenceBackend {
+            states: Arc::new(Mutex::new(vec![changed_topology.clone()])),
+        };
+        let mut watcher = PollingOutputWatcher::new(
+            backend,
+            Duration::from_millis(0),
+            Some(initial.setup_fingerprint()),
+        );
+
+        let changed = watcher.poll_changed().unwrap();
+
+        assert_eq!(changed, Some(changed_topology));
     }
 }

@@ -153,7 +153,7 @@ impl Backend for KScreenBackend {
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.state_fingerprint();
+        let initial = self.enumerate_outputs()?.setup_fingerprint();
         Ok(Box::new(PollingOutputWatcher::new(
             self.clone(),
             POLL_INTERVAL,

@@ -167,7 +167,7 @@ impl Backend for WlrootsBackend {
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.state_fingerprint();
+        let initial = self.enumerate_outputs()?.setup_fingerprint();
         Ok(Box::new(PollingOutputWatcher::new(
             WlrootsBackend::connect()?,
             POLL_INTERVAL,
