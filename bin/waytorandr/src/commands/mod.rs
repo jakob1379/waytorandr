@@ -46,14 +46,16 @@ pub(crate) fn run() -> Result<()> {
             args.largest,
             output_mode,
         ),
-        Commands::Save(args) => {
-            write::cmd_save(&args.name, args.dry_run, args.make_default, output_mode)
-        }
+        Commands::Save(args) => write::cmd_save(
+            &args.name,
+            args.setup_name.as_deref(),
+            args.dry_run,
+            args.make_default,
+            output_mode,
+        ),
         Commands::Remove(args) => write::cmd_remove(&args.name, args.dry_run, output_mode),
         Commands::Cycle(args) => write::cmd_cycle(args.dry_run, output_mode),
-        Commands::List(args) => read::cmd_list(args.all, output_mode),
-        Commands::Current => read::cmd_current(output_mode),
-        Commands::Detected => read::cmd_detected(output_mode),
+        Commands::Status(args) => read::cmd_status(args.all, output_mode),
         Commands::Version => read::cmd_version(output_mode),
         Commands::Service(args) => service::run(args.command, cli.json),
     }

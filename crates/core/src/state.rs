@@ -19,6 +19,8 @@ pub struct State {
     #[serde(default, rename = "default_profile", skip_serializing)]
     legacy_default_profile: Option<String>,
     #[serde(default)]
+    pub setup_names: HashMap<String, String>,
+    #[serde(default)]
     pub known_outputs: HashMap<String, OutputIdentity>,
     #[serde(default)]
     pub remembered_setups: HashMap<String, Topology>,
@@ -70,6 +72,16 @@ impl State {
     pub fn set_default_profile_for_setup(&mut self, setup_fingerprint: &str, profile_name: &str) {
         self.default_profiles
             .insert(setup_fingerprint.to_string(), profile_name.to_string());
+    }
+
+    #[must_use]
+    pub fn setup_name_for_setup(&self, setup_fingerprint: &str) -> Option<&str> {
+        self.setup_names.get(setup_fingerprint).map(String::as_str)
+    }
+
+    pub fn set_setup_name_for_setup(&mut self, setup_fingerprint: &str, setup_name: &str) {
+        self.setup_names
+            .insert(setup_fingerprint.to_string(), setup_name.to_string());
     }
 
     pub fn record_daemon_started(&mut self, backend: BackendKind) {
@@ -192,5 +204,6 @@ daemon_enabled = false
         .expect("legacy state should load");
 
         assert_eq!(state.backend, Some(BackendKind::Wlroots));
+        assert!(state.setup_names.is_empty());
     }
 }

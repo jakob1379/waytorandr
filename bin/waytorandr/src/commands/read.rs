@@ -4,7 +4,6 @@ use serde::Serialize;
 use super::output::{print_topology, write_json};
 use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
-use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::model::Topology;
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::{ProfileStore, StoredProfile};
@@ -20,33 +19,26 @@ struct JsonListProfile {
 
 #[derive(Serialize)]
 struct JsonListSetup {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_name: Option<String>,
     fingerprint: String,
     is_current: bool,
     profiles: Vec<JsonListProfile>,
 }
 
 #[derive(Serialize)]
-struct JsonListResponse {
-    command: &'static str,
-    show_all: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_setup: Option<String>,
-    setups: Vec<JsonListSetup>,
-}
-
-#[derive(Serialize)]
-struct JsonCurrentResponse {
+struct JsonStatusResponse {
     command: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
-}
-
-#[derive(Serialize)]
-struct JsonDetectedResponse {
-    command: &'static str,
+    show_all: bool,
+    has_saved_profiles: bool,
     fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_name: Option<String>,
     setup_fingerprint: String,
     outputs: Vec<JsonOutputEntry>,
+    setups: Vec<JsonListSetup>,
 }
 
 #[derive(Serialize)]
@@ -70,6 +62,7 @@ struct ListEntry {
 }
 
 struct ListSetupView {
+    setup_name: Option<String>,
     fingerprint: String,
     is_current: bool,
     profiles: Vec<ListProfileView>,
@@ -77,47 +70,70 @@ struct ListSetupView {
 
 struct ListView {
     show_all: bool,
-    current_setup: Option<String>,
     setups: Vec<ListSetupView>,
 }
 
-pub(super) fn cmd_list(show_all: bool, output_mode: OutputMode) -> Result<()> {
-    let store = ProfileStore::bootstrap()?;
+struct StatusView {
+    profile: Option<String>,
+    topology: Topology,
+    setup_name: Option<String>,
+    list: ListView,
+    has_saved_profiles: bool,
+}
 
+pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> {
+    let view = load_status_view(show_all)?;
+
+    if output_mode.is_json() {
+        return write_json(&JsonStatusResponse {
+            command: "status",
+            profile: view.profile.clone(),
+            show_all: view.list.show_all,
+            has_saved_profiles: view.has_saved_profiles,
+            fingerprint: view.topology.fingerprint(),
+            setup_name: view.setup_name.clone(),
+            setup_fingerprint: view.topology.setup_fingerprint(),
+            outputs: topology_outputs(&view.topology),
+            setups: json_list_setups(&view.list.setups),
+        });
+    }
+
+    println!(
+        "Current profile: {}",
+        view.profile.as_deref().unwrap_or("none")
+    );
+    if let Some(setup_name) = view.setup_name.as_deref() {
+        println!(
+            "Setup: {} (fingerprint: {})",
+            setup_name,
+            view.topology.setup_fingerprint()
+        );
+    } else {
+        println!("Setup fingerprint: {}", view.topology.setup_fingerprint());
+    }
+    print_topology("Detected outputs:", &view.topology);
+    print_profile_setups(&view.list, view.has_saved_profiles);
+
+    Ok(())
+}
+
+fn load_status_view(show_all: bool) -> Result<StatusView> {
+    let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let state = state_store.load_state()?.unwrap_or_default();
-    let profiles = store.list_with_known_outputs(&state.known_outputs)?;
-    let current_topology = Some(load_current_topology(&state_store)?);
-    let current_setup = current_topology.as_ref().map(Topology::setup_fingerprint);
-
-    if profiles.is_empty() {
-        if output_mode.is_json() {
-            return write_json(&JsonListResponse {
-                command: "list",
-                show_all,
-                current_setup,
-                setups: Vec::new(),
-            });
-        }
-        println!("No profiles saved");
-        return Ok(());
-    }
-
+    let topology = load_current_topology(&state_store)?;
+    let current_setup = topology.setup_fingerprint();
+    let current_setup_name = state
+        .setup_name_for_setup(&current_setup)
+        .map(str::to_string);
+    let profiles = store.profiles_with_known_outputs(&state.known_outputs)?;
+    let all_profiles = store.list_with_known_outputs(&state.known_outputs)?;
+    let has_saved_profiles = !all_profiles.is_empty();
     let listed_profiles: Vec<StoredProfile> = if show_all {
-        profiles
-    } else if let Some(setup) = current_setup.as_deref() {
-        store.list_for_setup_with_known_outputs(setup, &state.known_outputs)?
+        all_profiles
     } else {
-        Vec::new()
+        store.list_for_setup_with_known_outputs(&current_setup, &state.known_outputs)?
     };
-
-    if listed_profiles.is_empty() && !output_mode.is_json() {
-        println!("No profiles match the current topology");
-        if let Some(setup) = &current_setup {
-            println!("Current fingerprint: {setup}");
-        }
-        return Ok(());
-    }
 
     let entries: Vec<ListEntry> = listed_profiles
         .into_iter()
@@ -127,103 +143,15 @@ pub(super) fn cmd_list(show_all: bool, output_mode: OutputMode) -> Result<()> {
             priority: stored.profile.priority,
         })
         .collect();
-    let view = build_list_view(&entries, show_all, current_setup, &state);
+    let list = build_list_view(&entries, show_all, Some(current_setup), &state);
 
-    if output_mode.is_json() {
-        return write_json(&JsonListResponse {
-            command: "list",
-            show_all: view.show_all,
-            current_setup: view.current_setup,
-            setups: view
-                .setups
-                .into_iter()
-                .map(|setup| JsonListSetup {
-                    fingerprint: setup.fingerprint,
-                    is_current: setup.is_current,
-                    profiles: setup
-                        .profiles
-                        .into_iter()
-                        .map(|profile| JsonListProfile {
-                            name: profile.name,
-                            priority: profile.priority,
-                            is_default: profile.is_default,
-                            is_active: profile.is_active,
-                        })
-                        .collect(),
-                })
-                .collect(),
-        });
-    }
-
-    println!("Profiles:");
-    for setup in view.setups {
-        println!(
-            "  fingerprint: {}{}",
-            setup.fingerprint,
-            if setup.is_current { " [current]" } else { "" }
-        );
-        for profile in setup.profiles {
-            let mut flags = Vec::new();
-            if profile.is_default {
-                flags.push("default");
-            }
-            if profile.is_active {
-                flags.push("active");
-            }
-
-            println!(
-                "    {} (priority: {}){}",
-                profile.name,
-                profile.priority,
-                if flags.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", flags.join(", "))
-                }
-            );
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) fn cmd_current(output_mode: OutputMode) -> Result<()> {
-    let store = ProfileStore::bootstrap()?;
-    let state_store = StateStore::bootstrap()?;
-    let state = state_store.load_state()?.unwrap_or_default();
-    let profiles = store.profiles_with_known_outputs(&state.known_outputs)?;
-    let backend = connect_backend()?;
-    let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
-
-    let current = workflow::current_profile_name(&topology, &profiles, &state);
-    if output_mode.is_json() {
-        return write_json(&JsonCurrentResponse {
-            command: "current",
-            profile: current,
-        });
-    }
-
-    println!(
-        "Current profile: {}",
-        current.unwrap_or_else(|| "none".to_string())
-    );
-
-    Ok(())
-}
-
-pub(super) fn cmd_detected(output_mode: OutputMode) -> Result<()> {
-    let state_store = StateStore::bootstrap()?;
-    let topology = load_current_topology(&state_store)?;
-    if output_mode.is_json() {
-        return write_json(&JsonDetectedResponse {
-            command: "detected",
-            fingerprint: topology.fingerprint(),
-            setup_fingerprint: topology.setup_fingerprint(),
-            outputs: topology_outputs(&topology),
-        });
-    }
-    print_topology("Detected outputs:", &topology);
-    Ok(())
+    Ok(StatusView {
+        profile: workflow::current_profile_name(&topology, &profiles, &state),
+        topology,
+        setup_name: current_setup_name,
+        list,
+        has_saved_profiles,
+    })
 }
 
 pub(super) fn cmd_version(output_mode: OutputMode) -> Result<()> {
@@ -253,6 +181,7 @@ fn build_list_view(
         if current_fingerprint.as_deref() != Some(stored.setup_fingerprint.as_str()) {
             if let Some(fingerprint) = current_fingerprint.take() {
                 setups.push(ListSetupView {
+                    setup_name: state.setup_name_for_setup(&fingerprint).map(str::to_string),
                     is_current: current_setup.as_deref() == Some(fingerprint.as_str()),
                     fingerprint,
                     profiles: current_profiles,
@@ -273,16 +202,82 @@ fn build_list_view(
 
     if let Some(fingerprint) = current_fingerprint {
         setups.push(ListSetupView {
+            setup_name: state.setup_name_for_setup(&fingerprint).map(str::to_string),
             is_current: current_setup.as_deref() == Some(fingerprint.as_str()),
             fingerprint,
             profiles: current_profiles,
         });
     }
 
-    ListView {
-        show_all,
-        current_setup,
-        setups,
+    ListView { show_all, setups }
+}
+
+fn json_list_setups(setups: &[ListSetupView]) -> Vec<JsonListSetup> {
+    setups
+        .iter()
+        .map(|setup| JsonListSetup {
+            setup_name: setup.setup_name.clone(),
+            fingerprint: setup.fingerprint.clone(),
+            is_current: setup.is_current,
+            profiles: setup
+                .profiles
+                .iter()
+                .map(|profile| JsonListProfile {
+                    name: profile.name.clone(),
+                    priority: profile.priority,
+                    is_default: profile.is_default,
+                    is_active: profile.is_active,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn print_profile_setups(view: &ListView, has_saved_profiles: bool) {
+    if view.setups.is_empty() {
+        if has_saved_profiles {
+            println!("Profiles: none for current setup");
+        } else {
+            println!("Profiles: none saved");
+        }
+        return;
+    }
+
+    println!("Profiles:");
+    for setup in &view.setups {
+        match setup.setup_name.as_deref() {
+            Some(setup_name) => println!(
+                "  setup: {} (fingerprint: {}){}",
+                setup_name,
+                setup.fingerprint,
+                if setup.is_current { " [current]" } else { "" }
+            ),
+            None => println!(
+                "  fingerprint: {}{}",
+                setup.fingerprint,
+                if setup.is_current { " [current]" } else { "" }
+            ),
+        }
+        for profile in &setup.profiles {
+            let mut flags = Vec::new();
+            if profile.is_default {
+                flags.push("default");
+            }
+            if profile.is_active {
+                flags.push("active");
+            }
+
+            println!(
+                "    {} (priority: {}){}",
+                profile.name,
+                profile.priority,
+                if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", flags.join(", "))
+                }
+            );
+        }
     }
 }
 
@@ -300,7 +295,10 @@ mod tests {
 
     #[test]
     fn build_list_view_groups_profiles_by_setup() {
-        let state = waytorandr_core::state::State::default();
+        let mut state = waytorandr_core::state::State::default();
+        state
+            .setup_names
+            .insert("setup-a".to_string(), "office".to_string());
         let listed_profiles = vec![
             ListEntry {
                 setup_fingerprint: "setup-a".to_string(),
@@ -323,6 +321,7 @@ mod tests {
 
         assert_eq!(view.setups.len(), 2);
         assert!(view.setups[0].is_current);
+        assert_eq!(view.setups[0].setup_name.as_deref(), Some("office"));
         assert_eq!(view.setups[0].profiles.len(), 2);
     }
 

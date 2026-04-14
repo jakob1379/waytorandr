@@ -17,6 +17,7 @@ use waytorandr_core::workflow;
 
 pub(super) fn cmd_save(
     name: &str,
+    setup_name: Option<&str>,
     dry_run: bool,
     make_default: bool,
     output_mode: OutputMode,
@@ -45,6 +46,7 @@ pub(super) fn cmd_save(
             return write_json(&JsonSaveResponse {
                 command: "save",
                 profile: name.to_string(),
+                setup_name: setup_name.map(str::to_string),
                 dry_run: true,
                 saved: false,
                 plan: Some(plan_outputs(&plan)),
@@ -54,8 +56,11 @@ pub(super) fn cmd_save(
 
         println!("Would save profile '{name}':");
         print_plan_summary(&plan);
+        if let Some(setup_name) = setup_name {
+            println!("Would also name this setup '{setup_name}'");
+        }
         if make_default {
-            println!("Would also set '{name}' as the default profile for this fingerprint");
+            println!("Would also set '{name}' as the default profile for this setup");
         }
         return Ok(());
     }
@@ -63,6 +68,9 @@ pub(super) fn cmd_save(
     let _topology = workflow::observed_topology_from_backend(backend.as_ref(), &state_store)?;
     let state = state_store.load_state()?.unwrap_or_default();
     store.save_with_known_outputs(&profile, &state.known_outputs)?;
+    if let Some(setup_name) = setup_name {
+        workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
+    }
     if make_default {
         set_default_profile_for_fingerprint(name, &setup_fingerprint)?;
     }
@@ -70,6 +78,7 @@ pub(super) fn cmd_save(
         return write_json(&JsonSaveResponse {
             command: "save",
             profile: name.to_string(),
+            setup_name: setup_name.map(str::to_string),
             dry_run: false,
             saved: true,
             plan: None,
@@ -78,8 +87,11 @@ pub(super) fn cmd_save(
     }
 
     println!("Saved profile '{name}'");
+    if let Some(setup_name) = setup_name {
+        println!("Named this setup '{setup_name}'");
+    }
     if make_default {
-        println!("Set '{name}' as the default profile for this fingerprint");
+        println!("Set '{name}' as the default profile for this setup");
     }
     Ok(())
 }

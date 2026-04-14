@@ -326,6 +326,22 @@ fn runtime_prefers_setup_default_over_matching_profile() -> Result<(), Box<dyn E
     Ok(())
 }
 
+#[test]
+fn setup_names_persist_per_setup_fingerprint() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let state_store = StateStore::bootstrap()?;
+        workflow::set_setup_name_for_setup_in_store(&state_store, "conn:DP-1", "office")?;
+
+        let state = state_store
+            .load_state()?
+            .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+        assert_eq!(state.setup_name_for_setup("conn:DP-1"), Some("office"));
+        Ok(())
+    })?;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct TestBackend {
     apply_calls: Arc<Mutex<usize>>,

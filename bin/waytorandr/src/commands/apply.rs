@@ -72,6 +72,8 @@ struct JsonActionResponse {
 pub(super) struct JsonSaveResponse {
     pub(super) command: &'static str,
     pub(super) profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) setup_name: Option<String>,
     pub(super) dry_run: bool,
     pub(super) saved: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -323,7 +325,7 @@ pub(super) fn emit_action_outcome(
         }
         if outcome.default_set {
             println!(
-                "Would also set '{}' as the default profile for this fingerprint",
+                "Would also set '{}' as the default profile for this setup",
                 outcome.target
             );
         }
@@ -341,7 +343,7 @@ pub(super) fn emit_action_outcome(
     print_plan_summary(&outcome.plan);
     if outcome.default_set {
         println!(
-            "Set '{}' as the default profile for this fingerprint",
+            "Set '{}' as the default profile for this setup",
             outcome.target
         );
     }

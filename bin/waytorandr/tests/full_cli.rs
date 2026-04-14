@@ -14,7 +14,7 @@ const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
 const SIMULATED_BACKENDS: [&str; 3] = ["wlroots", "kscreen", "gnome"];
 
 #[test]
-fn full_cli_detect_list_current_across_simulated_backends() -> Result<(), Box<dyn Error>> {
+fn full_cli_status_across_simulated_backends() -> Result<(), Box<dyn Error>> {
     println!(
         "simulated backends under test: {}",
         SIMULATED_BACKENDS.join(", ")
@@ -79,29 +79,58 @@ fn full_cli_remove_across_simulated_backends() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
-    let detected_text = env.run_text(["detected"])?;
-    assert!(detected_text.contains("Detected outputs:"));
-    assert!(detected_text.contains("DP-1"));
-    assert!(detected_text.contains("eDP-1"));
+#[test]
+fn status_defaults_to_current_setup_and_expands_with_all() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
 
-    let detected = env.run_json(["detected", "--json"])?;
-    assert_eq!(detected["command"], "detected");
+    env.write_backend_topology(&fixture_topology())?;
+    env.run_json(["save", "desk", "--json"])?;
+
+    env.write_backend_topology(&alternate_topology())?;
+    env.run_json(["save", "travel", "--json"])?;
+
+    let status = env.run_json(["status", "--json"])?;
+    let setups = status["setups"]
+        .as_array()
+        .ok_or_else(|| IoError::other("setups array"))?;
+    assert_eq!(setups.len(), 1);
     assert_eq!(
-        detected["setup_fingerprint"],
+        setups[0]["fingerprint"],
+        alternate_topology().setup_fingerprint()
+    );
+    assert_eq!(setups[0]["profiles"][0]["name"], "travel");
+
+    let all_status = env.run_json(["status", "--all", "--json"])?;
+    assert_eq!(all_status["show_all"], true);
+    assert_eq!(all_status["setups"].as_array().map(Vec::len), Some(2));
+
+    Ok(())
+}
+
+fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
+    let status_text = env.run_text(["status"])?;
+    assert!(status_text.contains("Current profile: none"));
+    assert!(status_text.contains("Setup fingerprint:"));
+    assert!(status_text.contains("Detected outputs:"));
+    assert!(status_text.contains("DP-1"));
+    assert!(status_text.contains("eDP-1"));
+    assert!(status_text.contains("Profiles: none saved"));
+
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["command"], "status");
+    assert_eq!(status["show_all"], false);
+    assert_eq!(status["has_saved_profiles"], false);
+    assert_eq!(
+        status["setup_fingerprint"],
         fixture_topology().setup_fingerprint()
     );
-    assert_eq!(detected["outputs"].as_array().map(Vec::len), Some(2));
-
-    let initial_list = env.run_json(["list", "--json"])?;
-    assert_eq!(initial_list["command"], "list");
-    assert!(initial_list["setups"]
+    assert!(status["setup_name"].is_null());
+    assert_eq!(status["fingerprint"], fixture_topology().fingerprint());
+    assert_eq!(status["outputs"].as_array().map(Vec::len), Some(2));
+    assert!(status["setups"]
         .as_array()
         .ok_or_else(|| IoError::other("setups array"))?
         .is_empty());
-
-    let initial_current = env.run_text(["current"])?;
-    assert!(initial_current.contains("Current profile: none"));
     assert!(!env.state_file_path().exists());
     Ok(())
 }
@@ -119,14 +148,27 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_saved_profiles(env, &[])?;
     assert!(!env.state_file_path().exists());
 
-    let save_desk = env.run_json(["save", "desk", "--default", "--json"])?;
+    let save_desk = env.run_json([
+        "save",
+        "desk",
+        "--default",
+        "--setup-name",
+        "office",
+        "--json",
+    ])?;
     assert_eq!(save_desk["saved"], true);
     assert_eq!(save_desk["default_set"], true);
+    assert_eq!(save_desk["setup_name"], "office");
 
     let save_alt = env.run_json(["save", "desk-alt", "--json"])?;
     assert_eq!(save_alt["saved"], true);
     assert_saved_profiles(env, &["desk", "desk-alt"])?;
     assert_default_and_active(env, Some("desk"), None)?;
+    assert_setup_name(
+        env,
+        fixture_topology().setup_fingerprint().as_str(),
+        Some("office"),
+    )?;
 
     let set_dry_run = env.run_json(["set", "desk-alt", "--dry-run", "--json"])?;
     assert_eq!(set_dry_run["command"], "set");
@@ -140,7 +182,7 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_eq!(set_make_default["target"], "desk-alt");
     assert_eq!(set_make_default["default_set"], true);
     assert_default_and_active(env, Some("desk-alt"), Some("desk-alt"))?;
-    assert_eq!(env.run_json(["current", "--json"])?["profile"], "desk-alt");
+    assert_eq!(env.run_json(["status", "--json"])?["profile"], "desk-alt");
 
     let cycle_dry_run = env.run_json(["cycle", "--dry-run", "--json"])?;
     assert_eq!(cycle_dry_run["command"], "cycle");
@@ -152,14 +194,18 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_eq!(cycled["command"], "cycle");
     assert_eq!(cycled["target"], "desk");
     assert_default_and_active(env, Some("desk-alt"), Some("desk"))?;
-    assert_eq!(env.run_json(["current", "--json"])?["profile"], "desk");
+    assert_eq!(env.run_json(["status", "--json"])?["profile"], "desk");
 
     let auto_set = env.run_json(["set", "--json"])?;
     assert_eq!(auto_set["command"], "set");
     assert_eq!(auto_set["selection"], "auto");
     assert_eq!(auto_set["target"], "desk-alt");
     assert_default_and_active(env, Some("desk-alt"), Some("desk-alt"))?;
-    assert_eq!(env.run_json(["current", "--json"])?["profile"], "desk-alt");
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["profile"], "desk-alt");
+    assert_eq!(status["setup_name"], "office");
+    assert_eq!(status["show_all"], false);
+    assert_eq!(status["setups"].as_array().map(Vec::len), Some(1));
     Ok(())
 }
 
@@ -288,9 +334,35 @@ fn exercise_remove_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>
     assert_eq!(remove.get("would_remove"), None);
     assert_saved_profiles(env, &["desk"])?;
 
-    let list_text = env.run_text(["list", "--all"])?;
-    assert!(list_text.contains("Profiles:"));
-    assert!(list_text.contains("desk"));
+    let status_text = env.run_text(["status", "--all"])?;
+    assert!(status_text.contains("Profiles:"));
+    assert!(status_text.contains("desk"));
+    Ok(())
+}
+
+#[test]
+fn save_updates_setup_name_for_current_setup() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+
+    env.run_json(["save", "desk", "--setup-name", "office", "--json"])?;
+    assert_setup_name(
+        &env,
+        fixture_topology().setup_fingerprint().as_str(),
+        Some("office"),
+    )?;
+
+    env.run_json(["save", "desk-alt", "-s", "office-basement", "--json"])?;
+    assert_setup_name(
+        &env,
+        fixture_topology().setup_fingerprint().as_str(),
+        Some("office-basement"),
+    )?;
+
+    let status_text = env.run_text(["status", "--all"])?;
+    assert!(status_text.contains("setup: office-basement"));
+    assert!(status_text.contains("fingerprint:"));
+
     Ok(())
 }
 
@@ -449,7 +521,7 @@ fn assert_saved_profiles(
     env: &TestEnvironment,
     expected_names: &[&str],
 ) -> Result<(), Box<dyn Error>> {
-    let listed = env.run_json(["list", "--all", "--json"])?;
+    let listed = env.run_json(["status", "--all", "--json"])?;
     let mut actual_names = Vec::new();
     for setup in listed["setups"]
         .as_array()
@@ -476,7 +548,7 @@ fn assert_default_and_active(
     expected_default: Option<&str>,
     expected_active: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
-    let listed = env.run_json(["list", "--all", "--json"])?;
+    let listed = env.run_json(["status", "--all", "--json"])?;
     let profiles: Vec<&Value> = listed["setups"]
         .as_array()
         .ok_or_else(|| IoError::other("setups array"))?
@@ -495,6 +567,24 @@ fn assert_default_and_active(
 
     assert_eq!(actual_default, expected_default);
     assert_eq!(actual_active, expected_active);
+    Ok(())
+}
+
+fn assert_setup_name(
+    env: &TestEnvironment,
+    setup_fingerprint: &str,
+    expected_setup_name: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    let listed = env.run_json(["status", "--all", "--json"])?;
+    let setup = listed["setups"]
+        .as_array()
+        .ok_or_else(|| IoError::other("setups array"))?
+        .iter()
+        .find(|setup| setup["fingerprint"].as_str() == Some(setup_fingerprint))
+        .ok_or_else(|| IoError::other("matching setup should exist"))?;
+
+    let actual_setup_name = setup["setup_name"].as_str();
+    assert_eq!(actual_setup_name, expected_setup_name);
     Ok(())
 }
 
@@ -546,6 +636,25 @@ fn fixture_topology() -> Topology {
                 ),
             ),
         ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+fn alternate_topology() -> Topology {
+    Topology {
+        outputs: [(
+            "eDP-1".to_string(),
+            output(
+                "eDP-1",
+                Some("Built-in Panel"),
+                1920,
+                1080,
+                &[Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)],
+                0,
+                0,
+            ),
+        )]
         .into_iter()
         .collect(),
     }

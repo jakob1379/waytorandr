@@ -334,6 +334,21 @@ pub fn set_default_profile_for_setup_in_store(
     Ok(())
 }
 
+/// Persist the display name for a setup fingerprint.
+///
+/// # Errors
+/// Returns an error if the state cannot be loaded or saved.
+pub fn set_setup_name_for_setup_in_store(
+    state_store: &StateStore,
+    setup_fingerprint: &str,
+    setup_name: &str,
+) -> CoreResult<()> {
+    let mut state = state_store.load_state()?.unwrap_or_default();
+    state.set_setup_name_for_setup(setup_fingerprint, setup_name);
+    state_store.save_state(&state)?;
+    Ok(())
+}
+
 /// Persist the backend that started the daemon.
 ///
 /// # Errors

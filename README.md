@@ -6,12 +6,13 @@ and can automatically restore the right layout when outputs change.
 
 It includes:
 
-- `waytorandr`: CLI for saving, applying, listing, and inspecting profiles
+- `waytorandr`: CLI for saving, applying, and inspecting display profiles
 - `waytorandrd`: daemon for automatic re-application after dock, undock, or hotplug events
 
 ## Scope
 
 - Save the current compositor layout as a named profile
+- Optionally assign a friendly name to each detected display setup
 - Reapply a saved profile or a built-in virtual layout
 - Set a preferred default profile for each display fingerprint
 - Automatically restore the best layout when outputs change
@@ -56,8 +57,8 @@ nix build .#snap
 Inspect the current layout and save a profile:
 
 ```bash
-./result/bin/waytorandr detected
-./result/bin/waytorandr save work-dock
+./result/bin/waytorandr status
+./result/bin/waytorandr save work-dock --setup-name office
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set --default work-dock
 ```
@@ -76,9 +77,7 @@ waytorandr set       Set a saved profile, virtual configuration, or default/matc
 waytorandr save      Save the current compositor layout as a profile
 waytorandr remove    Remove a saved profile
 waytorandr cycle     Set the next saved profile
-waytorandr list      List profiles matching the current topology by default
-waytorandr current   Show the active or currently matched profile
-waytorandr detected  Show detected outputs and current geometry
+waytorandr status    Show the current layout state and related saved profiles
 waytorandr version   Show the waytorandr version
 waytorandr service   Manage the waytorandrd user service
 ```
@@ -92,13 +91,14 @@ Built-in `set` targets:
 - `horizontal`
 - `vertical`
 
-Run `waytorandr set --help` and `waytorandr save --help` for the full command
-reference and examples.
+Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
+for the full command reference and examples.
 
 > [!TIP]
 > Use `--json` on supported commands when you want stable machine-readable output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
+> `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured.
 
 ## Daemon
 
@@ -107,6 +107,10 @@ hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. When the physical setup changes, it
 reapplies the configured default profile for the current fingerprint, or the best
 matching saved profile when no default profile is set for that fingerprint.
+
+You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
+with `waytorandr save --setup-name <name>`. Matching still uses the raw setup
+fingerprint internally; the alias is only for display and organization.
 
 For non-Home-Manager setups, `waytorandr` can manage a user service directly:
 

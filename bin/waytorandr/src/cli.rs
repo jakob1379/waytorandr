@@ -11,7 +11,7 @@ use crate::completion::{complete_saved_profiles, complete_set_targets};
 #[command(subcommand_required = true)]
 #[command(arg_required_else_help = true)]
 #[command(
-    after_long_help = "Run `waytorandr set --help` or `waytorandr save --help` for command-specific examples."
+    after_long_help = "Run `waytorandr set --help`, `waytorandr save --help`, or `waytorandr status --help` for command-specific examples."
 )]
 pub struct Cli {
     #[arg(
@@ -55,12 +55,14 @@ When a backend cannot support `mirror`, waytorandr prints backend-specific guida
     #[command(after_long_help = "Examples:
   waytorandr save
   waytorandr save docked
+  waytorandr save docked --setup-name office
   waytorandr save --default
   waytorandr save docked --default
   waytorandr save docked --dry-run
 
 If the profile name is omitted, `default` is used.
-Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this fingerprint.")]
+Use `--setup-name` to assign a friendly name to the current setup while keeping fingerprint-based matching.
+Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this setup.")]
     Save(SaveArgs),
 
     #[command(about = "Remove a saved profile")]
@@ -69,20 +71,15 @@ Use `--default` together with `save` when the current screen setup may match mul
     #[command(about = "Set the next saved profile")]
     Cycle(MutatingArgs),
 
-    #[command(about = "List profiles matching the current topology by default")]
+    #[command(about = "Show the current layout state and related saved profiles")]
     #[command(after_long_help = "Examples:
-  waytorandr list
-  waytorandr list --all
+  waytorandr status
+  waytorandr status --all
 
-By default, `list` only shows profiles matching the current detected topology.
-Use `--all` to show every saved profile across all setups, grouped by setup fingerprint.")]
-    List(ListArgs),
-
-    #[command(about = "Show the active or currently matched profile")]
-    Current,
-
-    #[command(about = "Show detected outputs and current geometry")]
-    Detected,
+By default, `status` shows the current matched profile, the detected outputs,
+and saved profiles related to the current detected topology.
+Use `--all` to include every saved profile across all setups, grouped by setup fingerprint and optional setup name.")]
+    Status(StatusArgs),
 
     #[command(about = "Show the waytorandr version")]
     Version,
@@ -148,7 +145,7 @@ pub struct SetArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Only with saved profiles: also set the profile as the default profile for this fingerprint"
+        help = "Only with saved profiles: also set the profile as the default profile for this setup"
     )]
     pub(crate) make_default: bool,
 
@@ -178,9 +175,17 @@ pub struct SaveArgs {
     pub(crate) name: String,
 
     #[arg(
+        short = 's',
+        long = "setup-name",
+        value_name = "name",
+        help = "Optional friendly name for the current setup"
+    )]
+    pub(crate) setup_name: Option<String>,
+
+    #[arg(
         short = 'd',
         long = "default",
-        help = "Also set the saved profile as the default profile for this fingerprint"
+        help = "Also set the saved profile as the default profile for this setup"
     )]
     pub(crate) make_default: bool,
 
@@ -220,11 +225,11 @@ pub struct MutatingArgs {
 }
 
 #[derive(Args)]
-pub struct ListArgs {
+pub struct StatusArgs {
     #[arg(
         short = 'a',
         long = "all",
-        help = "List all saved profiles, not just profiles matching the current topology"
+        help = "Show all saved profiles, not just profiles matching the current topology"
     )]
     pub(crate) all: bool,
 }
@@ -232,8 +237,8 @@ pub struct ListArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
     use clap::error::ErrorKind;
+    use clap::CommandFactory;
     use clap::Parser;
 
     #[test]
@@ -243,13 +248,13 @@ mod tests {
 
     #[test]
     fn global_json_flag_parses_before_subcommand() {
-        let cli = Cli::parse_from(["waytorandr", "--json", "current"]);
+        let cli = Cli::parse_from(["waytorandr", "--json", "status"]);
         assert!(cli.json);
     }
 
     #[test]
     fn global_json_flag_parses_after_subcommand() {
-        let cli = Cli::parse_from(["waytorandr", "list", "--json"]);
+        let cli = Cli::parse_from(["waytorandr", "status", "--json"]);
         assert!(cli.json);
     }
 
@@ -257,6 +262,27 @@ mod tests {
     fn version_subcommand_parses() {
         let cli = Cli::parse_from(["waytorandr", "version"]);
         assert!(matches!(cli.command, Commands::Version));
+    }
+
+    #[test]
+    fn removed_read_subcommands_are_rejected() {
+        for command in ["list", "current", "detected"] {
+            let error = match Cli::try_parse_from(["waytorandr", command]) {
+                Ok(_) => panic!("{command} should be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
+    fn save_parses_setup_name_short_flag() {
+        let cli = Cli::parse_from(["waytorandr", "save", "desk", "-s", "office"]);
+
+        match cli.command {
+            Commands::Save(args) => assert_eq!(args.setup_name.as_deref(), Some("office")),
+            _ => panic!("expected save command"),
+        }
     }
 
     #[test]
