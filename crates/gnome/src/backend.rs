@@ -187,9 +187,19 @@ impl GnomeBackend {
         ))
     }
 
-    fn submit(plan: &LayoutPlan, method: u32) -> Result<()> {
+    fn prepare_apply_request(
+        plan: &LayoutPlan,
+    ) -> Result<(u32, Vec<ApplyLogicalMonitorTuple>, PropertyMap)> {
         let state = Self::load_state()?;
-        let (serial, logical_monitors, properties) = Self::build_apply_config(&state, plan)?;
+        Self::build_apply_config(&state, plan)
+    }
+
+    fn submit_request(
+        serial: u32,
+        method: u32,
+        logical_monitors: Vec<ApplyLogicalMonitorTuple>,
+        properties: PropertyMap,
+    ) -> Result<()> {
         let connection = Connection::session().context("failed to connect to the session bus")?;
         let proxy = Proxy::new(
             &connection,
@@ -230,28 +240,28 @@ impl Backend for GnomeBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
-        match Self::submit(plan, METHOD_VERIFY) {
-            Ok(()) => Ok(TestResult::supported(Some(format!(
-                "GNOME validated {} output changes",
-                plan.outputs.len()
-            )))),
-            Err(source) => Ok(TestResult::rejected(
-                Some(classify_apply_failure(&source)),
-                Some(format!("GNOME rejected the configuration: {source:#}")),
-            )),
-        }
+        let (serial, logical_monitors, properties) = match Self::prepare_apply_request(plan) {
+            Ok(request) => request,
+            Err(source) => {
+                return Ok(TestResult::rejected(
+                    Some(classify_apply_failure(&source)),
+                    Some(format!("GNOME rejected the configuration: {source:#}")),
+                ));
+            }
+        };
+
+        Self::submit_request(serial, METHOD_VERIFY, logical_monitors, properties)
+            .map_err(|source| CoreError::Backend { source })?;
+
+        Ok(TestResult::supported(Some(format!(
+            "GNOME validated {} output changes",
+            plan.outputs.len()
+        ))))
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
-        match Self::submit(plan, METHOD_TEMPORARY) {
-            Ok(()) => {
-                let applied_state = self.enumerate_outputs()?;
-                let mut result = ApplyResult::default();
-                result.success = true;
-                result.message = Some("GNOME applied the configuration".to_string());
-                result.applied_state = Some(applied_state);
-                Ok(result)
-            }
+        let (serial, logical_monitors, properties) = match Self::prepare_apply_request(plan) {
+            Ok(request) => request,
             Err(source) => {
                 let mut result = ApplyResult::default();
                 result.success = false;
@@ -259,9 +269,19 @@ impl Backend for GnomeBackend {
                 result.message = Some(format!(
                     "GNOME failed to apply the configuration: {source:#}"
                 ));
-                Ok(result)
+                return Ok(result);
             }
-        }
+        };
+
+        Self::submit_request(serial, METHOD_TEMPORARY, logical_monitors, properties)
+            .map_err(|source| CoreError::Backend { source })?;
+
+        let applied_state = self.enumerate_outputs()?;
+        let mut result = ApplyResult::default();
+        result.success = true;
+        result.message = Some("GNOME applied the configuration".to_string());
+        result.applied_state = Some(applied_state);
+        Ok(result)
     }
 }
 

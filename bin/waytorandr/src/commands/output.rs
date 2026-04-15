@@ -107,7 +107,6 @@ pub fn format_mode(mode: Option<Mode>) -> String {
 mod tests {
     use super::*;
     use waytorandr_core::state::State;
-    use waytorandr_core::workflow::default_profile_for_setup;
 
     #[test]
     fn format_mode_handles_absent_mode() {
@@ -125,7 +124,26 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(default_profile_for_setup(&state, "dock"), Some("desk"));
+        assert_eq!(state.setup_default_profile("dock"), Some("desk"));
+        assert_eq!(
+            state.effective_default_profile_for_setup("dock"),
+            Some("desk")
+        );
+    }
+
+    #[test]
+    fn effective_default_profile_falls_back_to_global_default() {
+        let mut state = State::default();
+        state.default_profiles.insert(
+            State::GLOBAL_DEFAULT_PROFILE_KEY.to_string(),
+            "fallback".to_string(),
+        );
+
+        assert_eq!(state.setup_default_profile("dock"), None);
+        assert_eq!(
+            state.effective_default_profile_for_setup("dock"),
+            Some("fallback")
+        );
     }
 
     #[test]

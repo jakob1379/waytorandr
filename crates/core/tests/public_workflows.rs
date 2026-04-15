@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tempfile::TempDir;
-use waytorandr_core::engine::{ApplyResult, Backend, OutputWatcher, TestResult};
+use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
 use waytorandr_core::error::CoreError;
 use waytorandr_core::model::{
     BackendKind, Capabilities, OutputIdentity, OutputState, Position, Topology,
@@ -13,7 +13,7 @@ use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::{Hook, Hooks, OutputMatcher, Profile};
 use waytorandr_core::state::{State, StateStore};
 use waytorandr_core::store::ProfileStore;
-use waytorandr_core::workflow::{self, PlanSnapshot};
+use waytorandr_core::workflow;
 
 fn xdg_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -91,9 +91,9 @@ fn profile_store_roundtrips_saved_profiles_per_setup() -> Result<(), Box<dyn Err
         let store = ProfileStore::bootstrap()?;
         let profile = profile("desk", "DP-1");
         let setup_fingerprint = profile.setup_fingerprint();
-        let state = State::default();
+        let state_store = StateStore::bootstrap()?;
 
-        store.save_with_known_outputs(&profile, &state.known_outputs)?;
+        store.save(&profile, &state_store)?;
 
         assert!(profiles_path(temp).exists());
         assert!(!temp
@@ -104,7 +104,7 @@ fn profile_store_roundtrips_saved_profiles_per_setup() -> Result<(), Box<dyn Err
             .exists());
 
         let loaded = store
-            .get_for_setup_with_known_outputs("desk", &setup_fingerprint, &state.known_outputs)?
+            .get_for_setup("desk", &setup_fingerprint, &state_store)?
             .ok_or_else(|| std::io::Error::other("desk profile should exist"))?;
         assert_eq!(loaded.profile.name, "desk");
         assert_eq!(loaded.setup_fingerprint, setup_fingerprint);
@@ -126,16 +126,18 @@ fn profile_store_returns_canonical_match_ready_profiles() -> Result<(), Box<dyn 
         });
         let profile = profile("desk", "DP-1");
 
-        store.save_with_known_outputs(&profile, &state.known_outputs)?;
+        let state_store = StateStore::bootstrap()?;
+        state_store.save_state(&state)?;
+        store.save(&profile, &state_store)?;
 
         let setup_fingerprint = store
-            .list_with_known_outputs(&state.known_outputs)?
+            .list(&state_store)?
             .into_iter()
             .find(|stored| stored.profile.name == "desk")
             .ok_or_else(|| std::io::Error::other("desk profile should be listed"))?
             .setup_fingerprint;
         let loaded = store
-            .get_for_setup_with_known_outputs("desk", &setup_fingerprint, &state.known_outputs)?
+            .get_for_setup("desk", &setup_fingerprint, &state_store)?
             .ok_or_else(|| std::io::Error::other("desk profile should exist"))?;
         assert_eq!(loaded.profile.match_rules.len(), 1);
         assert_eq!(
@@ -163,12 +165,12 @@ fn profile_store_migrates_legacy_profiles_to_json_file() -> Result<(), Box<dyn E
         let store = ProfileStore::bootstrap()?;
         let setup_fingerprint = legacy_profile.setup_fingerprint();
         let profiles_path = profiles_path(temp);
-        let state = State::default();
+        let state_store = StateStore::bootstrap()?;
 
         assert!(!legacy_path.exists());
         assert!(profiles_path.exists());
         assert!(store
-            .get_for_setup_with_known_outputs("desk", &setup_fingerprint, &state.known_outputs)?
+            .get_for_setup("desk", &setup_fingerprint, &state_store)?
             .is_some());
         Ok(())
     })?;
@@ -259,11 +261,17 @@ fn state_store_persists_known_outputs_only_on_explicit_observation() -> Result<(
 #[test]
 fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
-        let backend = TestBackend {
-            apply_calls: Arc::new(Mutex::new(0)),
-        };
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
+        let backend = TestBackend {
+            topology: topology.clone(),
+            test_result: TestResult::supported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
         };
         let profiles = vec![profile("desk", "DP-1"), profile("fallback", "HDMI-A-1")];
         let mut state = State::default();
@@ -274,21 +282,9 @@ fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn 
 
         let selected = workflow::select_profile_for_topology(&topology, &profiles, &state)
             .ok_or_else(|| std::io::Error::other("matching profile should be selected"))?;
-        let plan = workflow::plan_profile_for_topology(&selected, &topology)?;
-        let cycle = workflow::apply_plan_cycle(
-            &backend,
-            &selected.hooks,
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: plan.clone(),
-            },
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan,
-            },
-        )?;
+        let cycle = workflow::apply_profile_workflow(&backend, &state_store, &selected)?;
         assert!(
-            matches!(cycle, workflow::ExecutionCycle::Applied { apply_result, .. } if apply_result.success)
+            matches!(cycle, workflow::ApplyExecution::Applied { apply_result, .. } if apply_result.success)
         );
         assert_eq!(
             *backend
@@ -344,7 +340,12 @@ fn setup_names_persist_per_setup_fingerprint() -> Result<(), Box<dyn Error>> {
 
 #[derive(Clone)]
 struct TestBackend {
+    topology: Topology,
+    test_result: TestResult,
     apply_calls: Arc<Mutex<usize>>,
+    apply_success: bool,
+    apply_failure: Option<ConfigFailureKind>,
+    apply_message: Option<String>,
 }
 
 impl Backend for TestBackend {
@@ -355,7 +356,7 @@ impl Backend for TestBackend {
     }
 
     fn enumerate_outputs(&self) -> waytorandr_core::error::CoreResult<Topology> {
-        Ok(Topology::default())
+        Ok(self.topology.clone())
     }
 
     fn watch_outputs(&self) -> waytorandr_core::error::CoreResult<Box<dyn OutputWatcher>> {
@@ -365,7 +366,7 @@ impl Backend for TestBackend {
     }
 
     fn test(&self, _plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<TestResult> {
-        Ok(TestResult::supported(None))
+        Ok(self.test_result.clone())
     }
 
     fn apply(&self, plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<ApplyResult> {
@@ -374,7 +375,9 @@ impl Backend for TestBackend {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         let mut result = ApplyResult::default();
-        result.success = true;
+        result.success = self.apply_success;
+        result.failure = self.apply_failure;
+        result.message = self.apply_message.clone();
         result.applied_state = Some(Topology {
             outputs: plan.outputs.clone(),
         });
@@ -386,8 +389,17 @@ impl Backend for TestBackend {
 fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|temp| {
         let log_path = temp.path().join("hooks.log");
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
         let backend = TestBackend {
+            topology,
+            test_result: TestResult::supported(None),
             apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
         };
         let mut pre_hook = Hook::new("sh");
         pre_hook.args = vec![
@@ -404,22 +416,12 @@ fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Er
         let mut hooks = Hooks::default();
         hooks.pre_apply = vec![pre_hook];
         hooks.post_apply = vec![post_hook];
-        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))]));
+        let mut profile = profile("desk", "DP-1");
+        profile.hooks = hooks;
 
-        let cycle = workflow::apply_plan_cycle(
-            &backend,
-            &hooks,
-            PlanSnapshot {
-                topology: Topology::default(),
-                plan: plan.clone(),
-            },
-            PlanSnapshot {
-                topology: Topology::default(),
-                plan,
-            },
-        )?;
+        let cycle = workflow::apply_profile_workflow(&backend, &state_store, &profile)?;
         assert!(
-            matches!(cycle, workflow::ExecutionCycle::Applied { apply_result, .. } if apply_result.success)
+            matches!(cycle, workflow::ApplyExecution::Applied { apply_result, .. } if apply_result.success)
         );
         assert_eq!(
             *backend
@@ -432,6 +434,81 @@ fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Er
         let log = std::fs::read_to_string(log_path)?;
         assert!(log.contains("pre"));
         assert!(log.contains("post"));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn validate_profile_workflow_returns_accepted_plan() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
+        let backend = TestBackend {
+            topology: topology.clone(),
+            test_result: TestResult::supported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
+        };
+
+        let execution =
+            workflow::validate_profile_workflow(&backend, &state_store, &profile("desk", "DP-1"))?;
+
+        assert!(matches!(
+            execution,
+            workflow::ValidationExecution::Accepted {
+                ref plan,
+                ref validation,
+            } if validation.success && plan.outputs.contains_key("DP-1")
+        ));
+        assert_eq!(
+            *backend
+                .apply_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            0
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn apply_profile_workflow_returns_structured_apply_failures() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
+        let backend = TestBackend {
+            topology,
+            test_result: TestResult::supported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: false,
+            apply_failure: Some(ConfigFailureKind::TopologyChanged),
+            apply_message: Some("changed".to_string()),
+        };
+
+        let execution =
+            workflow::apply_profile_workflow(&backend, &state_store, &profile("desk", "DP-1"))?;
+
+        assert!(matches!(
+            execution,
+            workflow::ApplyExecution::ApplyFailed { ref apply_result, .. }
+                if apply_result.failure == Some(ConfigFailureKind::TopologyChanged)
+                    && apply_result.message.as_deref() == Some("changed")
+        ));
+        assert_eq!(
+            *backend
+                .apply_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
         Ok(())
     })?;
     Ok(())

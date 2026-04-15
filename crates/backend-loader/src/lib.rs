@@ -1,3 +1,5 @@
+//! Backend selection and debug-only test backend wiring for waytorandr.
+
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -52,10 +54,10 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
                     ..
                 }),
             ) => return Err(err),
-            Err(err) => attempts.push(BackendConnectionAttempt {
-                backend: backend_kind_for_label(label),
-                error: err.to_string(),
-            }),
+            Err(err) => attempts.push(BackendConnectionAttempt::new(
+                backend_kind_for_label(label),
+                err.to_string(),
+            )),
         }
     }
 

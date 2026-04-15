@@ -1,4 +1,6 @@
-use crate::engine::{ApplyResult, Backend, Engine, TestResult, ValidationStatus};
+use crate::engine::{
+    ApplyResult, Backend, ConfigFailureKind, Engine, TestResult, ValidationStatus,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::matcher::Matcher;
 use crate::model::{BackendKind, Topology, VirtualPreset};
@@ -29,26 +31,100 @@ pub enum ExecutionCycle {
     },
 }
 
-pub struct PlanSnapshot {
+#[non_exhaustive]
+struct PlanSnapshot {
     pub topology: Topology,
     pub plan: LayoutPlan,
 }
 
-#[must_use]
-pub fn default_profile_for_setup<'a>(state: &'a State, setup_fingerprint: &str) -> Option<&'a str> {
-    state
-        .default_profiles
-        .get(setup_fingerprint)
-        .map(String::as_str)
-        .or_else(|| state.global_default_profile())
+impl PlanSnapshot {
+    #[must_use]
+    pub fn new(topology: Topology, plan: LayoutPlan) -> Self {
+        Self { topology, plan }
+    }
 }
 
-#[must_use]
-pub fn remembered_topology_for_setup<'a>(
-    state: &'a State,
-    setup_fingerprint: &str,
-) -> Option<&'a Topology> {
-    state.remembered_setups.get(setup_fingerprint)
+pub enum ValidationExecution {
+    Accepted {
+        plan: LayoutPlan,
+        validation: TestResult,
+    },
+    Unsupported {
+        plan: LayoutPlan,
+        validation: TestResult,
+    },
+    Rejected {
+        plan: LayoutPlan,
+        validation: TestResult,
+    },
+}
+
+impl ValidationExecution {
+    #[must_use]
+    pub fn failure_kind(&self) -> Option<ConfigFailureKind> {
+        match self {
+            Self::Unsupported { validation, .. } | Self::Rejected { validation, .. } => {
+                validation.failure
+            }
+            Self::Accepted { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn failure_message(&self) -> Option<&str> {
+        match self {
+            Self::Unsupported { validation, .. } | Self::Rejected { validation, .. } => {
+                validation.message.as_deref()
+            }
+            Self::Accepted { .. } => None,
+        }
+    }
+}
+
+pub enum ApplyExecution {
+    Unsupported {
+        plan: LayoutPlan,
+        validation: TestResult,
+    },
+    Rejected {
+        plan: LayoutPlan,
+        validation: TestResult,
+    },
+    ApplyFailed {
+        plan: LayoutPlan,
+        validation: TestResult,
+        apply_result: ApplyResult,
+    },
+    Applied {
+        plan: LayoutPlan,
+        validation: TestResult,
+        apply_result: ApplyResult,
+        applied_topology: Topology,
+    },
+}
+
+impl ApplyExecution {
+    #[must_use]
+    pub fn failure_kind(&self) -> Option<ConfigFailureKind> {
+        match self {
+            Self::Unsupported { validation, .. } | Self::Rejected { validation, .. } => {
+                validation.failure
+            }
+            Self::ApplyFailed { apply_result, .. } => apply_result.failure,
+            Self::Applied { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn failure_message(&self) -> Option<&str> {
+        match self {
+            Self::Unsupported { validation, .. } | Self::Rejected { validation, .. } => {
+                validation.message.as_deref()
+            }
+            Self::ApplyFailed { apply_result, .. } => apply_result.message.as_deref(),
+            Self::Applied { .. } => None,
+        }
+    }
 }
 
 #[must_use]
@@ -59,13 +135,8 @@ pub fn select_profile_for_topology(
 ) -> Option<Profile> {
     let setup_fingerprint = topology.setup_fingerprint();
     if let Some(profile) = state
-        .default_profiles
-        .get(&setup_fingerprint)
-        .and_then(|default_name| {
-            profiles
-                .iter()
-                .find(|profile| profile.name == *default_name)
-        })
+        .setup_default_profile(&setup_fingerprint)
+        .and_then(|default_name| profiles.iter().find(|profile| profile.name == default_name))
     {
         return Some(profile.clone());
     }
@@ -74,7 +145,7 @@ pub fn select_profile_for_topology(
         return Some(matched.profile);
     }
 
-    let default_name = state.global_default_profile()?;
+    let default_name = state.effective_default_profile_for_setup(&setup_fingerprint)?;
     profiles
         .iter()
         .find(|profile| profile.name == default_name)
@@ -170,28 +241,171 @@ pub fn observed_topology_from_backend<B: Backend + ?Sized>(
 ///
 /// # Errors
 /// Returns an error if topology loading or profile planning fails.
-pub fn plan_profile_with_backend<B: Backend + ?Sized>(
+fn plan_profile_with_backend<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
     profile: &Profile,
 ) -> CoreResult<PlanSnapshot> {
     let topology = normalized_topology_from_backend(backend, state_store)?;
     let plan = plan_profile_for_topology(profile, &topology)?;
-    Ok(PlanSnapshot { topology, plan })
+    Ok(PlanSnapshot::new(topology, plan))
 }
 
 /// Load a normalized topology from the backend and plan `preset` for it.
 ///
 /// # Errors
 /// Returns an error if topology loading or preset planning fails.
-pub fn plan_preset_with_backend<B: Backend + ?Sized>(
+fn plan_preset_with_backend<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
     preset: VirtualPreset,
 ) -> CoreResult<PlanSnapshot> {
     let topology = normalized_topology_from_backend(backend, state_store)?;
     let plan = Planner::plan_from_preset(preset, &topology, None)?;
-    Ok(PlanSnapshot { topology, plan })
+    Ok(PlanSnapshot::new(topology, plan))
+}
+
+fn validate_with_planner<B, F>(backend: &B, mut plan_snapshot: F) -> CoreResult<ValidationExecution>
+where
+    B: Backend + ?Sized,
+    F: FnMut() -> CoreResult<PlanSnapshot>,
+{
+    match validate_plan_cycle(backend, plan_snapshot()?)? {
+        ExecutionCycle::DryRun {
+            validation_plan,
+            validation,
+        } => Ok(ValidationExecution::Accepted {
+            plan: validation_plan,
+            validation,
+        }),
+        ExecutionCycle::Unsupported {
+            validation_plan,
+            validation,
+        } => Ok(ValidationExecution::Unsupported {
+            plan: validation_plan,
+            validation,
+        }),
+        ExecutionCycle::Rejected {
+            validation_plan,
+            validation,
+        } => Ok(ValidationExecution::Rejected {
+            plan: validation_plan,
+            validation,
+        }),
+        ExecutionCycle::Applied { .. } => {
+            unreachable!("validate_plan_cycle never applies a plan")
+        }
+    }
+}
+
+fn apply_with_planner<B, F>(
+    backend: &B,
+    hooks: &Hooks,
+    mut plan_snapshot: F,
+) -> CoreResult<ApplyExecution>
+where
+    B: Backend + ?Sized,
+    F: FnMut() -> CoreResult<PlanSnapshot>,
+{
+    let validation_snapshot = plan_snapshot()?;
+    let apply_snapshot = plan_snapshot()?;
+
+    match apply_plan_cycle(backend, hooks, validation_snapshot, apply_snapshot)? {
+        ExecutionCycle::Applied {
+            validation,
+            apply_plan,
+            apply_result,
+            applied_topology,
+            ..
+        } => {
+            if apply_result.success {
+                Ok(ApplyExecution::Applied {
+                    plan: apply_plan,
+                    validation,
+                    apply_result,
+                    applied_topology,
+                })
+            } else {
+                Ok(ApplyExecution::ApplyFailed {
+                    plan: apply_plan,
+                    validation,
+                    apply_result,
+                })
+            }
+        }
+        ExecutionCycle::Unsupported {
+            validation_plan,
+            validation,
+        } => Ok(ApplyExecution::Unsupported {
+            plan: validation_plan,
+            validation,
+        }),
+        ExecutionCycle::Rejected {
+            validation_plan,
+            validation,
+        } => Ok(ApplyExecution::Rejected {
+            plan: validation_plan,
+            validation,
+        }),
+        ExecutionCycle::DryRun { .. } => unreachable!("apply_plan_cycle never returns DryRun"),
+    }
+}
+
+/// Plan and validate `profile` against the current backend topology.
+///
+/// # Errors
+/// Returns an error if topology loading, planning, or validation transport fails.
+pub fn validate_profile_workflow<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    profile: &Profile,
+) -> CoreResult<ValidationExecution> {
+    validate_with_planner(backend, || {
+        plan_profile_with_backend(backend, state_store, profile)
+    })
+}
+
+/// Plan and validate `preset` against the current backend topology.
+///
+/// # Errors
+/// Returns an error if topology loading, planning, or validation transport fails.
+pub fn validate_preset_workflow<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    preset: VirtualPreset,
+) -> CoreResult<ValidationExecution> {
+    validate_with_planner(backend, || {
+        plan_preset_with_backend(backend, state_store, preset)
+    })
+}
+
+/// Plan, validate, and apply `profile` against the current backend topology.
+///
+/// # Errors
+/// Returns an error if topology loading, planning, validation transport, or apply transport fails.
+pub fn apply_profile_workflow<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    profile: &Profile,
+) -> CoreResult<ApplyExecution> {
+    apply_with_planner(backend, &profile.hooks, || {
+        plan_profile_with_backend(backend, state_store, profile)
+    })
+}
+
+/// Plan, validate, and apply `preset` against the current backend topology.
+///
+/// # Errors
+/// Returns an error if topology loading, planning, validation transport, or apply transport fails.
+pub fn apply_preset_workflow<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    preset: VirtualPreset,
+) -> CoreResult<ApplyExecution> {
+    let hooks = Hooks::default();
+    apply_with_planner(backend, &hooks, || {
+        plan_preset_with_backend(backend, state_store, preset)
+    })
 }
 
 /// Validate a layout plan against the backend.
@@ -236,8 +450,8 @@ fn invalid_validation_cycle(validation_plan: LayoutPlan, validation: TestResult)
 /// Validate a plan without applying it.
 ///
 /// # Errors
-/// Returns an error if validation fails.
-pub fn validate_plan_cycle<B: Backend + ?Sized>(
+/// Returns an error only if validation transport fails.
+fn validate_plan_cycle<B: Backend + ?Sized>(
     backend: &B,
     validation_snapshot: PlanSnapshot,
 ) -> CoreResult<ExecutionCycle> {
@@ -255,8 +469,8 @@ pub fn validate_plan_cycle<B: Backend + ?Sized>(
 /// Validate a plan and apply it if validation succeeds.
 ///
 /// # Errors
-/// Returns an error if validation or applying the plan fails.
-pub fn apply_plan_cycle<B: Backend + ?Sized>(
+/// Returns an error only if validation transport or apply transport fails.
+fn apply_plan_cycle<B: Backend + ?Sized>(
     backend: &B,
     hooks: &Hooks,
     validation_snapshot: PlanSnapshot,
@@ -264,7 +478,7 @@ pub fn apply_plan_cycle<B: Backend + ?Sized>(
 ) -> CoreResult<ExecutionCycle> {
     let validation = validate_plan(backend, &validation_snapshot.plan)?;
 
-    if !validation.is_supported() {
+    if !validation.is_accepted() {
         return Ok(invalid_validation_cycle(
             validation_snapshot.plan,
             validation,
@@ -464,7 +678,8 @@ mod tests {
         assert_eq!(state.last_profile, None);
         assert_eq!(state.backend, Some(BackendKind::Wlroots));
         assert_eq!(
-            remembered_topology_for_setup(&state, &topology.setup_fingerprint())
+            state
+                .remembered_topology_for_setup(&topology.setup_fingerprint())
                 .map(Topology::fingerprint),
             Some(topology.fingerprint())
         );
@@ -620,17 +835,17 @@ mod tests {
         };
         let cycle = validate_plan_cycle(
             &backend,
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            },
+            PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
+            ),
         )
         .unwrap();
 
         match cycle {
             ExecutionCycle::DryRun { validation, .. } => {
                 assert!(validation.success);
-                assert!(validation.is_supported());
+                assert!(validation.is_accepted());
             }
             ExecutionCycle::Unsupported { .. }
             | ExecutionCycle::Rejected { .. }
@@ -655,14 +870,14 @@ mod tests {
         let cycle = apply_plan_cycle(
             &backend,
             &hooks,
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            },
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            },
+            PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
+            ),
+            PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
+            ),
         )
         .unwrap();
 
@@ -673,7 +888,7 @@ mod tests {
                 ..
             } => {
                 assert!(validation.success);
-                assert!(validation.is_supported());
+                assert!(validation.is_accepted());
                 assert!(apply_result.success);
             }
             ExecutionCycle::DryRun { .. }
@@ -699,14 +914,14 @@ mod tests {
         let cycle = apply_plan_cycle(
             &backend,
             &hooks,
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            },
-            PlanSnapshot {
-                topology: topology.clone(),
-                plan: LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            },
+            PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
+            ),
+            PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
+            ),
         )
         .unwrap();
 

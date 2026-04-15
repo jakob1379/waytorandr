@@ -66,8 +66,7 @@ pub(super) fn cmd_save(
     }
 
     let _topology = workflow::observed_topology_from_backend(backend.as_ref(), &state_store)?;
-    let state = state_store.load_state()?.unwrap_or_default();
-    store.save_with_known_outputs(&profile, &state.known_outputs)?;
+    store.save(&profile, &state_store)?;
     if let Some(setup_name) = setup_name {
         workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
     }
@@ -128,14 +127,10 @@ pub(super) fn cmd_set(
 
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let state = state_store.load_state()?.unwrap_or_default();
     let setup_fingerprint = current_setup_fingerprint()?;
-    let profile = if let Some(setup_fingerprint) = setup_fingerprint.as_deref() {
-        store.get_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)?
-    } else {
-        store.get_unique_with_known_outputs(name, &state.known_outputs)?
-    }
-    .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
+    let profile = store
+        .get_for_setup(name, &setup_fingerprint, &state_store)?
+        .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
     let outcome = execute_profile_action(&profile.profile, dry_run, make_default)?;
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
@@ -145,7 +140,7 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let state_store = StateStore::bootstrap()?;
     let topology = super::shared::load_current_topology(&state_store)?;
     let state = state_store.load_state()?.unwrap_or_default();
-    let profiles = store.profiles_with_known_outputs(&state.known_outputs)?;
+    let profiles = store.profiles(&state_store)?;
     let profile = workflow::select_profile_for_topology(&topology, &profiles, &state)
         .ok_or_else(|| anyhow!("no matching profile and no default profile configured"))?;
     let outcome = execute_profile_action(&profile, dry_run, false)?;
@@ -155,17 +150,10 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let state = state_store.load_state()?.unwrap_or_default();
     let setup_fingerprint = current_setup_fingerprint()?;
-    let exists = if let Some(setup_fingerprint) = setup_fingerprint.as_deref() {
-        store
-            .get_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)?
-            .is_some()
-    } else {
-        store
-            .get_unique_with_known_outputs(name, &state.known_outputs)?
-            .is_some()
-    };
+    let exists = store
+        .get_for_setup(name, &setup_fingerprint, &state_store)?
+        .is_some();
 
     if dry_run {
         if output_mode.is_json() {
@@ -186,11 +174,7 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
         return Ok(());
     }
 
-    let removed = if let Some(setup_fingerprint) = setup_fingerprint.as_deref() {
-        store.remove_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)?
-    } else {
-        store.remove_unique_with_known_outputs(name, &state.known_outputs)?
-    };
+    let removed = store.remove_for_setup(name, &setup_fingerprint, &state_store)?;
 
     if output_mode.is_json() {
         return write_json(&JsonRemoveResponse {
@@ -214,11 +198,8 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let state = state_store.load_state()?.unwrap_or_default();
-    let profiles: Vec<Profile> = if let Some(setup) = current_setup_fingerprint()?.as_deref() {
-        store.profiles_for_setup_with_known_outputs(setup, &state.known_outputs)?
-    } else {
-        store.profiles_with_known_outputs(&state.known_outputs)?
-    };
+    let setup = current_setup_fingerprint()?;
+    let profiles: Vec<Profile> = store.profiles_for_setup(&setup, &state_store)?;
     if profiles.is_empty() {
         bail!("no profiles available to cycle")
     }
@@ -232,4 +213,42 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 
     let outcome = execute_profile_action(&profiles[next_idx], dry_run, false)?;
     emit_action_outcome("cycle", None, &outcome, output_mode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmd_set_requires_explicit_target_for_reverse_flag() {
+        let err = cmd_set(None, false, false, true, false, OutputMode::Text)
+            .expect_err("expected reverse validation to fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--reverse requires a virtual 'horizontal' or 'vertical' set target"
+        );
+    }
+
+    #[test]
+    fn cmd_set_rejects_default_without_explicit_profile() {
+        let err = cmd_set(None, false, true, false, false, OutputMode::Text)
+            .expect_err("expected default validation to fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--default requires an explicit saved profile target"
+        );
+    }
+
+    #[test]
+    fn cmd_set_rejects_reverse_for_unknown_target() {
+        let err = cmd_set(Some("desk"), false, false, true, false, OutputMode::Text)
+            .expect_err("expected preset resolution to fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
+        );
+    }
 }

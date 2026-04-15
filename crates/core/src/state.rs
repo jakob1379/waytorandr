@@ -38,6 +38,24 @@ impl State {
             .map(String::as_str)
     }
 
+    #[must_use]
+    pub fn setup_default_profile(&self, setup_fingerprint: &str) -> Option<&str> {
+        self.default_profiles
+            .get(setup_fingerprint)
+            .map(String::as_str)
+    }
+
+    #[must_use]
+    pub fn effective_default_profile_for_setup(&self, setup_fingerprint: &str) -> Option<&str> {
+        self.setup_default_profile(setup_fingerprint)
+            .or_else(|| self.global_default_profile())
+    }
+
+    #[must_use]
+    pub fn remembered_topology_for_setup(&self, setup_fingerprint: &str) -> Option<&Topology> {
+        self.remembered_setups.get(setup_fingerprint)
+    }
+
     fn migrate_legacy_default_profile(&mut self) -> bool {
         let Some(profile_name) = self.legacy_default_profile.take() else {
             return false;

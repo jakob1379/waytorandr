@@ -163,7 +163,7 @@ impl TestResult {
     }
 
     #[must_use]
-    pub fn is_supported(&self) -> bool {
+    pub fn is_accepted(&self) -> bool {
         self.status == ValidationStatus::Supported
     }
 }
@@ -197,7 +197,7 @@ impl<B: Backend> Engine<B> {
     /// Validation outcomes are returned as `TestResult` values.
     ///
     /// # Errors
-    /// Returns an error only if backend validation fails.
+    /// Returns an error only if backend validation transport fails.
     pub(crate) fn test_plan(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
         if !self.capabilities().can_test {
             return Ok(TestResult::unsupported(Some(

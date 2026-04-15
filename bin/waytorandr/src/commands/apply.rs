@@ -8,7 +8,7 @@ use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::engine::{ConfigFailureKind, TestResult};
 use waytorandr_core::model::{BackendKind, VirtualPreset};
 use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::profile::{Hooks, Profile};
+use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
 use waytorandr_core::workflow;
 
@@ -111,9 +111,63 @@ fn json_validation(test: &TestResult) -> JsonValidation {
             waytorandr_core::engine::ValidationStatus::Rejected => "failed",
             waytorandr_core::engine::ValidationStatus::Unsupported => "unsupported",
         },
-        success: test.is_supported(),
+        success: test.is_accepted(),
         failure: test.failure.map(failure_kind_label),
         message: test.message.clone(),
+    }
+}
+
+fn build_dry_run_outcome(
+    target: String,
+    target_type: ActionTargetType,
+    default_set: bool,
+    execution: workflow::ValidationExecution,
+) -> Result<ActionOutcome> {
+    match execution {
+        workflow::ValidationExecution::Accepted { plan, validation } => Ok(ActionOutcome {
+            target,
+            target_type,
+            dry_run: true,
+            plan,
+            validation: Some(validation),
+            default_set,
+        }),
+        other => bail!(
+            "{}",
+            other
+                .failure_message()
+                .unwrap_or("backend rejected configuration")
+        ),
+    }
+}
+
+fn build_apply_outcome(
+    target: String,
+    target_type: ActionTargetType,
+    default_set: bool,
+    execution: workflow::ApplyExecution,
+) -> Result<ActionOutcome> {
+    match execution {
+        workflow::ApplyExecution::Applied { plan, .. } => Ok(ActionOutcome {
+            target,
+            target_type,
+            dry_run: false,
+            plan,
+            validation: None,
+            default_set,
+        }),
+        workflow::ApplyExecution::ApplyFailed { .. } => bail!(
+            "{}",
+            execution
+                .failure_message()
+                .unwrap_or("backend failed to apply configuration")
+        ),
+        other => bail!(
+            "{}",
+            other
+                .failure_message()
+                .unwrap_or("backend rejected configuration")
+        ),
     }
 }
 
@@ -126,75 +180,35 @@ pub(super) fn execute_virtual_action(
     if let Some(message) = capabilities.virtual_preset_unavailable_message(preset) {
         bail!(message);
     }
-    let hooks = Hooks::default();
     let state_store = StateStore::bootstrap()?;
     let backend_kind = capabilities.backend;
-    let validation_snapshot =
-        workflow::plan_preset_with_backend(backend.as_ref(), &state_store, preset)
-            .map_err(anyhow::Error::from)?;
+
     if dry_run {
-        match workflow::validate_plan_cycle(backend.as_ref(), validation_snapshot)
-            .map_err(anyhow::Error::from)?
-        {
-            workflow::ExecutionCycle::DryRun {
-                validation_plan,
-                validation,
-            } => Ok(ActionOutcome {
-                target: preset.to_string(),
-                target_type: ActionTargetType::Virtual,
-                dry_run: true,
-                plan: validation_plan,
-                validation: Some(validation),
-                default_set: false,
-            }),
-            workflow::ExecutionCycle::Unsupported { validation, .. }
-            | workflow::ExecutionCycle::Rejected { validation, .. } => bail!(validation
-                .message
-                .unwrap_or_else(|| "backend rejected configuration".to_string())),
-            workflow::ExecutionCycle::Applied { .. } => unreachable!(),
-        }
-    } else {
-        let apply_snapshot =
-            workflow::plan_preset_with_backend(backend.as_ref(), &state_store, preset)
-                .map_err(anyhow::Error::from)?;
-        match workflow::apply_plan_cycle(
-            backend.as_ref(),
-            &hooks,
-            validation_snapshot,
-            apply_snapshot,
-        )
-        .map_err(anyhow::Error::from)?
-        {
-            workflow::ExecutionCycle::Applied {
-                apply_plan,
-                apply_result,
-                applied_topology,
-                ..
-            } => {
-                if !apply_result.success {
-                    bail!(apply_result
-                        .message
-                        .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
-                }
-
-                save_runtime_state(preset.as_str(), Some(backend_kind), &applied_topology)?;
-
-                Ok(ActionOutcome {
-                    target: preset.to_string(),
-                    target_type: ActionTargetType::Virtual,
-                    dry_run: false,
-                    plan: apply_plan,
-                    validation: None,
-                    default_set: false,
-                })
-            }
-            workflow::ExecutionCycle::Unsupported { validation, .. }
-            | workflow::ExecutionCycle::Rejected { validation, .. } => bail!(validation
-                .message
-                .unwrap_or_else(|| "backend rejected configuration".to_string())),
-            workflow::ExecutionCycle::DryRun { .. } => unreachable!(),
-        }
+        return build_dry_run_outcome(
+            preset.to_string(),
+            ActionTargetType::Virtual,
+            false,
+            workflow::validate_preset_workflow(backend.as_ref(), &state_store, preset)
+                .map_err(anyhow::Error::from)?,
+        );
     }
+
+    let execution = workflow::apply_preset_workflow(backend.as_ref(), &state_store, preset)
+        .map_err(anyhow::Error::from)?;
+
+    if let workflow::ApplyExecution::Applied {
+        applied_topology, ..
+    } = &execution
+    {
+        save_runtime_state(preset.as_str(), Some(backend_kind), applied_topology)?;
+    }
+
+    build_apply_outcome(
+        preset.to_string(),
+        ActionTargetType::Virtual,
+        false,
+        execution,
+    )
 }
 
 pub(super) fn execute_profile_action(
@@ -206,78 +220,39 @@ pub(super) fn execute_profile_action(
     let backend = connect_backend()?;
     let state_store = StateStore::bootstrap()?;
     let backend_kind = backend.capabilities().backend;
-    let validation_snapshot =
-        workflow::plan_profile_with_backend(backend.as_ref(), &state_store, profile)
-            .map_err(anyhow::Error::from)?;
+
     if dry_run {
-        match workflow::validate_plan_cycle(backend.as_ref(), validation_snapshot)
-            .map_err(anyhow::Error::from)?
-        {
-            workflow::ExecutionCycle::DryRun {
-                validation_plan,
-                validation,
-            } => Ok(ActionOutcome {
-                target: profile.name.clone(),
-                target_type: ActionTargetType::Profile,
-                dry_run: true,
-                plan: validation_plan,
-                validation: Some(validation),
-                default_set: make_default,
-            }),
-            workflow::ExecutionCycle::Unsupported { validation, .. }
-            | workflow::ExecutionCycle::Rejected { validation, .. } => bail!(validation
-                .message
-                .unwrap_or_else(|| "backend rejected configuration".to_string())),
-            workflow::ExecutionCycle::Applied { .. } => unreachable!(),
-        }
-    } else {
-        let apply_snapshot =
-            workflow::plan_profile_with_backend(backend.as_ref(), &state_store, profile)
-                .map_err(anyhow::Error::from)?;
-        match workflow::apply_plan_cycle(
-            backend.as_ref(),
-            &profile.hooks,
-            validation_snapshot,
-            apply_snapshot,
-        )
-        .map_err(anyhow::Error::from)?
-        {
-            workflow::ExecutionCycle::Applied {
-                apply_plan,
-                apply_result,
-                applied_topology,
-                ..
-            } => {
-                if !apply_result.success {
-                    bail!(apply_result
-                        .message
-                        .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
-                }
+        return build_dry_run_outcome(
+            profile.name.clone(),
+            ActionTargetType::Profile,
+            make_default,
+            workflow::validate_profile_workflow(backend.as_ref(), &state_store, profile)
+                .map_err(anyhow::Error::from)?,
+        );
+    }
 
-                save_runtime_state(&profile.name, Some(backend_kind), &applied_topology)?;
-                if make_default {
-                    set_default_profile_for_fingerprint(
-                        &profile.name,
-                        &applied_topology.setup_fingerprint(),
-                    )?;
-                }
+    let execution = workflow::apply_profile_workflow(backend.as_ref(), &state_store, profile)
+        .map_err(anyhow::Error::from)?;
 
-                Ok(ActionOutcome {
-                    target: profile.name.clone(),
-                    target_type: ActionTargetType::Profile,
-                    dry_run: false,
-                    plan: apply_plan,
-                    validation: None,
-                    default_set: make_default,
-                })
-            }
-            workflow::ExecutionCycle::Unsupported { validation, .. }
-            | workflow::ExecutionCycle::Rejected { validation, .. } => bail!(validation
-                .message
-                .unwrap_or_else(|| "backend rejected configuration".to_string())),
-            workflow::ExecutionCycle::DryRun { .. } => unreachable!(),
+    if let workflow::ApplyExecution::Applied {
+        applied_topology, ..
+    } = &execution
+    {
+        save_runtime_state(&profile.name, Some(backend_kind), applied_topology)?;
+        if make_default {
+            set_default_profile_for_fingerprint(
+                &profile.name,
+                &applied_topology.setup_fingerprint(),
+            )?;
         }
     }
+
+    build_apply_outcome(
+        profile.name.clone(),
+        ActionTargetType::Profile,
+        make_default,
+        execution,
+    )
 }
 
 pub(super) fn emit_action_outcome(
@@ -289,7 +264,7 @@ pub(super) fn emit_action_outcome(
     let validation_failure = outcome
         .validation
         .as_ref()
-        .filter(|test| !test.is_supported())
+        .filter(|test| !test.is_accepted())
         .map(|test| {
             test.message
                 .clone()
@@ -350,9 +325,9 @@ pub(super) fn emit_action_outcome(
     Ok(())
 }
 
-pub(super) fn current_setup_fingerprint() -> Result<Option<String>> {
+pub(super) fn current_setup_fingerprint() -> Result<String> {
     let state_store = StateStore::bootstrap()?;
-    load_current_topology(&state_store).map(|topology| Some(topology.setup_fingerprint()))
+    load_current_topology(&state_store).map(|topology| topology.setup_fingerprint())
 }
 
 pub(super) fn set_default_profile_for_fingerprint(

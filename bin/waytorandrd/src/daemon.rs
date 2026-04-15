@@ -111,10 +111,9 @@ fn maybe_apply_matching_profile(
     state_store: &StateStore,
     topology: &Topology,
 ) -> Result<DaemonOutcome> {
-    let state = state_store.load_state()?.unwrap_or_default();
     let setup_fingerprint = topology.setup_fingerprint();
-    let setup_profiles =
-        store.profiles_for_setup_with_known_outputs(&setup_fingerprint, &state.known_outputs)?;
+    let state = state_store.load_state()?.unwrap_or_default();
+    let setup_profiles = store.profiles_for_setup(&setup_fingerprint, state_store)?;
 
     if let Some(default_name) = state
         .default_profiles
@@ -135,7 +134,7 @@ fn maybe_apply_matching_profile(
         );
     }
 
-    if let Some(remembered) = workflow::remembered_topology_for_setup(&state, &setup_fingerprint) {
+    if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
         tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
         let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
         return apply_profile(backend, state_store, &remembered_profile, topology, None);
@@ -181,27 +180,17 @@ fn apply_profile(
         return Ok(DaemonOutcome::Applied);
     }
 
-    let validation_snapshot = workflow::plan_profile_with_backend(backend, state_store, profile)
+    let execution = workflow::apply_profile_workflow(backend, state_store, profile)
         .map_err(anyhow::Error::from)?;
-    let apply_snapshot = workflow::plan_profile_with_backend(backend, state_store, profile)
-        .map_err(anyhow::Error::from)?;
-    match workflow::apply_plan_cycle(backend, &profile.hooks, validation_snapshot, apply_snapshot)
-        .map_err(anyhow::Error::from)?
-    {
-        workflow::ExecutionCycle::Applied {
-            apply_result,
-            applied_topology,
-            ..
-        } => {
-            if !apply_result.success {
-                if apply_result.failure == Some(ConfigFailureKind::TopologyChanged) {
-                    return Ok(DaemonOutcome::TopologyChanged);
-                }
-                bail!(apply_result
-                    .message
-                    .unwrap_or_else(|| "backend failed to apply configuration".to_string()));
-            }
 
+    if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
+        return Ok(DaemonOutcome::TopologyChanged);
+    }
+
+    match execution {
+        workflow::ApplyExecution::Applied {
+            applied_topology, ..
+        } => {
             persist_runtime_state(
                 state_store,
                 recorded_profile_name,
@@ -216,17 +205,22 @@ fn apply_profile(
             }
             Ok(DaemonOutcome::Applied)
         }
-        workflow::ExecutionCycle::Unsupported { validation, .. }
-        | workflow::ExecutionCycle::Rejected { validation, .. } => {
-            if validation.failure == Some(ConfigFailureKind::TopologyChanged) {
-                return Ok(DaemonOutcome::TopologyChanged);
-            }
-            bail!(validation
-                .message
-                .unwrap_or_else(|| "backend rejected configuration".to_string()));
+        workflow::ApplyExecution::ApplyFailed { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend failed to apply configuration")
+            );
         }
-        workflow::ExecutionCycle::DryRun { .. } => {
-            unreachable!("daemon never requests dry-run cycles")
+        workflow::ApplyExecution::Unsupported { .. }
+        | workflow::ApplyExecution::Rejected { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend rejected configuration")
+            );
         }
     }
 }
@@ -579,8 +573,7 @@ mod tests {
                 test_calls: Arc::new(Mutex::new(0)),
             };
             let profile = profile("desk", "DP-1", false);
-            let state = state_store.load_state()?.unwrap_or_default();
-            store.save_with_known_outputs(&profile, &state.known_outputs)?;
+            store.save(&profile, &state_store)?;
 
             let mut state = state_store.load_state()?.unwrap_or_default();
             state
@@ -672,10 +665,7 @@ mod tests {
                 "external".to_string(),
             );
             state_store.save_state(&state)?;
-            store.save_with_known_outputs(
-                &profile("external", "DP-1", true),
-                &state.known_outputs,
-            )?;
+            store.save(&profile("external", "DP-1", true), &state_store)?;
 
             let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
             let state = state_store

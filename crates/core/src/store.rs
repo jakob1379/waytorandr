@@ -2,6 +2,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::model::OutputIdentity;
 use crate::normalize::normalize_profile_with_known_outputs;
 use crate::profile::Profile;
+use crate::state::StateStore;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,8 +67,66 @@ impl ProfileStore {
     /// Lists profiles with normalized state.
     ///
     /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read.
+    pub fn list(&self, state_store: &StateStore) -> CoreResult<Vec<StoredProfile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.list_with_known_outputs(&state.known_outputs)
+    }
+
+    /// Lists profiles for a setup with normalized state.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read.
+    pub fn list_for_setup(
+        &self,
+        setup_fingerprint: &str,
+        state_store: &StateStore,
+    ) -> CoreResult<Vec<StoredProfile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.list_for_setup_with_known_outputs(setup_fingerprint, &state.known_outputs)
+    }
+
+    /// Returns all profiles with normalized state.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read.
+    pub fn profiles(&self, state_store: &StateStore) -> CoreResult<Vec<Profile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.profiles_with_known_outputs(&state.known_outputs)
+    }
+
+    /// Returns profiles for a setup with normalized state.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read.
+    pub fn profiles_for_setup(
+        &self,
+        setup_fingerprint: &str,
+        state_store: &StateStore,
+    ) -> CoreResult<Vec<Profile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.profiles_for_setup_with_known_outputs(setup_fingerprint, &state.known_outputs)
+    }
+
+    /// Finds a profile for a setup.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read.
+    pub fn get_for_setup(
+        &self,
+        name: &str,
+        setup_fingerprint: &str,
+        state_store: &StateStore,
+    ) -> CoreResult<Option<StoredProfile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.get_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)
+    }
+
+    /// Lists profiles with normalized state.
+    ///
+    /// # Errors
     /// Returns an error if profile storage cannot be read.
-    pub fn list_with_known_outputs(
+    fn list_with_known_outputs(
         &self,
         known_outputs: &HashMap<String, OutputIdentity>,
     ) -> CoreResult<Vec<StoredProfile>> {
@@ -96,7 +155,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read.
-    pub fn list_for_setup_with_known_outputs(
+    fn list_for_setup_with_known_outputs(
         &self,
         setup_fingerprint: &str,
         known_outputs: &HashMap<String, OutputIdentity>,
@@ -112,7 +171,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read.
-    pub fn profiles_with_known_outputs(
+    fn profiles_with_known_outputs(
         &self,
         known_outputs: &HashMap<String, OutputIdentity>,
     ) -> CoreResult<Vec<Profile>> {
@@ -127,7 +186,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read.
-    pub fn profiles_for_setup_with_known_outputs(
+    fn profiles_for_setup_with_known_outputs(
         &self,
         setup_fingerprint: &str,
         known_outputs: &HashMap<String, OutputIdentity>,
@@ -143,7 +202,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read.
-    pub fn get_for_setup_with_known_outputs(
+    fn get_for_setup_with_known_outputs(
         &self,
         name: &str,
         setup_fingerprint: &str,
@@ -161,7 +220,43 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if the name is ambiguous or storage cannot be read.
-    pub fn get_unique_with_known_outputs(
+    pub fn get_unique(
+        &self,
+        name: &str,
+        state_store: &StateStore,
+    ) -> CoreResult<Option<StoredProfile>> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.get_unique_with_known_outputs(name, &state.known_outputs)
+    }
+
+    /// Saves a profile with normalized state.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read or written.
+    pub fn save(&self, profile: &Profile, state_store: &StateStore) -> CoreResult<()> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.save_with_known_outputs(profile, &state.known_outputs)
+    }
+
+    /// Removes a profile for a setup.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage or state storage cannot be read or written.
+    pub fn remove_for_setup(
+        &self,
+        name: &str,
+        setup_fingerprint: &str,
+        state_store: &StateStore,
+    ) -> CoreResult<bool> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        self.remove_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)
+    }
+
+    /// Finds a uniquely named profile.
+    ///
+    /// # Errors
+    /// Returns an error if the name is ambiguous or storage cannot be read.
+    fn get_unique_with_known_outputs(
         &self,
         name: &str,
         known_outputs: &HashMap<String, OutputIdentity>,
@@ -183,7 +278,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read or written.
-    pub fn save_with_known_outputs(
+    fn save_with_known_outputs(
         &self,
         profile: &Profile,
         known_outputs: &HashMap<String, OutputIdentity>,
@@ -212,7 +307,7 @@ impl ProfileStore {
     ///
     /// # Errors
     /// Returns an error if profile storage cannot be read or written.
-    pub fn remove_for_setup_with_known_outputs(
+    fn remove_for_setup_with_known_outputs(
         &self,
         name: &str,
         setup_fingerprint: &str,
@@ -253,42 +348,6 @@ impl ProfileStore {
 
         let original_len = stored.profiles.len();
         stored.profiles.retain(|profile| profile.name != name);
-
-        if stored.profiles.len() == original_len {
-            return Ok(false);
-        }
-
-        self.save_profiles_file(&stored)?;
-        tracing::info!("Removed profile '{name}'");
-        Ok(true)
-    }
-
-    /// Removes a uniquely named profile after normalization.
-    ///
-    /// # Errors
-    /// Returns an error if the name is ambiguous or storage cannot be read or written.
-    pub fn remove_unique_with_known_outputs(
-        &self,
-        name: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<bool> {
-        let mut stored = self.load_profiles_file()?;
-        let matches = stored
-            .profiles
-            .iter()
-            .filter(|profile| {
-                normalize_profile_with_known_outputs(profile, known_outputs).name == name
-            })
-            .count();
-
-        if matches > 1 {
-            return Err(CoreError::AmbiguousProfile(name.to_string()));
-        }
-
-        let original_len = stored.profiles.len();
-        stored.profiles.retain(|profile| {
-            normalize_profile_with_known_outputs(profile, known_outputs).name != name
-        });
 
         if stored.profiles.len() == original_len {
             return Ok(false);

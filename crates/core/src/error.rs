@@ -24,9 +24,20 @@ pub enum BackendConnectionError {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct BackendConnectionAttempt {
     pub backend: BackendKind,
     pub error: String,
+}
+
+impl BackendConnectionAttempt {
+    #[must_use]
+    pub fn new(backend: BackendKind, error: impl Into<String>) -> Self {
+        Self {
+            backend,
+            error: error.into(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

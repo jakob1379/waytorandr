@@ -120,19 +120,19 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
 fn load_status_view(show_all: bool) -> Result<StatusView> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let state = state_store.load_state()?.unwrap_or_default();
     let topology = load_current_topology(&state_store)?;
+    let state = state_store.load_state()?.unwrap_or_default();
     let current_setup = topology.setup_fingerprint();
     let current_setup_name = state
         .setup_name_for_setup(&current_setup)
         .map(str::to_string);
-    let profiles = store.profiles_with_known_outputs(&state.known_outputs)?;
-    let all_profiles = store.list_with_known_outputs(&state.known_outputs)?;
+    let profiles = store.profiles(&state_store)?;
+    let all_profiles = store.list(&state_store)?;
     let has_saved_profiles = !all_profiles.is_empty();
     let listed_profiles: Vec<StoredProfile> = if show_all {
         all_profiles
     } else {
-        store.list_for_setup_with_known_outputs(&current_setup, &state.known_outputs)?
+        store.list_for_setup(&current_setup, &state_store)?
     };
 
     let entries: Vec<ListEntry> = listed_profiles
@@ -194,7 +194,7 @@ fn build_list_view(
         current_profiles.push(ListProfileView {
             name: stored.name.clone(),
             priority: stored.priority,
-            is_default: workflow::default_profile_for_setup(state, &stored.setup_fingerprint)
+            is_default: state.setup_default_profile(&stored.setup_fingerprint)
                 == Some(stored.name.as_str()),
             is_active: state.last_profile.as_ref() == Some(&stored.name),
         });
