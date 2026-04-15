@@ -87,12 +87,6 @@ enum ConfigStatus {
     Cancelled,
 }
 
-impl Default for HeadInfo {
-    fn default() -> Self {
-        panic!("HeadInfo::default should not be used")
-    }
-}
-
 impl WlrootsBackend {
     /// Connects to the wlroots backend.
     ///
@@ -255,7 +249,7 @@ impl WaylandClient {
                     .as_deref()
                     .is_some_and(is_virtual_description);
                 state.identity.is_ignored = false;
-                state.enabled = head_is_enabled(head.enabled, head.current_mode.as_ref());
+                state.enabled = head_is_enabled(head.enabled);
                 state.mode = mode;
                 state.available_modes = available_modes_for_head(&self.state, head);
                 state.position = head.position;
@@ -395,8 +389,8 @@ fn available_modes_for_head(state: &State, head: &HeadInfo) -> Vec<Mode> {
     modes
 }
 
-fn head_is_enabled(enabled: bool, current_mode: Option<&ObjectId>) -> bool {
-    enabled || current_mode.is_some()
+fn head_is_enabled(enabled: bool) -> bool {
+    enabled
 }
 
 fn config_failure(status: ConfigStatus) -> Option<ConfigFailureKind> {
@@ -663,12 +657,11 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ()> for State {
 #[cfg(test)]
 mod tests {
     use super::{head_is_enabled, update_identity_field};
-    use wayland_client::backend::ObjectId;
 
     #[test]
-    fn current_mode_marks_head_enabled() {
-        assert!(head_is_enabled(false, Some(&ObjectId::null())));
-        assert!(!head_is_enabled(false, None));
+    fn disabled_head_stays_disabled_even_if_mode_lingers() {
+        assert!(!head_is_enabled(false));
+        assert!(head_is_enabled(true));
     }
 
     #[test]
