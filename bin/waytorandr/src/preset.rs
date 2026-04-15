@@ -60,3 +60,34 @@ pub fn virtual_completion_candidates(
     .map(|(name, tag)| clap_complete::engine::CompletionCandidate::new(name).tag(Some(tag.into())))
     .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_virtual_preset_prefers_reverse_horizontal() {
+        assert_eq!(
+            resolve_virtual_preset("horizontal", true, false).unwrap(),
+            Some(VirtualPreset::HorizontalReverse)
+        );
+    }
+
+    #[test]
+    fn resolve_virtual_preset_maps_common_to_largest_when_requested() {
+        assert_eq!(
+            resolve_virtual_preset("common", false, true).unwrap(),
+            Some(VirtualPreset::Largest)
+        );
+    }
+
+    #[test]
+    fn completion_candidates_filter_by_prefix() {
+        let names: Vec<_> = virtual_completion_candidates("ver")
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(names, vec!["vertical"]);
+    }
+}

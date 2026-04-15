@@ -287,12 +287,16 @@ fn read_status() -> Result<ServiceStatus> {
             .as_deref()
             .is_some_and(|state| state != "not-found");
 
-    if !output.status.success() && !status.installed {
+    if !output.status.success() && failed_show_means_not_installed(&status) {
         return Ok(status);
     }
 
     ensure_output_success(&output, &format!("systemctl --user show {UNIT_NAME}"))?;
     Ok(status)
+}
+
+fn failed_show_means_not_installed(status: &ServiceStatus) -> bool {
+    !status.installed && status.load_state.as_deref() == Some("not-found")
 }
 
 fn parse_systemctl_show(text: &str) -> ServiceStatus {
@@ -393,6 +397,23 @@ mod tests {
             status.fragment_path.as_deref(),
             Some("/tmp/waytorandrd.service")
         );
+    }
+
+    #[test]
+    fn failed_show_means_not_installed_only_for_not_found_units() {
+        let not_found = ServiceStatus {
+            installed: false,
+            load_state: Some("not-found".to_string()),
+            ..ServiceStatus::default()
+        };
+        let broken_systemd = ServiceStatus {
+            installed: false,
+            load_state: None,
+            ..ServiceStatus::default()
+        };
+
+        assert!(failed_show_means_not_installed(&not_found));
+        assert!(!failed_show_means_not_installed(&broken_systemd));
     }
 
     #[test]
