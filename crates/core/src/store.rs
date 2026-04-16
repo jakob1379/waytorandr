@@ -57,6 +57,27 @@ impl ProfilesSettings {
         self.setup_defaults
             .insert(setup_fingerprint.to_string(), profile_name.to_string());
     }
+
+    fn clear_setup_default_if_matches(&mut self, setup_fingerprint: &str, profile_name: &str) {
+        if self.setup_default_profile(setup_fingerprint) == Some(profile_name) {
+            self.setup_defaults.remove(setup_fingerprint);
+        }
+    }
+
+    fn clear_new_setup_default_if_profile_matches(&mut self, profile_name: &str) {
+        if matches!(
+            self.new_setup_default.as_ref(),
+            Some(DefaultTarget::Profile { name }) if name == profile_name
+        ) {
+            self.new_setup_default = None;
+        }
+    }
+
+    fn clear_all_profile_references(&mut self, profile_name: &str) {
+        self.setup_defaults
+            .retain(|_, stored_name| stored_name != profile_name);
+        self.clear_new_setup_default_if_profile_matches(profile_name);
+    }
 }
 
 impl ProfileStore {
@@ -392,6 +413,14 @@ impl ProfileStore {
             return Ok(false);
         }
 
+        stored
+            .settings
+            .clear_setup_default_if_matches(setup_fingerprint, name);
+        if !stored.profiles.iter().any(|profile| profile.name == name) {
+            stored
+                .settings
+                .clear_new_setup_default_if_profile_matches(name);
+        }
         self.save_profiles_file(&stored)?;
         tracing::info!("Removed profile '{name}'");
         Ok(true)
@@ -420,6 +449,7 @@ impl ProfileStore {
             return Ok(false);
         }
 
+        stored.settings.clear_all_profile_references(name);
         self.save_profiles_file(&stored)?;
         tracing::info!("Removed profile '{name}'");
         Ok(true)

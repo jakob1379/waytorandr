@@ -278,6 +278,61 @@ fn profile_store_migrates_legacy_json_filename() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn remove_for_setup_clears_deleted_profiles_setup_default_only() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let store = ProfileStore::bootstrap()?;
+        let state_store = StateStore::bootstrap()?;
+        let desk = profile("desk", "DP-1");
+        let travel = profile("desk", "eDP-1");
+        let desk_setup = desk.setup_fingerprint();
+
+        store.save(&desk, &state_store)?;
+        store.save(&travel, &state_store)?;
+        store.set_setup_default_profile(&desk_setup, "desk")?;
+        store.set_new_setup_default(DefaultTarget::Profile {
+            name: "desk".to_string(),
+        })?;
+
+        assert!(store.remove_for_setup("desk", &desk_setup, &state_store)?);
+
+        let settings = store.settings()?;
+        assert_eq!(settings.setup_default_profile(&desk_setup), None);
+        assert_eq!(
+            settings.new_setup_default,
+            Some(DefaultTarget::Profile {
+                name: "desk".to_string()
+            })
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn remove_unique_clears_all_defaults_for_deleted_profile() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let store = ProfileStore::bootstrap()?;
+        let state_store = StateStore::bootstrap()?;
+        let desk = profile("desk", "DP-1");
+        let desk_setup = desk.setup_fingerprint();
+
+        store.save(&desk, &state_store)?;
+        store.set_setup_default_profile(&desk_setup, "desk")?;
+        store.set_new_setup_default(DefaultTarget::Profile {
+            name: "desk".to_string(),
+        })?;
+
+        assert!(store.remove_unique("desk")?);
+
+        let settings = store.settings()?;
+        assert_eq!(settings.setup_default_profile(&desk_setup), None);
+        assert_eq!(settings.new_setup_default, None);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn profile_store_open_honors_legacy_json_fallback() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|temp| {
         let legacy_path = legacy_config_path(temp);
