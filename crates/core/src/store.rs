@@ -81,6 +81,7 @@ impl ProfileStore {
             .ok_or(CoreError::MissingConfigDirectory)?
             .to_path_buf();
         fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir { path: dir, source })?;
+        store.migrate_legacy_profiles_json()?;
         store.migrate_legacy_profiles()?;
         store.migrate_legacy_defaults_from_state()?;
         Ok(store)
@@ -563,6 +564,10 @@ fn config_dir() -> CoreResult<PathBuf> {
 }
 
 fn profiles_path() -> CoreResult<PathBuf> {
+    Ok(config_dir()?.join("waytorandr.json"))
+}
+
+fn legacy_profiles_json_path() -> CoreResult<PathBuf> {
     Ok(config_dir()?.join("profiles.json"))
 }
 
@@ -595,8 +600,41 @@ fn load_profiles_from_path(path: &Path) -> CoreResult<Vec<Profile>> {
             }
         })?;
         Ok(profiles.profiles)
+    } else if let Ok(legacy_path) = legacy_profiles_json_path() {
+        if legacy_path.exists() {
+            let content =
+                fs::read_to_string(&legacy_path).map_err(|source| CoreError::ReadFile {
+                    path: legacy_path.clone(),
+                    source,
+                })?;
+            let profiles = serde_json::from_str::<ProfilesFile>(&content).map_err(|source| {
+                CoreError::ParseJson {
+                    path: legacy_path.clone(),
+                    source,
+                }
+            })?;
+            Ok(profiles.profiles)
+        } else {
+            load_legacy_profiles()
+        }
     } else {
         load_legacy_profiles()
+    }
+}
+
+impl ProfileStore {
+    fn migrate_legacy_profiles_json(&self) -> CoreResult<()> {
+        let legacy_path = legacy_profiles_json_path()?;
+        if self.path.exists() || !legacy_path.exists() {
+            return Ok(());
+        }
+
+        fs::rename(&legacy_path, &self.path).map_err(|source| CoreError::WriteFile {
+            path: self.path.clone(),
+            source,
+        })?;
+
+        Ok(())
     }
 }
 
