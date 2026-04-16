@@ -22,6 +22,12 @@ enum DaemonOutcome {
     TopologyChanged,
 }
 
+enum ApplyOutcome {
+    Applied,
+    Rejected,
+    TopologyChanged,
+}
+
 enum TopologyStability {
     Stable(Topology),
     TimedOut(Topology),
@@ -123,7 +129,8 @@ fn maybe_apply_matching_profile(
             .find(|profile| profile.name == default_name)
         {
             tracing::info!(profile = %profile.name, "selected explicit default profile for current topology");
-            return apply_profile(backend, state_store, profile, topology, Some(&profile.name));
+            return apply_profile(backend, state_store, profile, topology, Some(&profile.name))
+                .and_then(strict_daemon_outcome_from_apply);
         }
         tracing::warn!(
             profile = %default_name,
@@ -135,7 +142,8 @@ fn maybe_apply_matching_profile(
     if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
         tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
         let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
-        return apply_profile(backend, state_store, &remembered_profile, topology, None);
+        return apply_profile(backend, state_store, &remembered_profile, topology, None)
+            .and_then(strict_daemon_outcome_from_apply);
     }
 
     if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
@@ -146,7 +154,8 @@ fn maybe_apply_matching_profile(
             &matched.profile,
             topology,
             Some(&matched.profile.name),
-        );
+        )
+        .and_then(strict_daemon_outcome_from_apply);
     }
 
     if let Some(default_target) = settings.new_setup_default.as_ref() {
@@ -168,37 +177,21 @@ fn maybe_apply_matching_profile(
             };
 
             return match outcome {
-                Ok(result) => Ok(result),
-                Err(err) => {
-                    // Check if this is a configuration-rejection error
-                    let is_config_rejection = match target {
-                        workflow::SelectedTarget::Profile(_) => {
-                            // For profiles, check if apply_profile_workflow returned a rejection
-                            err.to_string().contains("rejected configuration")
-                        }
-                        workflow::SelectedTarget::Virtual(_) => {
-                            // For virtual presets, check if apply_preset_workflow returned a rejection
-                            err.to_string().contains("rejected configuration")
-                        }
-                    };
-
-                    if is_config_rejection {
-                        tracing::warn!(
-                            fingerprint = %setup_fingerprint,
-                            error = %err,
-                            "configured default for new setups rejected by backend; remembering current topology"
-                        );
-                        remember_current_topology(
-                            state_store,
-                            backend.capabilities().backend,
-                            topology,
-                        )?;
-                        Ok(DaemonOutcome::NoMatch)
-                    } else {
-                        // Transport, backend, or state-persistence errors should propagate
-                        Err(err)
-                    }
+                Ok(ApplyOutcome::Applied) => Ok(DaemonOutcome::Applied),
+                Ok(ApplyOutcome::TopologyChanged) => Ok(DaemonOutcome::TopologyChanged),
+                Ok(ApplyOutcome::Rejected) => {
+                    tracing::warn!(
+                        fingerprint = %setup_fingerprint,
+                        "configured default for new setups rejected by backend; remembering current topology"
+                    );
+                    remember_current_topology(
+                        state_store,
+                        backend.capabilities().backend,
+                        topology,
+                    )?;
+                    Ok(DaemonOutcome::NoMatch)
                 }
+                Err(err) => Err(err),
             };
         }
 
@@ -222,7 +215,7 @@ fn apply_preset(
     state_store: &StateStore,
     preset: VirtualPreset,
     topology: &Topology,
-) -> Result<DaemonOutcome> {
+) -> Result<ApplyOutcome> {
     let backend_kind = backend.capabilities().backend;
     if let Some(message) = backend
         .capabilities()
@@ -235,14 +228,14 @@ fn apply_preset(
     if plan_matches_topology_including_virtuals(&plan, topology) {
         persist_runtime_state(state_store, None, backend_kind, topology)?;
         tracing::info!(preset = %preset, "virtual preset already matches current topology");
-        return Ok(DaemonOutcome::Applied);
+        return Ok(ApplyOutcome::Applied);
     }
 
     let execution = workflow::apply_preset_workflow(backend, state_store, preset)
         .map_err(anyhow::Error::from)?;
 
     if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
-        return Ok(DaemonOutcome::TopologyChanged);
+        return Ok(ApplyOutcome::TopologyChanged);
     }
 
     match execution {
@@ -251,25 +244,16 @@ fn apply_preset(
         } => {
             persist_runtime_state(state_store, None, backend_kind, &applied_topology)?;
             tracing::info!(preset = %preset, "applied virtual preset");
-            Ok(DaemonOutcome::Applied)
+            Ok(ApplyOutcome::Applied)
         }
-        workflow::ApplyExecution::ApplyFailed { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend failed to apply configuration")
-            );
-        }
+        workflow::ApplyExecution::ApplyFailed { .. } => bail!(
+            "{}",
+            execution
+                .failure_message()
+                .unwrap_or("backend failed to apply configuration")
+        ),
         workflow::ApplyExecution::Unsupported { .. }
-        | workflow::ApplyExecution::Rejected { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend rejected configuration")
-            );
-        }
+        | workflow::ApplyExecution::Rejected { .. } => Ok(ApplyOutcome::Rejected),
     }
 }
 
@@ -279,7 +263,7 @@ fn apply_profile(
     profile: &Profile,
     topology: &Topology,
     recorded_profile_name: Option<&str>,
-) -> Result<DaemonOutcome> {
+) -> Result<ApplyOutcome> {
     let backend_kind = backend.capabilities().backend;
     let plan =
         workflow::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
@@ -290,14 +274,14 @@ fn apply_profile(
         } else {
             tracing::info!("remembered layout already matches current topology");
         }
-        return Ok(DaemonOutcome::Applied);
+        return Ok(ApplyOutcome::Applied);
     }
 
     let execution = workflow::apply_profile_workflow(backend, state_store, profile)
         .map_err(anyhow::Error::from)?;
 
     if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
-        return Ok(DaemonOutcome::TopologyChanged);
+        return Ok(ApplyOutcome::TopologyChanged);
     }
 
     match execution {
@@ -316,25 +300,16 @@ fn apply_profile(
             } else {
                 tracing::info!("applied remembered layout");
             }
-            Ok(DaemonOutcome::Applied)
+            Ok(ApplyOutcome::Applied)
         }
-        workflow::ApplyExecution::ApplyFailed { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend failed to apply configuration")
-            );
-        }
+        workflow::ApplyExecution::ApplyFailed { .. } => bail!(
+            "{}",
+            execution
+                .failure_message()
+                .unwrap_or("backend failed to apply configuration")
+        ),
         workflow::ApplyExecution::Unsupported { .. }
-        | workflow::ApplyExecution::Rejected { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend rejected configuration")
-            );
-        }
+        | workflow::ApplyExecution::Rejected { .. } => Ok(ApplyOutcome::Rejected),
     }
 }
 
@@ -367,6 +342,14 @@ fn remember_current_topology(
     persist_runtime_state(state_store, None, backend, topology)
 }
 
+fn strict_daemon_outcome_from_apply(outcome: ApplyOutcome) -> Result<DaemonOutcome> {
+    match outcome {
+        ApplyOutcome::Applied => Ok(DaemonOutcome::Applied),
+        ApplyOutcome::TopologyChanged => Ok(DaemonOutcome::TopologyChanged),
+        ApplyOutcome::Rejected => bail!("backend rejected configuration"),
+    }
+}
+
 fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
     topology
         .outputs
@@ -380,7 +363,7 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
 
 fn plan_matches_topology_including_virtuals(plan: &LayoutPlan, topology: &Topology) -> bool {
     // Check that all planned outputs exist in the topology
-    for (name, desired) in &plan.outputs {
+    for (name, _) in &plan.outputs {
         if !topology.outputs.contains_key(name) {
             return false;
         }
@@ -607,7 +590,7 @@ mod tests {
                 Some(&profile.name),
             )?;
 
-            assert!(matches!(outcome, DaemonOutcome::TopologyChanged));
+            assert!(matches!(outcome, ApplyOutcome::TopologyChanged));
             assert_eq!(
                 *test_calls
                     .lock()
@@ -751,7 +734,7 @@ mod tests {
                 .load_state()?
                 .ok_or_else(|| std::io::Error::other("state should exist"))?;
 
-            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert!(matches!(outcome, ApplyOutcome::Applied));
             assert_eq!(
                 *test_calls
                     .lock()

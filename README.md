@@ -100,6 +100,7 @@ for the full command reference and examples.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
+> `waytorandr set --json` and `waytorandr save --json` include optional `default_scope` when `default_set` is true. The value is `setup` for setup-specific defaults and `new_setups` for fallback targets for unseen hardware.
 > `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured and optional `new_setup_default` when a fallback target is configured.
 
 ## Daemon

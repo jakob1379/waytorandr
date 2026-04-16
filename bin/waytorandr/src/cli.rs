@@ -36,7 +36,7 @@ pub enum Commands {
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
 
-When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
+When [target] is omitted, `set` first applies the configured default for the current hardware setup.
 If no setup default is configured, it applies the best matching saved profile.
 If there is no match, it applies the configured default for new setups.
 

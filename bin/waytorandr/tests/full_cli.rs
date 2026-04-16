@@ -367,6 +367,10 @@ fn cli_help_renders_correctly() -> Result<(), Box<dyn Error>> {
     assert!(save_help.contains("USAGE") || save_help.contains("Usage"));
     assert!(save_help.contains("save"));
 
+    let set_help = env.run_text(["set", "--help"])?;
+    assert!(set_help.contains("USAGE") || set_help.contains("Usage"));
+    assert!(set_help.contains("set"));
+
     let service_run_help = env.run_text(["service", "run", "--help"])?;
     assert!(service_run_help.contains("Usage") || service_run_help.contains("USAGE"));
     assert!(service_run_help.contains("run"));
