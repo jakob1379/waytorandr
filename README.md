@@ -108,10 +108,11 @@ for the full command reference and examples.
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. When the physical setup changes, it
-reapplies the configured default profile for the current fingerprint, or the best
-matching saved profile when no default profile is set for that fingerprint. If
-there is still no match, it applies the configured default target for new
-setups before falling back to remembering the current topology.
+reapplies the configured default profile for the current fingerprint. If no
+setup default is configured, it first tries the remembered topology for that
+setup, then the best matching saved profile. If there is still no match, it
+applies the configured default target for new setups before falling back to
+remembering the current topology.
 
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup

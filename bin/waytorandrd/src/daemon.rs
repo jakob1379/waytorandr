@@ -221,7 +221,12 @@ fn apply_preset(
         .capabilities()
         .virtual_preset_unavailable_message(preset)
     {
-        bail!(message);
+        tracing::warn!(
+            preset = %preset,
+            message = %message,
+            "virtual preset is unavailable on this backend"
+        );
+        return Ok(ApplyOutcome::Rejected);
     }
 
     let plan = Planner::plan_from_preset(preset, topology, None).map_err(anyhow::Error::from)?;
@@ -748,6 +753,61 @@ mod tests {
                 0
             );
             assert_eq!(state.last_profile.as_deref(), Some("desk"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn unavailable_virtual_default_falls_back_to_remembered_topology() -> Result<(), Box<dyn Error>>
+    {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: topology.clone(),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Mirror,
+            })?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(state.last_profile, None);
+            assert_eq!(
+                state
+                    .remembered_setups
+                    .get(&topology.setup_fingerprint())
+                    .map(Topology::fingerprint),
+                Some(topology.fingerprint())
+            );
             Ok(())
         })?;
         Ok(())
