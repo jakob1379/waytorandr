@@ -354,6 +354,26 @@ fn exercise_virtual_workflows(
     Ok(())
 }
 
+#[test]
+fn cli_help_renders_correctly() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+
+    let top_level_help = env.run_text(["--help"])?;
+    assert!(top_level_help.contains("USAGE") || top_level_help.contains("Usage"));
+    assert!(top_level_help.contains("waytorandr"));
+
+    let save_help = env.run_text(["save", "--help"])?;
+    assert!(save_help.contains("USAGE") || save_help.contains("Usage"));
+    assert!(save_help.contains("save"));
+
+    let service_run_help = env.run_text(["service", "run", "--help"])?;
+    assert!(service_run_help.contains("Usage") || service_run_help.contains("USAGE"));
+    assert!(service_run_help.contains("run"));
+
+    Ok(())
+}
+
 fn exercise_remove_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let remove_dry_run = env.run_json(["remove", "desk-alt", "--dry-run", "--json"])?;
     assert_eq!(remove_dry_run["would_remove"], true);

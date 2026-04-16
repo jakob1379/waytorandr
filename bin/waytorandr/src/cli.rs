@@ -131,8 +131,8 @@ pub enum ServiceCommands {
 #[derive(Args)]
 pub struct SetArgs {
     #[arg(
-        value_name = "profile",
-        help = "Saved profile or virtual configuration; omit to set setup default, best match, or new-setup default",
+        value_name = "target",
+        help = "Saved target or virtual preset; omit to apply an auto-selected target or use a default/virtual preset",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,

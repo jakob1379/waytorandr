@@ -170,17 +170,34 @@ fn maybe_apply_matching_profile(
             return match outcome {
                 Ok(result) => Ok(result),
                 Err(err) => {
-                    tracing::warn!(
-                        fingerprint = %setup_fingerprint,
-                        error = %err,
-                        "configured default for new setups could not be applied; remembering current topology"
-                    );
-                    remember_current_topology(
-                        state_store,
-                        backend.capabilities().backend,
-                        topology,
-                    )?;
-                    Ok(DaemonOutcome::NoMatch)
+                    // Check if this is a configuration-rejection error
+                    let is_config_rejection = match target {
+                        workflow::SelectedTarget::Profile(_) => {
+                            // For profiles, check if apply_profile_workflow returned a rejection
+                            err.to_string().contains("rejected configuration")
+                        }
+                        workflow::SelectedTarget::Virtual(_) => {
+                            // For virtual presets, check if apply_preset_workflow returned a rejection
+                            err.to_string().contains("rejected configuration")
+                        }
+                    };
+
+                    if is_config_rejection {
+                        tracing::warn!(
+                            fingerprint = %setup_fingerprint,
+                            error = %err,
+                            "configured default for new setups rejected by backend; remembering current topology"
+                        );
+                        remember_current_topology(
+                            state_store,
+                            backend.capabilities().backend,
+                            topology,
+                        )?;
+                        Ok(DaemonOutcome::NoMatch)
+                    } else {
+                        // Transport, backend, or state-persistence errors should propagate
+                        Err(err)
+                    }
                 }
             };
         }
@@ -215,7 +232,7 @@ fn apply_preset(
     }
 
     let plan = Planner::plan_from_preset(preset, topology, None).map_err(anyhow::Error::from)?;
-    if plan_matches_topology(&plan, topology) {
+    if plan_matches_topology_including_virtuals(&plan, topology) {
         persist_runtime_state(state_store, None, backend_kind, topology)?;
         tracing::info!(preset = %preset, "virtual preset already matches current topology");
         return Ok(DaemonOutcome::Applied);
@@ -355,6 +372,25 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
         .outputs
         .iter()
         .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
+        .all(|(name, current)| match plan.outputs.get(name) {
+            Some(desired) => desired.same_layout_as(current),
+            None => !current.enabled,
+        })
+}
+
+fn plan_matches_topology_including_virtuals(plan: &LayoutPlan, topology: &Topology) -> bool {
+    // Check that all planned outputs exist in the topology
+    for (name, desired) in &plan.outputs {
+        if !topology.outputs.contains_key(name) {
+            return false;
+        }
+    }
+
+    // Check that all topology outputs (including virtual ones) match the plan
+    topology
+        .outputs
+        .iter()
+        .filter(|(_, output)| !output.identity.is_ignored)
         .all(|(name, current)| match plan.outputs.get(name) {
             Some(desired) => desired.same_layout_as(current),
             None => !current.enabled,
