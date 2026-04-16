@@ -237,8 +237,8 @@ fn build_list_view(
 
 fn describe_default_target(target: &DefaultTarget) -> String {
     match target {
-        DefaultTarget::Profile { name } => name.clone(),
-        DefaultTarget::Virtual { preset } => preset.to_string(),
+        DefaultTarget::Profile { name } => format!("saved profile '{name}'"),
+        DefaultTarget::Virtual { preset } => format!("virtual '{preset}'"),
     }
 }
 
