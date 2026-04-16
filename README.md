@@ -61,7 +61,7 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr save work-dock --setup-name office
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
-./result/bin/waytorandr set vertical --default
+./result/bin/waytorandr set external --default
 ```
 
 Preview a virtual layout without applying it:
@@ -86,6 +86,7 @@ waytorandr service   Manage the waytorandrd user service
 Built-in `set` targets:
 
 - `off`
+- `external` - disable built-in panels and keep external outputs on when present
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
 - `mirror` - native mirroring at one shared mode
