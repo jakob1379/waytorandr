@@ -5,7 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 
-use super::output::write_json;
+use super::output::{
+    failure, heading, key, status_label, success, value, warning, write_json, yes_no,
+};
 use crate::cli::ServiceCommands;
 
 const UNIT_NAME: &str = "waytorandrd.service";
@@ -99,9 +101,17 @@ fn cmd_install(json: bool) -> Result<()> {
         });
     }
 
-    println!("Installed user service '{UNIT_NAME}'");
-    println!("Unit file: {}", unit_path.display());
-    println!("Enabled for '{INSTALL_TARGET}'");
+    println!(
+        "{} {}",
+        success("Installed"),
+        value(format!("user service '{UNIT_NAME}'"))
+    );
+    println!("{} {}", key("Unit file"), unit_path.display());
+    println!(
+        "{} {}",
+        success("Enabled for"),
+        value(format!("'{INSTALL_TARGET}'"))
+    );
     Ok(())
 }
 
@@ -127,9 +137,13 @@ fn cmd_uninstall(json: bool) -> Result<()> {
     }
 
     if was_installed {
-        println!("Uninstalled user service '{UNIT_NAME}'");
+        println!(
+            "{} {}",
+            success("Uninstalled"),
+            value(format!("user service '{UNIT_NAME}'"))
+        );
     } else {
-        println!("User service '{UNIT_NAME}' is not installed");
+        println!("{}", warning("User service is not installed"));
     }
     Ok(())
 }
@@ -150,7 +164,11 @@ fn cmd_systemctl(action: &'static str, json: bool) -> Result<()> {
         });
     }
 
-    println!("{} user service '{}'", capitalize(action), UNIT_NAME);
+    println!(
+        "{} {}",
+        heading(capitalize(action)),
+        value(format!("user service '{UNIT_NAME}'"))
+    );
     print_status_summary(&status);
     Ok(())
 }
@@ -329,28 +347,25 @@ fn parse_systemctl_show(text: &str) -> ServiceStatus {
 }
 
 fn print_status_summary(status: &ServiceStatus) {
-    println!("Service: {unit}", unit = status.unit);
-    println!("Installed: {}", yes_no(status.installed));
+    println!("{}: {}", key("Service"), status.unit);
+    println!("{}: {}", key("Installed"), yes_no(status.installed));
     if let Some(state) = &status.unit_file_state {
-        println!("Enabled: {state}");
+        println!("{}: {}", key("Enabled"), status_label(state));
     }
     if let Some(active) = &status.active_state {
         if let Some(sub) = &status.sub_state {
-            println!("Active: {active} ({sub})");
+            println!(
+                "{}: {} ({})",
+                key("Active"),
+                status_label(active),
+                service_sub_state(active, sub)
+            );
         } else {
-            println!("Active: {active}");
+            println!("{}: {}", key("Active"), status_label(active));
         }
     }
     if let Some(path) = &status.fragment_path {
-        println!("Unit file: {path}");
-    }
-}
-
-const fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
+        println!("{}: {path}", key("Unit file"));
     }
 }
 
@@ -359,6 +374,15 @@ fn capitalize(value: &str) -> String {
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().collect::<String>() + chars.as_str()
     })
+}
+
+fn service_sub_state(active_state: &str, sub_state: &str) -> String {
+    match (active_state, sub_state) {
+        ("active", "running" | "listening" | "exited") => success(sub_state),
+        ("inactive", "dead") => warning(sub_state),
+        (_, "failed") | ("failed", _) => failure(sub_state),
+        _ => warning(sub_state),
+    }
 }
 
 fn json_command_name(action: &str) -> &'static str {

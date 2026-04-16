@@ -96,6 +96,7 @@ for the full command reference and examples.
 
 > [!TIP]
 > Use `--json` on supported commands when you want stable machine-readable output.
+> Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
 > `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured.
