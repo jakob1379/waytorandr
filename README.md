@@ -170,12 +170,12 @@ Current option surface:
 
 Profiles and saved default settings remain in standard XDG config, while runtime state remains in XDG state:
 
-- `$XDG_CONFIG_HOME/waytorandr/profiles.json`
+- `$XDG_CONFIG_HOME/waytorandr/waytorandr.json`
 - `$XDG_STATE_HOME/waytorandr/state.toml`
 
 If the XDG variables are unset, these typically resolve to:
 
-- `~/.config/waytorandr/profiles.json`
+- `~/.config/waytorandr/waytorandr.json`
 - `~/.local/state/waytorandr/state.toml`
 
 ## Limits

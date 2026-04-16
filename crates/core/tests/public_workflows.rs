@@ -78,7 +78,14 @@ fn profile(name: &str, connector: &str) -> Profile {
     )
 }
 
-fn profiles_path(temp: &TempDir) -> std::path::PathBuf {
+fn config_path(temp: &TempDir) -> std::path::PathBuf {
+    temp.path()
+        .join("config")
+        .join("waytorandr")
+        .join("waytorandr.json")
+}
+
+fn legacy_config_path(temp: &TempDir) -> std::path::PathBuf {
     temp.path()
         .join("config")
         .join("waytorandr")
@@ -95,7 +102,7 @@ fn profile_store_roundtrips_saved_profiles_per_setup() -> Result<(), Box<dyn Err
 
         store.save(&profile, &state_store)?;
 
-        assert!(profiles_path(temp).exists());
+        assert!(config_path(temp).exists());
         assert!(!temp
             .path()
             .join("config")
@@ -164,11 +171,11 @@ fn profile_store_migrates_legacy_profiles_to_json_file() -> Result<(), Box<dyn E
 
         let store = ProfileStore::bootstrap()?;
         let setup_fingerprint = legacy_profile.setup_fingerprint();
-        let profiles_path = profiles_path(temp);
+        let config_path = config_path(temp);
         let state_store = StateStore::bootstrap()?;
 
         assert!(!legacy_path.exists());
-        assert!(profiles_path.exists());
+        assert!(config_path.exists());
         assert!(store
             .get_for_setup("desk", &setup_fingerprint, &state_store)?
             .is_some());
@@ -223,7 +230,7 @@ fn profile_store_migrates_legacy_defaults_into_profiles_json() -> Result<(), Box
         let store = ProfileStore::bootstrap()?;
         let settings = store.settings()?;
         let persisted = std::fs::read_to_string(state_store.dir().join("state.toml"))?;
-        let profiles_json = std::fs::read_to_string(profiles_path(temp))?;
+        let profiles_json = std::fs::read_to_string(config_path(temp))?;
 
         assert_eq!(
             settings.new_setup_default,
@@ -235,6 +242,36 @@ fn profile_store_migrates_legacy_defaults_into_profiles_json() -> Result<(), Box
         assert!(!persisted.contains("default_profile = \"desk\""));
         assert!(!persisted.contains("conn:DP-1"));
         assert!(profiles_json.contains("new_setup_default"));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn profile_store_migrates_legacy_json_filename() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let legacy_path = legacy_config_path(temp);
+        std::fs::create_dir_all(
+            legacy_path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("legacy config parent should exist"))?,
+        )?;
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profiles": [profile("desk", "DP-1")]
+            }))?,
+        )?;
+
+        let store = ProfileStore::bootstrap()?;
+        let state_store = StateStore::bootstrap()?;
+        let fingerprint = profile("desk", "DP-1").setup_fingerprint();
+
+        assert!(!legacy_path.exists());
+        assert!(config_path(temp).exists());
+        assert!(store
+            .get_for_setup("desk", &fingerprint, &state_store)?
+            .is_some());
         Ok(())
     })?;
     Ok(())
