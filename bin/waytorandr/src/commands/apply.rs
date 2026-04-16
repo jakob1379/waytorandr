@@ -12,6 +12,7 @@ use waytorandr_core::model::{BackendKind, VirtualPreset};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
+use waytorandr_core::store::{DefaultTarget, ProfileStore};
 use waytorandr_core::workflow;
 
 #[derive(Clone, Copy)]
@@ -43,6 +44,29 @@ pub(super) struct ActionOutcome {
     plan: LayoutPlan,
     validation: Option<TestResult>,
     default_set: bool,
+    default_scope: Option<DefaultScope>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum DefaultScope {
+    Setup,
+    NewSetups,
+}
+
+impl DefaultScope {
+    pub(super) const fn as_json(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::NewSetups => "new_setups",
+        }
+    }
+
+    fn description(self, target: &str) -> String {
+        match self {
+            Self::Setup => format!("'{target}' as the default profile for this setup"),
+            Self::NewSetups => format!("'{target}' as the default for new setups"),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -68,6 +92,8 @@ struct JsonActionResponse {
     validation: Option<JsonValidation>,
     #[serde(skip_serializing_if = "is_false")]
     default_set: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_scope: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -82,6 +108,8 @@ pub(super) struct JsonSaveResponse {
     pub(super) plan: Option<Vec<JsonOutputEntry>>,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) default_set: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) default_scope: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -123,6 +151,7 @@ fn build_dry_run_outcome(
     target: String,
     target_type: ActionTargetType,
     default_set: bool,
+    default_scope: Option<DefaultScope>,
     execution: workflow::ValidationExecution,
 ) -> Result<ActionOutcome> {
     match execution {
@@ -133,6 +162,7 @@ fn build_dry_run_outcome(
             plan,
             validation: Some(validation),
             default_set,
+            default_scope,
         }),
         other => bail!(
             "{}",
@@ -147,6 +177,7 @@ fn build_apply_outcome(
     target: String,
     target_type: ActionTargetType,
     default_set: bool,
+    default_scope: Option<DefaultScope>,
     execution: workflow::ApplyExecution,
 ) -> Result<ActionOutcome> {
     match execution {
@@ -157,6 +188,7 @@ fn build_apply_outcome(
             plan,
             validation: None,
             default_set,
+            default_scope,
         }),
         workflow::ApplyExecution::ApplyFailed { .. } => bail!(
             "{}",
@@ -176,6 +208,7 @@ fn build_apply_outcome(
 pub(super) fn execute_virtual_action(
     preset: VirtualPreset,
     dry_run: bool,
+    make_default_for_new_setups: bool,
 ) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
     let capabilities = backend.capabilities();
@@ -189,7 +222,8 @@ pub(super) fn execute_virtual_action(
         return build_dry_run_outcome(
             preset.to_string(),
             ActionTargetType::Virtual,
-            false,
+            make_default_for_new_setups,
+            make_default_for_new_setups.then_some(DefaultScope::NewSetups),
             workflow::validate_preset_workflow(backend.as_ref(), &state_store, preset)
                 .map_err(anyhow::Error::from)?,
         );
@@ -203,12 +237,16 @@ pub(super) fn execute_virtual_action(
     } = &execution
     {
         save_runtime_state(preset.as_str(), Some(backend_kind), applied_topology)?;
+        if make_default_for_new_setups {
+            set_new_setup_default(DefaultTarget::Virtual { preset })?;
+        }
     }
 
     build_apply_outcome(
         preset.to_string(),
         ActionTargetType::Virtual,
-        false,
+        make_default_for_new_setups,
+        make_default_for_new_setups.then_some(DefaultScope::NewSetups),
         execution,
     )
 }
@@ -228,6 +266,7 @@ pub(super) fn execute_profile_action(
             profile.name.clone(),
             ActionTargetType::Profile,
             make_default,
+            make_default.then_some(DefaultScope::Setup),
             workflow::validate_profile_workflow(backend.as_ref(), &state_store, profile)
                 .map_err(anyhow::Error::from)?,
         );
@@ -253,6 +292,7 @@ pub(super) fn execute_profile_action(
         profile.name.clone(),
         ActionTargetType::Profile,
         make_default,
+        make_default.then_some(DefaultScope::Setup),
         execution,
     )
 }
@@ -283,6 +323,7 @@ pub(super) fn emit_action_outcome(
             plan: plan_outputs(&outcome.plan),
             validation: outcome.validation.as_ref().map(json_validation),
             default_set: outcome.default_set,
+            default_scope: outcome.default_scope.map(DefaultScope::as_json),
         })?;
         if let Some(message) = validation_failure {
             bail!(message);
@@ -308,10 +349,12 @@ pub(super) fn emit_action_outcome(
             println!(
                 "{} {}",
                 warning("Would also set"),
-                value(format!(
-                    "'{}' as the default profile for this setup",
-                    outcome.target
-                ))
+                value(
+                    outcome
+                        .default_scope
+                        .expect("default scope should be set when default_set is true")
+                        .description(&outcome.target)
+                )
             );
         }
         if let Some(message) = validation_failure {
@@ -334,10 +377,12 @@ pub(super) fn emit_action_outcome(
         println!(
             "{} {}",
             success("Set"),
-            value(format!(
-                "'{}' as the default profile for this setup",
-                outcome.target
-            ))
+            value(
+                outcome
+                    .default_scope
+                    .expect("default scope should be set when default_set is true")
+                    .description(&outcome.target)
+            )
         );
     }
     Ok(())
@@ -352,8 +397,16 @@ pub(super) fn set_default_profile_for_fingerprint(
     profile_name: &str,
     setup_fingerprint: &str,
 ) -> Result<()> {
-    let state_store = StateStore::bootstrap()?;
-    workflow::set_default_profile_for_setup_in_store(&state_store, setup_fingerprint, profile_name)
+    let store = ProfileStore::bootstrap()?;
+    store
+        .set_setup_default_profile(setup_fingerprint, profile_name)
+        .map_err(anyhow::Error::from)
+}
+
+pub(super) fn set_new_setup_default(target: DefaultTarget) -> Result<()> {
+    let store = ProfileStore::bootstrap()?;
+    store
+        .set_new_setup_default(target)
         .map_err(anyhow::Error::from)
 }
 

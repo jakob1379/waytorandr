@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Result};
 
 use super::apply::{
     current_setup_fingerprint, emit_action_outcome, execute_profile_action, execute_virtual_action,
-    set_default_profile_for_fingerprint, JsonRemoveResponse, JsonSaveResponse,
+    set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse, JsonSaveResponse,
 };
 use super::output::{failure, print_plan_summary, success, value, warning, write_json};
 use super::shared::plan_outputs;
@@ -51,6 +51,7 @@ pub(super) fn cmd_save(
                 saved: false,
                 plan: Some(plan_outputs(&plan)),
                 default_set: make_default,
+                default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
             });
         }
 
@@ -94,6 +95,7 @@ pub(super) fn cmd_save(
             saved: true,
             plan: None,
             default_set: make_default,
+            default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
         });
     }
 
@@ -135,17 +137,14 @@ pub(super) fn cmd_set(
             bail!("--largest is deprecated; use `waytorandr set largest`")
         }
         if make_default {
-            bail!("--default requires an explicit saved profile target")
+            bail!("--default requires an explicit saved profile or virtual set target")
         }
         return cmd_change(dry_run, output_mode);
     }
 
     let name = name.expect("checked above");
     if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-        if make_default {
-            bail!("--default can only be used with saved profile targets")
-        }
-        let outcome = execute_virtual_action(preset, dry_run)?;
+        let outcome = execute_virtual_action(preset, dry_run, make_default)?;
         return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
     }
 
@@ -163,11 +162,20 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let topology = super::shared::load_current_topology(&state_store)?;
-    let state = state_store.load_state()?.unwrap_or_default();
     let profiles = store.profiles(&state_store)?;
-    let profile = workflow::select_profile_for_topology(&topology, &profiles, &state)
-        .ok_or_else(|| anyhow!("no matching profile and no default profile configured"))?;
-    let outcome = execute_profile_action(&profile, dry_run, false)?;
+    let settings = store.settings()?;
+    let target = workflow::select_target_for_topology(&topology, &profiles, &settings)
+        .ok_or_else(|| anyhow!("no matching profile and no default target configured"))?;
+
+    let outcome = match target {
+        workflow::SelectedTarget::Profile(profile) => {
+            execute_profile_action(&profile, dry_run, false)?
+        }
+        workflow::SelectedTarget::Virtual(preset) => {
+            execute_virtual_action(preset, dry_run, false)?
+        }
+    };
+
     emit_action_outcome("set", Some("auto"), &outcome, output_mode)
 }
 
@@ -271,13 +279,13 @@ mod tests {
     }
 
     #[test]
-    fn cmd_set_rejects_default_without_explicit_profile() {
+    fn cmd_set_rejects_default_without_explicit_target() {
         let err = cmd_set(None, false, true, false, false, OutputMode::Text)
             .expect_err("expected default validation to fail");
 
         assert_eq!(
             err.to_string(),
-            "--default requires an explicit saved profile target"
+            "--default requires an explicit saved profile or virtual set target"
         );
     }
 

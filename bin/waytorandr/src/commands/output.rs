@@ -206,7 +206,7 @@ pub fn format_mode(mode: Option<Mode>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waytorandr_core::state::State;
+    use waytorandr_core::store::{DefaultTarget, ProfilesSettings};
 
     #[test]
     fn format_mode_handles_absent_mode() {
@@ -214,35 +214,19 @@ mod tests {
     }
 
     #[test]
-    fn default_profile_prefers_setup_specific_mapping() {
-        let mut state = State::default();
-        state.default_profiles = std::collections::HashMap::from([
-            ("dock".to_string(), "desk".to_string()),
-            (
-                State::GLOBAL_DEFAULT_PROFILE_KEY.to_string(),
-                "fallback".to_string(),
-            ),
-        ]);
+    fn setup_default_is_stored_separately_from_new_setup_default() {
+        let mut settings = ProfilesSettings::default();
+        settings.set_setup_default_profile("dock", "desk");
+        settings.new_setup_default = Some(DefaultTarget::Profile {
+            name: "fallback".to_string(),
+        });
 
-        assert_eq!(state.setup_default_profile("dock"), Some("desk"));
+        assert_eq!(settings.setup_default_profile("dock"), Some("desk"));
         assert_eq!(
-            state.effective_default_profile_for_setup("dock"),
-            Some("desk")
-        );
-    }
-
-    #[test]
-    fn effective_default_profile_falls_back_to_global_default() {
-        let mut state = State::default();
-        state.default_profiles.insert(
-            State::GLOBAL_DEFAULT_PROFILE_KEY.to_string(),
-            "fallback".to_string(),
-        );
-
-        assert_eq!(state.setup_default_profile("dock"), None);
-        assert_eq!(
-            state.effective_default_profile_for_setup("dock"),
-            Some("fallback")
+            settings.new_setup_default,
+            Some(DefaultTarget::Profile {
+                name: "fallback".to_string()
+            })
         );
     }
 
