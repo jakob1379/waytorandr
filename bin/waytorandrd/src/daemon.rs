@@ -368,7 +368,7 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
 
 fn plan_matches_topology_including_virtuals(plan: &LayoutPlan, topology: &Topology) -> bool {
     // Check that all planned outputs exist in the topology
-    for (name, _) in &plan.outputs {
+    for name in plan.outputs.keys() {
         if !topology.outputs.contains_key(name) {
             return false;
         }
