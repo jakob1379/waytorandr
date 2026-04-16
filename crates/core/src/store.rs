@@ -636,6 +636,17 @@ impl ProfileStore {
     }
 }
 
+fn load_profiles_json_file(path: &Path) -> CoreResult<ProfilesFile> {
+    let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 fn load_legacy_profiles_from_dir(dir: &Path) -> CoreResult<Vec<(PathBuf, Profile)>> {
     let mut profiles = Vec::new();
 
