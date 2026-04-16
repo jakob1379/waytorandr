@@ -278,6 +278,105 @@ fn profile_store_migrates_legacy_json_filename() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn profile_store_open_honors_legacy_json_fallback() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let legacy_path = legacy_config_path(temp);
+        let legacy_profile = profile("desk", "DP-1");
+        let setup_fingerprint = legacy_profile.setup_fingerprint();
+        let setup_defaults = serde_json::Map::from_iter([(
+            setup_fingerprint.clone(),
+            serde_json::Value::String("desk".to_string()),
+        )]);
+        std::fs::create_dir_all(
+            legacy_path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("legacy config parent should exist"))?,
+        )?;
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profiles": [legacy_profile.clone()],
+                "settings": {
+                    "setup_defaults": setup_defaults,
+                    "new_setup_default": {
+                        "kind": "profile",
+                        "name": "desk"
+                    }
+                }
+            }))?,
+        )?;
+
+        let store = ProfileStore::open()?;
+        let state_store = StateStore::bootstrap()?;
+        let settings = store.settings()?;
+
+        assert_eq!(
+            settings.setup_default_profile(&setup_fingerprint),
+            Some("desk")
+        );
+        assert_eq!(
+            settings.new_setup_default,
+            Some(DefaultTarget::Profile {
+                name: "desk".to_string()
+            })
+        );
+        assert_eq!(store.list(&state_store)?.len(), 1);
+        assert!(store
+            .get_for_setup("desk", &setup_fingerprint, &state_store)?
+            .is_some());
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn profile_store_save_via_open_preserves_legacy_json_contents() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let legacy_path = legacy_config_path(temp);
+        let legacy_profile = profile("desk", "DP-1");
+        std::fs::create_dir_all(
+            legacy_path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("legacy config parent should exist"))?,
+        )?;
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profiles": [legacy_profile.clone()],
+                "settings": {
+                    "new_setup_default": {
+                        "kind": "profile",
+                        "name": "desk"
+                    }
+                }
+            }))?,
+        )?;
+
+        let store = ProfileStore::open()?;
+        let state_store = StateStore::bootstrap()?;
+        let new_profile = profile("office", "HDMI-A-1");
+
+        store.save(&new_profile, &state_store)?;
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(config_path(temp))?)?;
+        let profile_names: Vec<_> = saved["profiles"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("profiles should be an array"))?
+            .iter()
+            .filter_map(|profile| profile["name"].as_str())
+            .collect();
+
+        assert_eq!(profile_names.len(), 2);
+        assert!(profile_names.contains(&"desk"));
+        assert!(profile_names.contains(&"office"));
+        assert_eq!(saved["settings"]["new_setup_default"]["name"], "desk");
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn state_store_persists_known_outputs_only_on_explicit_observation() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let state_store = StateStore::bootstrap()?;

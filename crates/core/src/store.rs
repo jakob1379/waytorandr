@@ -431,11 +431,7 @@ impl ProfileStore {
     }
 
     fn load_profiles(&self) -> CoreResult<Vec<Profile>> {
-        if self.path.exists() {
-            Ok(self.load_profiles_file()?.profiles)
-        } else {
-            load_legacy_profiles()
-        }
+        Ok(self.load_profiles_file()?.profiles)
     }
 
     fn migrate_legacy_profiles(&self) -> CoreResult<()> {
@@ -517,18 +513,7 @@ impl ProfileStore {
     }
 
     fn load_profiles_file(&self) -> CoreResult<ProfilesFile> {
-        if self.path.exists() {
-            let content = fs::read_to_string(&self.path).map_err(|source| CoreError::ReadFile {
-                path: self.path.clone(),
-                source,
-            })?;
-            serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
-                path: self.path.clone(),
-                source,
-            })
-        } else {
-            Ok(ProfilesFile::default())
-        }
+        load_profiles_file_from_path(&self.path)
     }
 
     fn save_profiles_file(&self, profiles: &ProfilesFile) -> CoreResult<()> {
@@ -588,38 +573,38 @@ fn load_profile_from_file(path: &Path) -> CoreResult<Profile> {
 }
 
 fn load_profiles_from_path(path: &Path) -> CoreResult<Vec<Profile>> {
+    Ok(load_profiles_file_from_path(path)?.profiles)
+}
+
+fn load_profiles_file_from_path(path: &Path) -> CoreResult<ProfilesFile> {
     if path.exists() {
-        let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let profiles = serde_json::from_str::<ProfilesFile>(&content).map_err(|source| {
-            CoreError::ParseJson {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
-        Ok(profiles.profiles)
+        load_profiles_json_file(path)
     } else if let Ok(legacy_path) = legacy_profiles_json_path() {
         if legacy_path.exists() {
-            let content =
-                fs::read_to_string(&legacy_path).map_err(|source| CoreError::ReadFile {
-                    path: legacy_path.clone(),
-                    source,
-                })?;
-            let profiles = serde_json::from_str::<ProfilesFile>(&content).map_err(|source| {
-                CoreError::ParseJson {
-                    path: legacy_path.clone(),
-                    source,
-                }
-            })?;
-            Ok(profiles.profiles)
+            load_profiles_json_file(&legacy_path)
         } else {
-            load_legacy_profiles()
+            Ok(ProfilesFile {
+                profiles: load_legacy_profiles()?,
+                ..ProfilesFile::default()
+            })
         }
     } else {
-        load_legacy_profiles()
+        Ok(ProfilesFile {
+            profiles: load_legacy_profiles()?,
+            ..ProfilesFile::default()
+        })
     }
+}
+
+fn load_profiles_json_file(path: &Path) -> CoreResult<ProfilesFile> {
+    let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 impl ProfileStore {
@@ -629,10 +614,23 @@ impl ProfileStore {
             return Ok(());
         }
 
-        fs::rename(&legacy_path, &self.path).map_err(|source| CoreError::WriteFile {
-            path: self.path.clone(),
-            source,
-        })?;
+        match fs::rename(&legacy_path, &self.path) {
+            Ok(()) => Ok(()),
+            Err(source) => {
+                let legacy_missing = !legacy_path.exists();
+                let target_exists = self.path.exists();
+                let missing_path_error = source.kind() == std::io::ErrorKind::NotFound;
+
+                if target_exists || legacy_missing || (missing_path_error && legacy_missing) {
+                    Ok(())
+                } else {
+                    Err(CoreError::WriteFile {
+                        path: self.path.clone(),
+                        source,
+                    })
+                }
+            }
+        }?;
 
         Ok(())
     }
