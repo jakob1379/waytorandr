@@ -759,8 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_virtual_default_falls_back_to_remembered_topology() -> Result<(), Box<dyn Error>>
-    {
+    fn remembers_current_topology_when_virtual_default_unavailable() -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;
             let store = ProfileStore::bootstrap()?;
