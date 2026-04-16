@@ -7,12 +7,12 @@ use tempfile::TempDir;
 use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
 use waytorandr_core::error::CoreError;
 use waytorandr_core::model::{
-    BackendKind, Capabilities, OutputIdentity, OutputState, Position, Topology,
+    BackendKind, Capabilities, OutputIdentity, OutputState, Position, Topology, VirtualPreset,
 };
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::{Hook, Hooks, OutputMatcher, Profile};
 use waytorandr_core::state::{State, StateStore};
-use waytorandr_core::store::ProfileStore;
+use waytorandr_core::store::{DefaultTarget, ProfileStore, ProfilesSettings};
 use waytorandr_core::workflow;
 
 fn xdg_lock() -> &'static Mutex<()> {
@@ -207,31 +207,34 @@ fn state_store_normalizes_profile_using_cached_outputs() -> Result<(), Box<dyn E
 }
 
 #[test]
-fn state_store_drops_legacy_default_profile_on_write() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|_| {
+fn profile_store_migrates_legacy_defaults_into_profiles_json() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
         let state_store = StateStore::bootstrap()?;
         let legacy_state = [
             "default_profile = \"desk\"",
             "daemon_enabled = false",
             "[default_profiles]",
+            "\"conn:DP-1\" = \"office\"",
             "[known_outputs]",
         ]
         .join("\n");
         std::fs::write(state_store.dir().join("state.toml"), legacy_state)?;
 
-        let loaded = state_store
-            .load_state()?
-            .ok_or_else(|| std::io::Error::other("state should exist"))?;
-
+        let store = ProfileStore::bootstrap()?;
+        let settings = store.settings()?;
         let persisted = std::fs::read_to_string(state_store.dir().join("state.toml"))?;
+        let profiles_json = std::fs::read_to_string(profiles_path(temp))?;
+
         assert_eq!(
-            loaded
-                .default_profiles
-                .get(State::GLOBAL_DEFAULT_PROFILE_KEY)
-                .map(String::as_str),
-            Some("desk")
+            settings.new_setup_default,
+            Some(DefaultTarget::Profile {
+                name: "desk".to_string()
+            })
         );
-        assert!(persisted.contains("default_profile = \"desk\""));
+        assert_eq!(settings.setup_default_profile("conn:DP-1"), Some("office"));
+        assert!(!persisted.contains("default_profile = \"desk\""));
+        assert!(!persisted.contains("conn:DP-1"));
+        assert!(profiles_json.contains("new_setup_default"));
         Ok(())
     })?;
     Ok(())
@@ -274,13 +277,15 @@ fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn 
             apply_message: None,
         };
         let profiles = vec![profile("desk", "DP-1"), profile("fallback", "HDMI-A-1")];
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            new_setup_default: Some(DefaultTarget::Profile {
+                name: "fallback".to_string(),
+            }),
+        };
         let mut state = State::default();
-        state.default_profiles.insert(
-            State::GLOBAL_DEFAULT_PROFILE_KEY.to_string(),
-            "fallback".to_string(),
-        );
 
-        let selected = workflow::select_profile_for_topology(&topology, &profiles, &state)
+        let selected = workflow::select_profile_for_topology(&topology, &profiles, &settings)
             .ok_or_else(|| std::io::Error::other("matching profile should be selected"))?;
         let cycle = workflow::apply_profile_workflow(&backend, &state_store, &selected)?;
         assert!(
@@ -308,15 +313,38 @@ fn runtime_prefers_setup_default_over_matching_profile() -> Result<(), Box<dyn E
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
         };
         let profiles = vec![profile("both", "DP-1"), profile("external-only", "DP-1")];
-        let mut state = State::default();
-        state
-            .default_profiles
-            .insert(topology.setup_fingerprint(), "external-only".to_string());
+        let mut settings = ProfilesSettings::default();
+        settings.set_setup_default_profile(&topology.setup_fingerprint(), "external-only");
 
-        let selected = workflow::select_profile_for_topology(&topology, &profiles, &state)
+        let selected = workflow::select_profile_for_topology(&topology, &profiles, &settings)
             .ok_or_else(|| std::io::Error::other("setup default should be selected"))?;
 
         assert_eq!(selected.name, "external-only");
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Vertical,
+            }),
+        };
+
+        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
+            .ok_or_else(|| std::io::Error::other("virtual default should be selected"))?;
+
+        assert!(matches!(
+            selected,
+            workflow::SelectedTarget::Virtual(VirtualPreset::Vertical)
+        ));
         Ok(())
     })?;
     Ok(())

@@ -336,6 +336,21 @@ fn exercise_virtual_workflows(
         assert!(mirror.stderr.contains("wl-mirror"));
     }
 
+    let set_default = env.run_json(["set", "vertical", "--default", "--json"])?;
+    assert_eq!(set_default["target"], "vertical");
+    assert_eq!(set_default["default_set"], true);
+    assert_eq!(set_default["default_scope"], "new_setups");
+
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["new_setup_default"]["kind"], "virtual");
+    assert_eq!(status["new_setup_default"]["preset"], "vertical");
+
+    env.write_backend_topology(&alternate_topology())?;
+    let auto_set = env.run_json(["set", "--json"])?;
+    assert_eq!(auto_set["selection"], "auto");
+    assert_eq!(auto_set["target"], "vertical");
+    assert_eq!(auto_set["target_type"], "virtual");
+
     Ok(())
 }
 

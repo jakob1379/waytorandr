@@ -38,11 +38,13 @@ pub enum Commands {
 
 When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
 If no setup default is configured, it applies the best matching saved profile.
+If there is no match, it applies the configured default for new setups.
 
 Examples:
   waytorandr set
   waytorandr set docked
   waytorandr set docked --default
+  waytorandr set vertical --default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run
   waytorandr set mirror --dry-run
@@ -130,7 +132,7 @@ pub enum ServiceCommands {
 pub struct SetArgs {
     #[arg(
         value_name = "profile",
-        help = "Saved profile or virtual configuration; omit to set setup default or best match",
+        help = "Saved profile or virtual configuration; omit to set setup default, best match, or new-setup default",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,
@@ -145,7 +147,7 @@ pub struct SetArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Only with saved profiles: also set the profile as the default profile for this setup"
+        help = "With saved profiles: set the default for this setup. With virtual configurations: set the default for new setups"
     )]
     pub(crate) make_default: bool,
 

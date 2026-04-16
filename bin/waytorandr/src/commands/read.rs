@@ -6,7 +6,7 @@ use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
 use waytorandr_core::model::Topology;
 use waytorandr_core::state::StateStore;
-use waytorandr_core::store::{ProfileStore, StoredProfile};
+use waytorandr_core::store::{DefaultTarget, ProfileStore, ProfilesSettings, StoredProfile};
 use waytorandr_core::workflow;
 
 #[derive(Serialize)]
@@ -36,6 +36,8 @@ struct JsonStatusResponse {
     fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_setup_default: Option<DefaultTarget>,
     setup_fingerprint: String,
     outputs: Vec<JsonOutputEntry>,
     setups: Vec<JsonListSetup>,
@@ -77,6 +79,7 @@ struct StatusView {
     profile: Option<String>,
     topology: Topology,
     setup_name: Option<String>,
+    new_setup_default: Option<DefaultTarget>,
     list: ListView,
     has_saved_profiles: bool,
 }
@@ -92,6 +95,7 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             has_saved_profiles: view.has_saved_profiles,
             fingerprint: view.topology.fingerprint(),
             setup_name: view.setup_name.clone(),
+            new_setup_default: view.new_setup_default.clone(),
             setup_fingerprint: view.topology.setup_fingerprint(),
             outputs: topology_outputs(&view.topology),
             setups: json_list_setups(&view.list.setups),
@@ -120,6 +124,13 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             view.topology.setup_fingerprint()
         );
     }
+    if let Some(default_target) = &view.new_setup_default {
+        println!(
+            "{}: {}",
+            key("Default for new setups"),
+            value(describe_default_target(default_target))
+        );
+    }
     print_topology("Detected outputs:", &view.topology);
     print_profile_setups(&view.list, view.has_saved_profiles);
 
@@ -131,6 +142,7 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
     let state_store = StateStore::bootstrap()?;
     let topology = load_current_topology(&state_store)?;
     let state = state_store.load_state()?.unwrap_or_default();
+    let settings = store.settings()?;
     let current_setup = topology.setup_fingerprint();
     let current_setup_name = state
         .setup_name_for_setup(&current_setup)
@@ -152,12 +164,13 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
             priority: stored.profile.priority,
         })
         .collect();
-    let list = build_list_view(&entries, show_all, Some(current_setup), &state);
+    let list = build_list_view(&entries, show_all, Some(current_setup), &state, &settings);
 
     Ok(StatusView {
         profile: workflow::current_profile_name(&topology, &profiles, &state),
         topology,
         setup_name: current_setup_name,
+        new_setup_default: settings.new_setup_default,
         list,
         has_saved_profiles,
     })
@@ -181,6 +194,7 @@ fn build_list_view(
     show_all: bool,
     current_setup: Option<String>,
     state: &waytorandr_core::state::State,
+    settings: &ProfilesSettings,
 ) -> ListView {
     let mut setups = Vec::new();
     let mut current_fingerprint: Option<String> = None;
@@ -203,7 +217,7 @@ fn build_list_view(
         current_profiles.push(ListProfileView {
             name: stored.name.clone(),
             priority: stored.priority,
-            is_default: state.setup_default_profile(&stored.setup_fingerprint)
+            is_default: settings.setup_default_profile(&stored.setup_fingerprint)
                 == Some(stored.name.as_str()),
             is_active: state.last_profile.as_ref() == Some(&stored.name),
         });
@@ -219,6 +233,13 @@ fn build_list_view(
     }
 
     ListView { show_all, setups }
+}
+
+fn describe_default_target(target: &DefaultTarget) -> String {
+    match target {
+        DefaultTarget::Profile { name } => name.clone(),
+        DefaultTarget::Virtual { preset } => preset.to_string(),
+    }
 }
 
 fn json_list_setups(setups: &[ListSetupView]) -> Vec<JsonListSetup> {
@@ -312,6 +333,8 @@ mod tests {
         state
             .setup_names
             .insert("setup-a".to_string(), "office".to_string());
+        let mut settings = ProfilesSettings::default();
+        settings.set_setup_default_profile("setup-a", "desk");
         let listed_profiles = vec![
             ListEntry {
                 setup_fingerprint: "setup-a".to_string(),
@@ -330,12 +353,19 @@ mod tests {
             },
         ];
 
-        let view = build_list_view(&listed_profiles, true, Some("setup-a".to_string()), &state);
+        let view = build_list_view(
+            &listed_profiles,
+            true,
+            Some("setup-a".to_string()),
+            &state,
+            &settings,
+        );
 
         assert_eq!(view.setups.len(), 2);
         assert!(view.setups[0].is_current);
         assert_eq!(view.setups[0].setup_name.as_deref(), Some("office"));
         assert_eq!(view.setups[0].profiles.len(), 2);
+        assert!(view.setups[0].profiles[0].is_default);
     }
 
     #[test]

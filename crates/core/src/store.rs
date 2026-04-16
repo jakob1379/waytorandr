@@ -1,8 +1,8 @@
 use crate::error::{CoreError, CoreResult};
-use crate::model::OutputIdentity;
+use crate::model::{OutputIdentity, VirtualPreset};
 use crate::normalize::normalize_profile_with_known_outputs;
 use crate::profile::Profile;
-use crate::state::StateStore;
+use crate::state::{State, StateStore};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,37 @@ pub struct StoredProfile {
 struct ProfilesFile {
     #[serde(default)]
     profiles: Vec<Profile>,
+    #[serde(default)]
+    settings: ProfilesSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProfilesSettings {
+    #[serde(default)]
+    pub setup_defaults: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_setup_default: Option<DefaultTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DefaultTarget {
+    Profile { name: String },
+    Virtual { preset: VirtualPreset },
+}
+
+impl ProfilesSettings {
+    #[must_use]
+    pub fn setup_default_profile(&self, setup_fingerprint: &str) -> Option<&str> {
+        self.setup_defaults
+            .get(setup_fingerprint)
+            .map(String::as_str)
+    }
+
+    pub fn set_setup_default_profile(&mut self, setup_fingerprint: &str, profile_name: &str) {
+        self.setup_defaults
+            .insert(setup_fingerprint.to_string(), profile_name.to_string());
+    }
 }
 
 impl ProfileStore {
@@ -51,6 +82,7 @@ impl ProfileStore {
             .to_path_buf();
         fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir { path: dir, source })?;
         store.migrate_legacy_profiles()?;
+        store.migrate_legacy_defaults_from_state()?;
         Ok(store)
     }
 
@@ -120,6 +152,40 @@ impl ProfileStore {
     ) -> CoreResult<Option<StoredProfile>> {
         let state = state_store.load_state()?.unwrap_or_default();
         self.get_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)
+    }
+
+    /// Returns stored settings.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read.
+    pub fn settings(&self) -> CoreResult<ProfilesSettings> {
+        Ok(self.load_profiles_file()?.settings)
+    }
+
+    /// Sets the default saved profile for a setup fingerprint.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read or written.
+    pub fn set_setup_default_profile(
+        &self,
+        setup_fingerprint: &str,
+        profile_name: &str,
+    ) -> CoreResult<()> {
+        let mut stored = self.load_profiles_file()?;
+        stored
+            .settings
+            .set_setup_default_profile(setup_fingerprint, profile_name);
+        self.save_profiles_file(&stored)
+    }
+
+    /// Sets the default target used for new setups.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read or written.
+    pub fn set_new_setup_default(&self, target: DefaultTarget) -> CoreResult<()> {
+        let mut stored = self.load_profiles_file()?;
+        stored.settings.new_setup_default = Some(target);
+        self.save_profiles_file(&stored)
     }
 
     /// Lists profiles with normalized state.
@@ -398,6 +464,54 @@ impl ProfileStore {
         }
         remove_empty_legacy_directories(&legacy_dir)?;
 
+        Ok(())
+    }
+
+    fn migrate_legacy_defaults_from_state(&self) -> CoreResult<()> {
+        let state_store = StateStore::bootstrap()?;
+        let Some(mut state) = state_store.load_state()? else {
+            return Ok(());
+        };
+
+        if state.default_profiles.is_empty() {
+            return Ok(());
+        }
+
+        let mut stored = self.load_profiles_file()?;
+        let mut changed = false;
+
+        if stored.settings.new_setup_default.is_none() {
+            if let Some(profile_name) = state.global_default_profile() {
+                stored.settings.new_setup_default = Some(DefaultTarget::Profile {
+                    name: profile_name.to_string(),
+                });
+                changed = true;
+            }
+        }
+
+        for (setup_fingerprint, profile_name) in &state.default_profiles {
+            if setup_fingerprint == State::GLOBAL_DEFAULT_PROFILE_KEY {
+                continue;
+            }
+
+            if !stored
+                .settings
+                .setup_defaults
+                .contains_key(setup_fingerprint)
+            {
+                stored
+                    .settings
+                    .set_setup_default_profile(setup_fingerprint, profile_name);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.save_profiles_file(&stored)?;
+        }
+
+        state.default_profiles.clear();
+        state_store.save_state(&state)?;
         Ok(())
     }
 
