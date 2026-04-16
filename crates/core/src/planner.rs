@@ -141,7 +141,7 @@ impl Planner {
             !state.identity.is_ignored && !state.identity.is_virtual && !is_internal_output(state)
         });
 
-        let outputs = topology
+        let mut outputs: HashMap<_, _> = topology
             .outputs
             .iter()
             .map(|(name, state)| {
@@ -162,6 +162,24 @@ impl Planner {
                 (name.clone(), state)
             })
             .collect();
+
+        if let Some((min_x, min_y)) = outputs
+            .values()
+            .filter(|state| {
+                state.enabled && !state.identity.is_ignored && !state.identity.is_virtual
+            })
+            .map(|state| (state.position.x, state.position.y))
+            .reduce(|(min_x, min_y), (x, y)| (min_x.min(x), min_y.min(y)))
+        {
+            for state in outputs.values_mut() {
+                if state.enabled {
+                    state.position.x -= min_x;
+                    state.position.y -= min_y;
+                } else {
+                    state.position = Position { x: 0, y: 0 };
+                }
+            }
+        }
 
         Ok(LayoutPlan {
             outputs,
@@ -647,6 +665,38 @@ mod tests {
 
         let plan = Planner::plan_from_preset(VirtualPreset::External, &topology, None).unwrap();
         assert!(plan.outputs["eDP-1"].enabled);
+    }
+
+    #[test]
+    fn external_rebases_enabled_outputs_to_origin() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state.position = Position::new(0, 0);
+                    state
+                }),
+                ("DP-1".to_string(), {
+                    let mut state = output("DP-1", 2560, 1440);
+                    state.position = Position::new(1920, 40);
+                    state
+                }),
+                ("HDMI-A-1".to_string(), {
+                    let mut state = output("HDMI-A-1", 1920, 1080);
+                    state.position = Position::new(4480, 40);
+                    state
+                }),
+            ]),
+        };
+
+        let plan = Planner::plan_from_preset(VirtualPreset::External, &topology, None).unwrap();
+        assert!(!plan.outputs["eDP-1"].enabled);
+        assert_eq!(plan.outputs["eDP-1"].position, Position::new(0, 0));
+        assert!(plan.outputs["DP-1"].enabled);
+        assert!(plan.outputs["HDMI-A-1"].enabled);
+        assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["HDMI-A-1"].position, Position::new(2560, 0));
     }
 
     #[test]

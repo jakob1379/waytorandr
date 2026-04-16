@@ -255,6 +255,11 @@ fn exercise_virtual_workflows(
     assert_eq!(topology.outputs["eDP-1"].position, Position::new(320, 0));
     assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 1080));
 
+    let invalid_reverse = env.run_json_failure(["set", "external", "--reverse", "--json"])?;
+    assert!(invalid_reverse.stderr.contains(
+        "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
+    ));
+
     let common = env.run_json(["set", "common", "--json"])?;
     assert_eq!(common["target"], "common");
     let topology = env.backend_topology()?;

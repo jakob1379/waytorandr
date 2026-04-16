@@ -30,7 +30,17 @@ pub fn resolve_virtual_preset(
         _ => None,
     };
 
-    if reverse && preset.is_none() {
+    if reverse
+        && !matches!(
+            preset,
+            Some(
+                VirtualPreset::Horizontal
+                    | VirtualPreset::HorizontalReverse
+                    | VirtualPreset::Vertical
+                    | VirtualPreset::VerticalReverse
+            )
+        )
+    {
         bail!("--reverse can only be used with virtual 'horizontal' or 'vertical' set targets")
     }
 
@@ -98,6 +108,15 @@ mod tests {
         assert_eq!(
             resolve_virtual_preset("external", false, false).unwrap(),
             Some(VirtualPreset::External)
+        );
+    }
+
+    #[test]
+    fn resolve_virtual_preset_rejects_reverse_for_external() {
+        let err = resolve_virtual_preset("external", true, false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
         );
     }
 }
