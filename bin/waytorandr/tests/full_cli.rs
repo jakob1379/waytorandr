@@ -107,6 +107,22 @@ fn status_defaults_to_current_setup_and_expands_with_all() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[test]
+fn json_output_stays_plain_when_color_is_forced() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+
+    env.write_backend_topology(&fixture_topology())?;
+    let output = env.run_with_env(["status", "--json"], &[("CLICOLOR_FORCE", "1")])?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(!stdout.contains("\u{1b}["));
+
+    let status: Value = serde_json::from_str(&stdout)?;
+    assert_eq!(status["command"], "status");
+    Ok(())
+}
+
 fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let status_text = env.run_text(["status"])?;
     assert!(status_text.contains("Current profile: none"));
@@ -480,10 +496,28 @@ impl TestEnvironment {
         Ok(String::from_utf8(output.stdout)?)
     }
 
+    fn run_with_env<const N: usize>(
+        &self,
+        args: [&str; N],
+        extra_env: &[(&str, &str)],
+    ) -> Result<Output, Box<dyn Error>> {
+        let mut command = self.base_command()?;
+        command.args(args);
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        Ok(command.output()?)
+    }
+
     fn run<const N: usize>(&self, args: [&str; N]) -> Result<Output, Box<dyn Error>> {
+        let mut command = self.base_command()?;
+        command.args(args);
+        Ok(command.output()?)
+    }
+
+    fn base_command(&self) -> Result<Command, Box<dyn Error>> {
         let mut command = Command::new(cli_bin()?);
         command
-            .args(args)
             .env("RUST_LOG", "error")
             .env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_STATE_HOME", &self.state_home)
@@ -499,7 +533,7 @@ impl TestEnvironment {
             .env("XDG_SESSION_DESKTOP", session_desktop)
             .env("DESKTOP_SESSION", session_desktop);
 
-        Ok(command.output()?)
+        Ok(command)
     }
 
     fn session_desktop(&self) -> &'static str {

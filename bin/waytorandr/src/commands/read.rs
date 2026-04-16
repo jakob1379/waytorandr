@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use super::output::{print_topology, write_json};
+use super::output::{heading, key, print_topology, status_label, value, warning, write_json};
 use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
 use waytorandr_core::model::Topology;
@@ -99,17 +99,26 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
     }
 
     println!(
-        "Current profile: {}",
-        view.profile.as_deref().unwrap_or("none")
+        "{}: {}",
+        key("Current profile"),
+        view.profile
+            .as_deref()
+            .map_or_else(|| status_label("none"), value)
     );
     if let Some(setup_name) = view.setup_name.as_deref() {
         println!(
-            "Setup: {} (fingerprint: {})",
-            setup_name,
+            "{}: {} ({}: {})",
+            key("Setup"),
+            value(setup_name),
+            key("fingerprint"),
             view.topology.setup_fingerprint()
         );
     } else {
-        println!("Setup fingerprint: {}", view.topology.setup_fingerprint());
+        println!(
+            "{}: {}",
+            key("Setup fingerprint"),
+            view.topology.setup_fingerprint()
+        );
     }
     print_topology("Detected outputs:", &view.topology);
     print_profile_setups(&view.list, view.has_saved_profiles);
@@ -236,24 +245,27 @@ fn json_list_setups(setups: &[ListSetupView]) -> Vec<JsonListSetup> {
 fn print_profile_setups(view: &ListView, has_saved_profiles: bool) {
     if view.setups.is_empty() {
         if has_saved_profiles {
-            println!("Profiles: none for current setup");
+            println!("{}", warning("Profiles: none for current setup"));
         } else {
-            println!("Profiles: none saved");
+            println!("{}", warning("Profiles: none saved"));
         }
         return;
     }
 
-    println!("Profiles:");
+    println!("{}", heading("Profiles:"));
     for setup in &view.setups {
         match setup.setup_name.as_deref() {
             Some(setup_name) => println!(
-                "  setup: {} (fingerprint: {}){}",
-                setup_name,
+                "  {}: {} ({}: {}){}",
+                key("setup"),
+                value(setup_name),
+                key("fingerprint"),
                 setup.fingerprint,
                 if setup.is_current { " [current]" } else { "" }
             ),
             None => println!(
-                "  fingerprint: {}{}",
+                "  {}: {}{}",
+                key("fingerprint"),
                 setup.fingerprint,
                 if setup.is_current { " [current]" } else { "" }
             ),
@@ -268,8 +280,9 @@ fn print_profile_setups(view: &ListView, has_saved_profiles: bool) {
             }
 
             println!(
-                "    {} (priority: {}){}",
-                profile.name,
+                "    {} ({}: {}){}",
+                value(&profile.name),
+                key("priority"),
                 profile.priority,
                 if flags.is_empty() {
                     String::new()

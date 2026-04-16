@@ -1,7 +1,9 @@
 use anyhow::{bail, Result};
 use serde::Serialize;
 
-use super::output::{print_plan_summary, print_validation_result, write_json};
+use super::output::{
+    print_plan_summary, print_validation_result, success, value, warning, write_json,
+};
 use super::shared::{load_current_topology, plan_outputs, JsonOutputEntry};
 use super::OutputMode;
 use waytorandr_backend_loader::connect_backend;
@@ -290,9 +292,13 @@ pub(super) fn emit_action_outcome(
 
     if outcome.dry_run {
         println!(
-            "Dry run for {target_type} '{target}':",
-            target_type = outcome.target_type.as_human(),
-            target = outcome.target
+            "{} {}:",
+            warning("Dry run for"),
+            value(format!(
+                "{} '{}'",
+                outcome.target_type.as_human(),
+                outcome.target
+            ))
         );
         print_plan_summary(&outcome.plan);
         if let Some(test) = &outcome.validation {
@@ -300,8 +306,12 @@ pub(super) fn emit_action_outcome(
         }
         if outcome.default_set {
             println!(
-                "Would also set '{}' as the default profile for this setup",
-                outcome.target
+                "{} {}",
+                warning("Would also set"),
+                value(format!(
+                    "'{}' as the default profile for this setup",
+                    outcome.target
+                ))
             );
         }
         if let Some(message) = validation_failure {
@@ -311,15 +321,23 @@ pub(super) fn emit_action_outcome(
     }
 
     println!(
-        "Set {target_type} '{target}'",
-        target_type = outcome.target_type.as_human(),
-        target = outcome.target
+        "{} {}",
+        success("Set"),
+        value(format!(
+            "{} '{}'",
+            outcome.target_type.as_human(),
+            outcome.target
+        ))
     );
     print_plan_summary(&outcome.plan);
     if outcome.default_set {
         println!(
-            "Set '{}' as the default profile for this setup",
-            outcome.target
+            "{} {}",
+            success("Set"),
+            value(format!(
+                "'{}' as the default profile for this setup",
+                outcome.target
+            ))
         );
     }
     Ok(())

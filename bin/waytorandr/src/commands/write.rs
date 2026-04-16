@@ -4,7 +4,7 @@ use super::apply::{
     current_setup_fingerprint, emit_action_outcome, execute_profile_action, execute_virtual_action,
     set_default_profile_for_fingerprint, JsonRemoveResponse, JsonSaveResponse,
 };
-use super::output::{print_plan_summary, write_json};
+use super::output::{failure, print_plan_summary, success, value, warning, write_json};
 use super::shared::plan_outputs;
 use super::OutputMode;
 use crate::preset::resolve_virtual_preset;
@@ -54,13 +54,25 @@ pub(super) fn cmd_save(
             });
         }
 
-        println!("Would save profile '{name}':");
+        println!(
+            "{} {}:",
+            warning("Would save"),
+            value(format!("profile '{name}'"))
+        );
         print_plan_summary(&plan);
         if let Some(setup_name) = setup_name {
-            println!("Would also name this setup '{setup_name}'");
+            println!(
+                "{} {}",
+                warning("Would also name this setup"),
+                value(format!("'{setup_name}'"))
+            );
         }
         if make_default {
-            println!("Would also set '{name}' as the default profile for this setup");
+            println!(
+                "{} {}",
+                warning("Would also set"),
+                value(format!("'{name}' as the default profile for this setup"))
+            );
         }
         return Ok(());
     }
@@ -85,12 +97,24 @@ pub(super) fn cmd_save(
         });
     }
 
-    println!("Saved profile '{name}'");
+    println!(
+        "{} {}",
+        success("Saved"),
+        value(format!("profile '{name}'"))
+    );
     if let Some(setup_name) = setup_name {
-        println!("Named this setup '{setup_name}'");
+        println!(
+            "{} {}",
+            success("Named this setup"),
+            value(format!("'{setup_name}'"))
+        );
     }
     if make_default {
-        println!("Set '{name}' as the default profile for this setup");
+        println!(
+            "{} {}",
+            success("Set"),
+            value(format!("'{name}' as the default profile for this setup"))
+        );
     }
     Ok(())
 }
@@ -167,9 +191,17 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
         }
 
         if exists {
-            println!("Would remove profile '{name}'");
+            println!(
+                "{} {}",
+                warning("Would remove"),
+                value(format!("profile '{name}'"))
+            );
         } else {
-            println!("Profile '{name}' not found");
+            println!(
+                "{} {}",
+                failure("Profile not found"),
+                value(format!("'{name}'"))
+            );
         }
         return Ok(());
     }
@@ -187,9 +219,17 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
     }
 
     if removed {
-        println!("Removed profile '{name}'");
+        println!(
+            "{} {}",
+            success("Removed"),
+            value(format!("profile '{name}'"))
+        );
     } else {
-        println!("Profile '{name}' not found");
+        println!(
+            "{} {}",
+            failure("Profile not found"),
+            value(format!("'{name}'"))
+        );
     }
     Ok(())
 }
