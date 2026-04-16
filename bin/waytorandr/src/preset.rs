@@ -9,6 +9,7 @@ pub fn resolve_virtual_preset(
 ) -> Result<Option<VirtualPreset>> {
     let preset = match name {
         "off" => Some(VirtualPreset::Off),
+        "external" => Some(VirtualPreset::External),
         "common" => Some(if largest {
             VirtualPreset::Largest
         } else {
@@ -49,6 +50,7 @@ pub fn virtual_completion_candidates(
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
         ("off", "virtual"),
+        ("external", "virtual"),
         ("common", "virtual"),
         ("largest", "virtual"),
         ("mirror", "virtual"),
@@ -89,5 +91,13 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["vertical"]);
+    }
+
+    #[test]
+    fn resolve_virtual_preset_accepts_external() {
+        assert_eq!(
+            resolve_virtual_preset("external", false, false).unwrap(),
+            Some(VirtualPreset::External)
+        );
     }
 }

@@ -92,6 +92,7 @@ impl Planner {
     ) -> Result<LayoutPlan, PlanError> {
         match preset {
             VirtualPreset::Off => Self::plan_off(topology),
+            VirtualPreset::External => Self::plan_external(topology),
             VirtualPreset::Horizontal
             | VirtualPreset::HorizontalReverse
             | VirtualPreset::Vertical
@@ -126,6 +127,45 @@ impl Planner {
         Ok(LayoutPlan {
             outputs,
             preset_used: Some(VirtualPreset::Off),
+        })
+    }
+
+    fn plan_external(topology: &Topology) -> Result<LayoutPlan, PlanError> {
+        if topology.outputs.is_empty() {
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs to configure".to_string(),
+            ));
+        }
+
+        let has_external_output = topology.outputs.values().any(|state| {
+            !state.identity.is_ignored && !state.identity.is_virtual && !is_internal_output(state)
+        });
+
+        let outputs = topology
+            .outputs
+            .iter()
+            .map(|(name, state)| {
+                let mut state = state.clone();
+                let enable_output = if state.identity.is_ignored || state.identity.is_virtual {
+                    state.enabled
+                } else if has_external_output {
+                    !is_internal_output(&state)
+                } else {
+                    is_internal_output(&state)
+                };
+
+                state.enabled = enable_output;
+                if !enable_output {
+                    state.position = Position { x: 0, y: 0 };
+                }
+                state.mirror_target = None;
+                (name.clone(), state)
+            })
+            .collect();
+
+        Ok(LayoutPlan {
+            outputs,
+            preset_used: Some(VirtualPreset::External),
         })
     }
 
@@ -575,6 +615,38 @@ mod tests {
         let plan = Planner::plan_from_preset(VirtualPreset::Off, &topology, None).unwrap();
         assert!(!plan.outputs["A"].enabled);
         assert!(!plan.outputs["B"].enabled);
+    }
+
+    #[test]
+    fn external_disables_internal_outputs_and_keeps_externals() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state
+                }),
+                ("DP-1".to_string(), output("DP-1", 1280, 720)),
+            ]),
+        };
+
+        let plan = Planner::plan_from_preset(VirtualPreset::External, &topology, None).unwrap();
+        assert!(!plan.outputs["eDP-1"].enabled);
+        assert!(plan.outputs["DP-1"].enabled);
+    }
+
+    #[test]
+    fn external_keeps_internal_outputs_when_no_external_exists() {
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), {
+                let mut state = output("eDP-1", 1920, 1080);
+                state.identity.description = Some("Built-in display".to_string());
+                state
+            })]),
+        };
+
+        let plan = Planner::plan_from_preset(VirtualPreset::External, &topology, None).unwrap();
+        assert!(plan.outputs["eDP-1"].enabled);
     }
 
     #[test]
