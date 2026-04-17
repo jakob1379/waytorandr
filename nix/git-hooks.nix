@@ -58,7 +58,7 @@ git-hooks.lib.${pkgs.stdenv.hostPlatform.system}.run {
       entry = "${pkgs.actionlint}/bin/actionlint";
       files = "^\\.github/workflows/.*\\.ya?ml$";
       language = "system";
-      pass_filenames = false;
+      pass_filenames = true;
     };
 
     shfmt = {
