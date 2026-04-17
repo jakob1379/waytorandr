@@ -4,7 +4,7 @@ use serde::Serialize;
 use super::output::{heading, key, print_topology, status_label, value, warning, write_json};
 use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
-use waytorandr_core::model::Topology;
+use waytorandr_core::model::{OutputIdentity, Topology};
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::{DefaultTarget, ProfileStore, ProfilesSettings, StoredProfile};
 use waytorandr_core::workflow;
@@ -36,6 +36,8 @@ struct JsonStatusResponse {
     fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    builtin_output: Option<OutputIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     new_setup_default: Option<DefaultTarget>,
     setup_fingerprint: String,
@@ -79,6 +81,7 @@ struct StatusView {
     profile: Option<String>,
     topology: Topology,
     setup_name: Option<String>,
+    builtin_output: Option<OutputIdentity>,
     new_setup_default: Option<DefaultTarget>,
     list: ListView,
     has_saved_profiles: bool,
@@ -95,6 +98,7 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             has_saved_profiles: view.has_saved_profiles,
             fingerprint: view.topology.fingerprint(),
             setup_name: view.setup_name.clone(),
+            builtin_output: view.builtin_output.clone(),
             new_setup_default: view.new_setup_default.clone(),
             setup_fingerprint: view.topology.setup_fingerprint(),
             outputs: topology_outputs(&view.topology),
@@ -122,6 +126,13 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             "{}: {}",
             key("Setup fingerprint"),
             view.topology.setup_fingerprint()
+        );
+    }
+    if let Some(builtin_output) = &view.builtin_output {
+        println!(
+            "{}: {}",
+            key("Builtin display override"),
+            value(builtin_output.primary_key())
         );
     }
     if let Some(default_target) = &view.new_setup_default {
@@ -170,6 +181,7 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
         profile: workflow::current_profile_name(&topology, &profiles, &state),
         topology,
         setup_name: current_setup_name,
+        builtin_output: settings.builtin_output.clone(),
         new_setup_default: settings.new_setup_default,
         list,
         has_saved_profiles,

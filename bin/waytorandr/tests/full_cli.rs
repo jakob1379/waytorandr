@@ -229,15 +229,6 @@ fn exercise_virtual_workflows(
     env: &TestEnvironment,
     supports_native_mirror: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let builtin = env.run_json(["set", "builtin", "--json"])?;
-    assert_eq!(builtin["target"], "builtin");
-    assert_eq!(builtin["target_type"], "virtual");
-    let topology = env.backend_topology()?;
-    assert!(!topology.outputs["DP-1"].enabled);
-    assert!(topology.outputs["eDP-1"].enabled);
-    assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 0));
-    assert_eq!(topology.outputs["eDP-1"].position, Position::new(0, 0));
-
     let off = env.run_json(["set", "off", "--json"])?;
     assert_eq!(off["target"], "off");
     assert_eq!(off["target_type"], "virtual");
@@ -369,14 +360,14 @@ fn exercise_virtual_workflows(
     assert_eq!(auto_set["target"], "external");
     assert_eq!(auto_set["target_type"], "virtual");
 
-    let builtin_default = env.run_json(["set", "builtin", "--default", "--json"])?;
-    assert_eq!(builtin_default["target"], "builtin");
-    assert_eq!(builtin_default["default_set"], true);
-    assert_eq!(builtin_default["default_scope"], "new_setups");
+    env.write_profiles_settings(serde_json::json!({
+        "new_setup_default": { "kind": "virtual", "preset": "builtin" }
+    }))?;
 
     let status = env.run_json(["status", "--json"])?;
     assert_eq!(status["new_setup_default"]["kind"], "virtual");
     assert_eq!(status["new_setup_default"]["preset"], "builtin");
+    assert!(status["builtin_output"].is_null());
 
     let auto_builtin = env.run_json(["set", "--json"])?;
     assert_eq!(auto_builtin["selection"], "auto");
@@ -388,6 +379,20 @@ fn exercise_virtual_workflows(
     assert!(skipped_builtin
         .stderr
         .contains("no matching profile and no default target configured"));
+
+    env.write_profiles_settings(serde_json::json!({
+        "builtin_output": { "connector": "DP-1" },
+        "new_setup_default": { "kind": "virtual", "preset": "builtin" }
+    }))?;
+
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["builtin_output"]["connector"], "DP-1");
+    let configured_builtin = env.run_json(["set", "--json"])?;
+    assert_eq!(configured_builtin["selection"], "auto");
+    assert_eq!(configured_builtin["target"], "builtin");
+    assert_eq!(configured_builtin["target_type"], "virtual");
+    let topology = env.backend_topology()?;
+    assert!(topology.outputs["DP-1"].enabled);
 
     Ok(())
 }
@@ -511,6 +516,33 @@ impl TestEnvironment {
 
     fn state_file_path(&self) -> PathBuf {
         self.state_home.join("waytorandr").join("state.toml")
+    }
+
+    fn profiles_file_path(&self) -> PathBuf {
+        self.config_home.join("waytorandr").join("profiles.json")
+    }
+
+    fn write_profiles_settings(&self, settings: Value) -> Result<(), Box<dyn Error>> {
+        let path = self.profiles_file_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut content = if path.exists() {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(&path)?)?
+        } else {
+            serde_json::json!({})
+        };
+        content["settings"] = settings;
+        if content.get("profiles").is_none() {
+            content["profiles"] = serde_json::json!([]);
+        }
+
+        std::fs::write(
+            path,
+            format!("{}\n", serde_json::to_string_pretty(&content)?),
+        )?;
+        Ok(())
     }
 
     fn run_json<const N: usize>(&self, args: [&str; N]) -> Result<Value, Box<dyn Error>> {

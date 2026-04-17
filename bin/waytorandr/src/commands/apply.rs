@@ -8,7 +8,7 @@ use super::shared::{load_current_topology, plan_outputs, JsonOutputEntry};
 use super::OutputMode;
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::engine::{ConfigFailureKind, TestResult};
-use waytorandr_core::model::{BackendKind, VirtualPreset};
+use waytorandr_core::model::{BackendKind, OutputIdentity, VirtualPreset};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
@@ -209,6 +209,7 @@ pub(super) fn execute_virtual_action(
     preset: VirtualPreset,
     dry_run: bool,
     make_default_for_new_setups: bool,
+    builtin_output: Option<&OutputIdentity>,
 ) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
     let capabilities = backend.capabilities();
@@ -224,13 +225,19 @@ pub(super) fn execute_virtual_action(
             ActionTargetType::Virtual,
             make_default_for_new_setups,
             make_default_for_new_setups.then_some(DefaultScope::NewSetups),
-            workflow::validate_preset_workflow(backend.as_ref(), &state_store, preset)
-                .map_err(anyhow::Error::from)?,
+            workflow::validate_preset_workflow(
+                backend.as_ref(),
+                &state_store,
+                preset,
+                builtin_output,
+            )
+            .map_err(anyhow::Error::from)?,
         );
     }
 
-    let execution = workflow::apply_preset_workflow(backend.as_ref(), &state_store, preset)
-        .map_err(anyhow::Error::from)?;
+    let execution =
+        workflow::apply_preset_workflow(backend.as_ref(), &state_store, preset, builtin_output)
+            .map_err(anyhow::Error::from)?;
 
     if let workflow::ApplyExecution::Applied {
         applied_topology, ..
