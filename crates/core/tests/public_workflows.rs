@@ -363,6 +363,30 @@ fn runtime_prefers_setup_default_over_matching_profile() -> Result<(), Box<dyn E
 }
 
 #[test]
+fn runtime_prefers_global_default_profile_over_other_matching_profiles(
+) -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let profiles = vec![profile("desk", "DP-1"), profile("laptop", "DP-1")];
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            new_setup_default: Some(DefaultTarget::Profile {
+                name: "laptop".to_string(),
+            }),
+        };
+
+        let selected = workflow::select_profile_for_topology(&topology, &profiles, &settings)
+            .ok_or_else(|| std::io::Error::other("global default profile should be selected"))?;
+
+        assert_eq!(selected.name, "laptop");
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let topology = Topology {

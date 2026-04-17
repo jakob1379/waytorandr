@@ -173,6 +173,16 @@ pub fn select_target_for_topology(
         return Some(SelectedTarget::Profile(profile.clone()));
     }
 
+    if let Some(DefaultTarget::Profile { .. }) = settings.new_setup_default.as_ref() {
+        if let Some(target) = settings
+            .new_setup_default
+            .as_ref()
+            .and_then(|target| resolve_default_target_for_topology(topology, profiles, target))
+        {
+            return Some(target);
+        }
+    }
+
     if let Some(matched) = Matcher::match_profile(topology, profiles) {
         return Some(SelectedTarget::Profile(matched.profile));
     }
@@ -180,7 +190,12 @@ pub fn select_target_for_topology(
     settings
         .new_setup_default
         .as_ref()
-        .and_then(|target| resolve_default_target_for_topology(topology, profiles, target))
+        .and_then(|target| match target {
+            DefaultTarget::Virtual { .. } => {
+                resolve_default_target_for_topology(topology, profiles, target)
+            }
+            DefaultTarget::Profile { .. } => None,
+        })
 }
 
 #[must_use]

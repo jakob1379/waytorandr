@@ -8,7 +8,7 @@ use waytorandr_core::model::{BackendKind, Topology, VirtualPreset};
 use waytorandr_core::planner::{LayoutPlan, Planner};
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
-use waytorandr_core::store::ProfileStore;
+use waytorandr_core::store::{DefaultTarget, ProfileStore};
 use waytorandr_core::workflow;
 
 const STABLE_SAMPLES: usize = 2;
@@ -132,10 +132,24 @@ fn maybe_apply_matching_profile(
         );
     }
 
-    if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
-        tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
-        let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
-        return apply_profile(backend, state_store, &remembered_profile, topology, None);
+    if let Some(DefaultTarget::Profile { .. }) = settings.new_setup_default.as_ref() {
+        if let Some(target) = settings.new_setup_default.as_ref().and_then(|target| {
+            workflow::resolve_default_target_for_topology(topology, &all_profiles, target)
+        }) {
+            tracing::info!(
+                fingerprint = %setup_fingerprint,
+                "using configured global default profile for current topology"
+            );
+            if let workflow::SelectedTarget::Profile(profile) = target {
+                return apply_profile(
+                    backend,
+                    state_store,
+                    &profile,
+                    topology,
+                    Some(&profile.name),
+                );
+            }
+        }
     }
 
     if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
@@ -149,7 +163,9 @@ fn maybe_apply_matching_profile(
         );
     }
 
-    if let Some(default_target) = settings.new_setup_default.as_ref() {
+    if let Some(default_target @ DefaultTarget::Virtual { .. }) =
+        settings.new_setup_default.as_ref()
+    {
         if let Some(target) =
             workflow::resolve_default_target_for_topology(topology, &all_profiles, default_target)
         {
@@ -189,6 +205,12 @@ fn maybe_apply_matching_profile(
             fingerprint = %setup_fingerprint,
             "configured default for new setups did not resolve for current topology"
         );
+    }
+
+    if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
+        tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
+        let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
+        return apply_profile(backend, state_store, &remembered_profile, topology, None);
     }
 
     remember_current_topology(state_store, backend.capabilities().backend, topology)?;
@@ -822,6 +844,64 @@ mod tests {
                 1
             );
             assert_eq!(state.last_profile, None);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn global_default_profile_beats_remembered_layout() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let desired = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: desired.clone(),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+            let profile = profile("laptop", "eDP-1", true);
+
+            store.save(&profile, &state_store)?;
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Profile {
+                name: profile.name.clone(),
+            })?;
+
+            let mut state = state_store.load_state()?.unwrap_or_default();
+            state
+                .remembered_setups
+                .insert(current.setup_fingerprint(), current.clone());
+            state_store.save_state(&state)?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &current)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(state.last_profile.as_deref(), Some("laptop"));
             Ok(())
         })?;
         Ok(())

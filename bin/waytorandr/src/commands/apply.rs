@@ -50,6 +50,7 @@ pub(super) struct ActionOutcome {
 #[derive(Clone, Copy)]
 pub(super) enum DefaultScope {
     Setup,
+    GlobalProfile,
     NewSetups,
 }
 
@@ -57,13 +58,15 @@ impl DefaultScope {
     pub(super) const fn as_json(self) -> &'static str {
         match self {
             Self::Setup => "setup",
+            Self::GlobalProfile => "global_profile",
             Self::NewSetups => "new_setups",
         }
     }
 
-    fn description(self, target: &str) -> String {
+    pub(super) fn description(self, target: &str) -> String {
         match self {
             Self::Setup => format!("'{target}' as the default profile for this setup"),
+            Self::GlobalProfile => format!("'{target}' as the global default profile"),
             Self::NewSetups => format!("'{target}' as the default for new setups"),
         }
     }
@@ -254,7 +257,7 @@ pub(super) fn execute_virtual_action(
 pub(super) fn execute_profile_action(
     profile: &Profile,
     dry_run: bool,
-    make_default: bool,
+    default_scope: Option<DefaultScope>,
 ) -> Result<ActionOutcome> {
     validate_profile(profile)?;
     let backend = connect_backend()?;
@@ -265,8 +268,8 @@ pub(super) fn execute_profile_action(
         return build_dry_run_outcome(
             profile.name.clone(),
             ActionTargetType::Profile,
-            make_default,
-            make_default.then_some(DefaultScope::Setup),
+            default_scope.is_some(),
+            default_scope,
             workflow::validate_profile_workflow(backend.as_ref(), &state_store, profile)
                 .map_err(anyhow::Error::from)?,
         );
@@ -280,19 +283,31 @@ pub(super) fn execute_profile_action(
     } = &execution
     {
         save_runtime_state(&profile.name, Some(backend_kind), applied_topology)?;
-        if make_default {
-            set_default_profile_for_fingerprint(
-                &profile.name,
-                &applied_topology.setup_fingerprint(),
-            )?;
+        if let Some(scope) = default_scope {
+            match scope {
+                DefaultScope::Setup => {
+                    set_default_profile_for_fingerprint(
+                        &profile.name,
+                        &applied_topology.setup_fingerprint(),
+                    )?;
+                }
+                DefaultScope::GlobalProfile => {
+                    set_new_setup_default(DefaultTarget::Profile {
+                        name: profile.name.clone(),
+                    })?;
+                }
+                DefaultScope::NewSetups => {
+                    unreachable!("profile actions only support setup or global profile defaults")
+                }
+            }
         }
     }
 
     build_apply_outcome(
         profile.name.clone(),
         ActionTargetType::Profile,
-        make_default,
-        make_default.then_some(DefaultScope::Setup),
+        default_scope.is_some(),
+        default_scope,
         execution,
     )
 }

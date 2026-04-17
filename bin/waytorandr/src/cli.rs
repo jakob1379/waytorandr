@@ -38,13 +38,15 @@ pub enum Commands {
   vertical   Extend all connected outputs vertically
 
 When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
-If no setup default is configured, it applies the best matching saved profile.
-If there is no match, it applies the configured default for new setups.
+If no setup default is configured, it applies the configured global default profile when one matches the current setup.
+If there is still no match, it applies the best matching saved profile.
+If there is still no match, it applies the configured default for new setups.
 
 Examples:
   waytorandr set
   waytorandr set docked
   waytorandr set docked --default
+  waytorandr set laptop --global-default
   waytorandr set external --default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run
@@ -60,12 +62,14 @@ When a backend cannot support `mirror`, waytorandr prints backend-specific guida
   waytorandr save docked
   waytorandr save docked --setup-name office
   waytorandr save --default
+  waytorandr save laptop --global-default
   waytorandr save docked --default
   waytorandr save docked --dry-run
 
 If the profile name is omitted, `default` is used.
 Use `--setup-name` to assign a friendly name to the current setup while keeping fingerprint-based matching.
-Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this setup.")]
+Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this setup.
+Use `--global-default` when this profile name should become the preferred fallback across setups.")]
     Save(SaveArgs),
 
     #[command(about = "Remove a saved profile")]
@@ -153,6 +157,13 @@ pub struct SetArgs {
     pub(crate) make_default: bool,
 
     #[arg(
+        long = "global-default",
+        conflicts_with = "make_default",
+        help = "With saved profiles: set the global default profile used before other saved-profile matches"
+    )]
+    pub(crate) make_global_default: bool,
+
+    #[arg(
         short = 'l',
         long = "largest",
         hide = true,
@@ -191,6 +202,13 @@ pub struct SaveArgs {
         help = "Also set the saved profile as the default profile for this setup"
     )]
     pub(crate) make_default: bool,
+
+    #[arg(
+        long = "global-default",
+        conflicts_with = "make_default",
+        help = "Also set the saved profile as the global default profile"
+    )]
+    pub(crate) make_global_default: bool,
 
     #[arg(
         short = 'n',

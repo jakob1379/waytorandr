@@ -42,6 +42,6 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 
 ## Documentation Sync
 
-- Keep `README.md` aligned with the generated CLI help text for command descriptions, `--default` wording, and `--json` support.
+- Keep `README.md` aligned with the generated CLI help text for command descriptions, `--default` and `--global-default` wording, and `--json` support.
 - Keep `README.md` aligned with setup-name/help wording on `save` and `status`.
 - When JSON output changes, update both README examples/notes and the CLI integration tests in `bin/waytorandr/tests/full_cli.rs`.

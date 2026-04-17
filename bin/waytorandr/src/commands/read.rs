@@ -127,7 +127,7 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
     if let Some(default_target) = &view.new_setup_default {
         println!(
             "{}: {}",
-            key("Default for new setups"),
+            key(default_target_label(default_target)),
             value(describe_default_target(default_target))
         );
     }
@@ -239,6 +239,13 @@ fn describe_default_target(target: &DefaultTarget) -> String {
     match target {
         DefaultTarget::Profile { name } => format!("saved profile '{name}'"),
         DefaultTarget::Virtual { preset } => format!("virtual '{preset}'"),
+    }
+}
+
+fn default_target_label(target: &DefaultTarget) -> &'static str {
+    match target {
+        DefaultTarget::Profile { .. } => "Global default profile",
+        DefaultTarget::Virtual { .. } => "Default for new setups",
     }
 }
 

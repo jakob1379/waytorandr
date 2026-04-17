@@ -14,7 +14,7 @@ It includes:
 - Save the current compositor layout as a named profile
 - Optionally assign a friendly name to each detected display setup
 - Reapply a saved profile or a built-in virtual layout
-- Set a preferred default profile for each display fingerprint and a default target for new setups
+- Set a preferred default profile for each display fingerprint, a global default profile, and a default target for new setups
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
 - Offer dynamic shell completion for saved profile names and `set` targets
@@ -61,6 +61,7 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr save work-dock --setup-name office
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
+./result/bin/waytorandr set laptop --global-default
 ./result/bin/waytorandr set external --default
 ```
 
@@ -101,17 +102,19 @@ for the full command reference and examples.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
-> `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured and optional `new_setup_default` when a fallback target is configured.
+> `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured and optional `new_setup_default` when a global default profile or fallback target is configured.
 
 ## Daemon
 
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. When the physical setup changes, it
-reapplies the configured default profile for the current fingerprint, or the best
-matching saved profile when no default profile is set for that fingerprint. If
-there is still no match, it applies the configured default target for new
-setups before falling back to remembering the current topology.
+reapplies the configured default profile for the current fingerprint. If there
+is no setup-specific default, it next tries the configured global default
+profile when that profile name matches the current setup. If there is still no
+match, it applies the best matching saved profile. If there is still no match,
+it applies the configured default target for new setups before falling back to
+remembering the current topology.
 
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup

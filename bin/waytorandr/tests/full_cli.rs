@@ -200,6 +200,14 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_default_and_active(env, Some("desk-alt"), Some("desk-alt"))?;
     assert_eq!(env.run_json(["status", "--json"])?["profile"], "desk-alt");
 
+    let save_global_default = env.run_json(["save", "desk", "--global-default", "--json"])?;
+    assert_eq!(save_global_default["profile"], "desk");
+    assert_eq!(save_global_default["default_set"], true);
+    assert_eq!(save_global_default["default_scope"], "global_profile");
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["new_setup_default"]["kind"], "profile");
+    assert_eq!(status["new_setup_default"]["name"], "desk");
+
     let cycle_dry_run = env.run_json(["cycle", "--dry-run", "--json"])?;
     assert_eq!(cycle_dry_run["command"], "cycle");
     assert_eq!(cycle_dry_run["target"], "desk");

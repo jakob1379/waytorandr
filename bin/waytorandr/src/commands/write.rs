@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, Result};
 
 use super::apply::{
     current_setup_fingerprint, emit_action_outcome, execute_profile_action, execute_virtual_action,
-    set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse, JsonSaveResponse,
+    set_default_profile_for_fingerprint, set_new_setup_default, DefaultScope, JsonRemoveResponse,
+    JsonSaveResponse,
 };
 use super::output::{failure, print_plan_summary, success, value, warning, write_json};
 use super::shared::plan_outputs;
@@ -12,7 +13,7 @@ use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
-use waytorandr_core::store::ProfileStore;
+use waytorandr_core::store::{DefaultTarget, ProfileStore};
 use waytorandr_core::workflow;
 
 pub(super) fn cmd_save(
@@ -20,6 +21,7 @@ pub(super) fn cmd_save(
     setup_name: Option<&str>,
     dry_run: bool,
     make_default: bool,
+    make_global_default: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
@@ -27,6 +29,7 @@ pub(super) fn cmd_save(
     let backend = connect_backend()?;
     let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
     let setup_fingerprint = topology.setup_fingerprint();
+    let default_scope = resolve_profile_default_scope(make_default, make_global_default);
 
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
@@ -50,8 +53,8 @@ pub(super) fn cmd_save(
                 dry_run: true,
                 saved: false,
                 plan: Some(plan_outputs(&plan)),
-                default_set: make_default,
-                default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
+                default_set: default_scope.is_some(),
+                default_scope: default_scope.map(DefaultScope::as_json),
             });
         }
 
@@ -68,11 +71,11 @@ pub(super) fn cmd_save(
                 value(format!("'{setup_name}'"))
             );
         }
-        if make_default {
+        if let Some(scope) = default_scope {
             println!(
                 "{} {}",
                 warning("Would also set"),
-                value(format!("'{name}' as the default profile for this setup"))
+                value(scope.description(name))
             );
         }
         return Ok(());
@@ -83,8 +86,18 @@ pub(super) fn cmd_save(
     if let Some(setup_name) = setup_name {
         workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
     }
-    if make_default {
-        set_default_profile_for_fingerprint(name, &setup_fingerprint)?;
+    if let Some(scope) = default_scope {
+        match scope {
+            DefaultScope::Setup => set_default_profile_for_fingerprint(name, &setup_fingerprint)?,
+            DefaultScope::GlobalProfile => {
+                set_new_setup_default(DefaultTarget::Profile {
+                    name: name.to_string(),
+                })?;
+            }
+            DefaultScope::NewSetups => {
+                unreachable!("save only supports setup or global profile defaults")
+            }
+        }
     }
     if output_mode.is_json() {
         return write_json(&JsonSaveResponse {
@@ -94,8 +107,8 @@ pub(super) fn cmd_save(
             dry_run: false,
             saved: true,
             plan: None,
-            default_set: make_default,
-            default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
+            default_set: default_scope.is_some(),
+            default_scope: default_scope.map(DefaultScope::as_json),
         });
     }
 
@@ -111,12 +124,8 @@ pub(super) fn cmd_save(
             value(format!("'{setup_name}'"))
         );
     }
-    if make_default {
-        println!(
-            "{} {}",
-            success("Set"),
-            value(format!("'{name}' as the default profile for this setup"))
-        );
+    if let Some(scope) = default_scope {
+        println!("{} {}", success("Set"), value(scope.description(name)));
     }
     Ok(())
 }
@@ -125,6 +134,7 @@ pub(super) fn cmd_set(
     name: Option<&str>,
     dry_run: bool,
     make_default: bool,
+    make_global_default: bool,
     reverse: bool,
     largest: bool,
     output_mode: OutputMode,
@@ -139,11 +149,18 @@ pub(super) fn cmd_set(
         if make_default {
             bail!("--default requires an explicit saved profile or virtual set target")
         }
+        if make_global_default {
+            bail!("--global-default requires an explicit saved profile")
+        }
         return cmd_change(dry_run, output_mode);
     }
 
     let name = name.expect("checked above");
+    let default_scope = resolve_profile_default_scope(make_default, make_global_default);
     if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
+        if make_global_default {
+            bail!("--global-default only supports saved profiles")
+        }
         let outcome = execute_virtual_action(preset, dry_run, make_default)?;
         return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
     }
@@ -154,7 +171,7 @@ pub(super) fn cmd_set(
     let profile = store
         .get_for_setup(name, &setup_fingerprint, &state_store)?
         .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
-    let outcome = execute_profile_action(&profile.profile, dry_run, make_default)?;
+    let outcome = execute_profile_action(&profile.profile, dry_run, default_scope)?;
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
 
@@ -169,7 +186,7 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
 
     let outcome = match target {
         workflow::SelectedTarget::Profile(profile) => {
-            execute_profile_action(&profile, dry_run, false)?
+            execute_profile_action(&profile, dry_run, None)?
         }
         workflow::SelectedTarget::Virtual(preset) => {
             execute_virtual_action(preset, dry_run, false)?
@@ -259,8 +276,21 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
             .map_or(0, |idx| (idx + 1) % profiles.len())
     });
 
-    let outcome = execute_profile_action(&profiles[next_idx], dry_run, false)?;
+    let outcome = execute_profile_action(&profiles[next_idx], dry_run, None)?;
     emit_action_outcome("cycle", None, &outcome, output_mode)
+}
+
+fn resolve_profile_default_scope(
+    make_default: bool,
+    make_global_default: bool,
+) -> Option<DefaultScope> {
+    if make_default {
+        Some(DefaultScope::Setup)
+    } else if make_global_default {
+        Some(DefaultScope::GlobalProfile)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -269,7 +299,7 @@ mod tests {
 
     #[test]
     fn cmd_set_requires_explicit_target_for_reverse_flag() {
-        let err = cmd_set(None, false, false, true, false, OutputMode::Text)
+        let err = cmd_set(None, false, false, false, true, false, OutputMode::Text)
             .expect_err("expected reverse validation to fail");
 
         assert_eq!(
@@ -280,7 +310,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rejects_default_without_explicit_target() {
-        let err = cmd_set(None, false, true, false, false, OutputMode::Text)
+        let err = cmd_set(None, false, true, false, false, false, OutputMode::Text)
             .expect_err("expected default validation to fail");
 
         assert_eq!(
@@ -291,12 +321,31 @@ mod tests {
 
     #[test]
     fn cmd_set_rejects_reverse_for_unknown_target() {
-        let err = cmd_set(Some("desk"), false, false, true, false, OutputMode::Text)
-            .expect_err("expected preset resolution to fail");
+        let err = cmd_set(
+            Some("desk"),
+            false,
+            false,
+            false,
+            true,
+            false,
+            OutputMode::Text,
+        )
+        .expect_err("expected preset resolution to fail");
 
         assert_eq!(
             err.to_string(),
             "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
+        );
+    }
+
+    #[test]
+    fn cmd_set_rejects_global_default_without_explicit_target() {
+        let err = cmd_set(None, false, false, true, false, false, OutputMode::Text)
+            .expect_err("expected global default validation to fail");
+
+        assert_eq!(
+            err.to_string(),
+            "--global-default requires an explicit saved profile"
         );
     }
 }
