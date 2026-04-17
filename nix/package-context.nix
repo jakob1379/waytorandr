@@ -10,7 +10,6 @@
 
   devShellTools = with pkgs; [
     just
-    prek
     rust
     cargo
     rustfmt
