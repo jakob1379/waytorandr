@@ -5,7 +5,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::matcher::Matcher;
 use crate::model::{BackendKind, Topology, VirtualPreset};
 use crate::normalize::normalize_topology_with_known_outputs;
-use crate::planner::{LayoutPlan, Planner};
+use crate::planner::{topology_has_internal_output, LayoutPlan, Planner};
 use crate::profile::{Hooks, OutputMatcher, Profile};
 use crate::state::{State, StateStore};
 use crate::store::{DefaultTarget, ProfilesSettings};
@@ -138,6 +138,7 @@ pub enum SelectedTarget {
 pub fn resolve_default_target_for_topology(
     topology: &Topology,
     profiles: &[Profile],
+    builtin_output: Option<&crate::model::OutputIdentity>,
     target: &DefaultTarget,
 ) -> Option<SelectedTarget> {
     match target {
@@ -150,7 +151,12 @@ pub fn resolve_default_target_for_topology(
             Matcher::match_profile(topology, &named_profiles)
                 .map(|matched| SelectedTarget::Profile(matched.profile))
         }
-        DefaultTarget::Virtual { preset } => Some(SelectedTarget::Virtual(*preset)),
+        DefaultTarget::Virtual { preset } => match preset {
+            VirtualPreset::Builtin if !topology_has_internal_output(topology, builtin_output) => {
+                None
+            }
+            _ => Some(SelectedTarget::Virtual(*preset)),
+        },
     }
 }
 
@@ -177,10 +183,14 @@ pub fn select_target_for_topology(
         return Some(SelectedTarget::Profile(matched.profile));
     }
 
-    settings
-        .new_setup_default
-        .as_ref()
-        .and_then(|target| resolve_default_target_for_topology(topology, profiles, target))
+    settings.new_setup_default.as_ref().and_then(|target| {
+        resolve_default_target_for_topology(
+            topology,
+            profiles,
+            settings.builtin_output.as_ref(),
+            target,
+        )
+    })
 }
 
 #[must_use]
@@ -302,9 +312,10 @@ fn plan_preset_with_backend<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
     preset: VirtualPreset,
+    builtin_output: Option<&crate::model::OutputIdentity>,
 ) -> CoreResult<PlanSnapshot> {
     let topology = normalized_topology_from_backend(backend, state_store)?;
-    let plan = Planner::plan_from_preset(preset, &topology, None)?;
+    let plan = Planner::plan_from_preset(preset, &topology, builtin_output, None)?;
     Ok(PlanSnapshot::new(topology, plan))
 }
 
@@ -416,9 +427,10 @@ pub fn validate_preset_workflow<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
     preset: VirtualPreset,
+    builtin_output: Option<&crate::model::OutputIdentity>,
 ) -> CoreResult<ValidationExecution> {
     validate_with_planner(backend, || {
-        plan_preset_with_backend(backend, state_store, preset)
+        plan_preset_with_backend(backend, state_store, preset, builtin_output)
     })
 }
 
@@ -444,10 +456,11 @@ pub fn apply_preset_workflow<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
     preset: VirtualPreset,
+    builtin_output: Option<&crate::model::OutputIdentity>,
 ) -> CoreResult<ApplyExecution> {
     let hooks = Hooks::default();
     apply_with_planner(backend, &hooks, || {
-        plan_preset_with_backend(backend, state_store, preset)
+        plan_preset_with_backend(backend, state_store, preset, builtin_output)
     })
 }
 
@@ -675,6 +688,7 @@ mod tests {
         };
         let settings = ProfilesSettings {
             setup_defaults: HashMap::new(),
+            builtin_output: None,
             new_setup_default: Some(DefaultTarget::Profile {
                 name: "fallback".to_string(),
             }),
@@ -693,6 +707,7 @@ mod tests {
         };
         let settings = ProfilesSettings {
             setup_defaults: HashMap::new(),
+            builtin_output: None,
             new_setup_default: Some(DefaultTarget::Virtual {
                 preset: VirtualPreset::Vertical,
             }),

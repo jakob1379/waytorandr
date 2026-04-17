@@ -38,7 +38,7 @@ git-hooks.lib.${pkgs.stdenv.hostPlatform.system}.run {
     cargo-lock-sync = {
       enable = true;
       name = "cargo lock sync";
-      entry = "${pkgs.cargo}/bin/cargo metadata --locked --format-version=1";
+      entry = "${pkgs.cargo}/bin/cargo metadata --format-version=1";
       files = "(^|/)(Cargo\\.toml|Cargo\\.lock)$";
       language = "system";
       pass_filenames = false;
