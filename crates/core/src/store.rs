@@ -649,9 +649,8 @@ impl ProfileStore {
             Err(source) => {
                 let legacy_missing = !legacy_path.exists();
                 let target_exists = self.path.exists();
-                let missing_path_error = source.kind() == std::io::ErrorKind::NotFound;
 
-                if target_exists || legacy_missing || (missing_path_error && legacy_missing) {
+                if target_exists || legacy_missing {
                     Ok(())
                 } else {
                     Err(CoreError::WriteFile {
