@@ -9,8 +9,8 @@
 ## Normal Development Loop
 
 - List shortcuts: `nix develop -c just`
-- Install Git hooks: `nix develop -c prek install`
-- Run all hooks on demand: `nix develop -c prek run --all-files`
+- Enter the dev shell to install Git hooks automatically: `nix develop`
+- Run all autofixable hooks on demand: `nix fmt`
 - CI-equivalent gate: `nix develop -c just check`
 - Format everything: `nix develop -c just fmt`
 - Lint everything: `nix develop -c just lint`
@@ -19,9 +19,11 @@
 - Test the full workspace: `nix develop -c cargo test --locked --workspace -q`
 - Test only the CLI crate: `nix develop -c cargo test -q -p waytorandr`
 
-`just` is the source of truth for CI. `prek` is only local developer
-convenience for cheap file hygiene, formatting, workflow validation, spell
-checking, and a lockfile consistency check via `cargo metadata --locked`.
+`just` is the source of truth for CI. `git-hooks.nix` is the source of truth
+for local Git hook configuration, and entering the dev shell installs the
+generated hooks automatically. Local hooks cover cheap file hygiene,
+formatting, workflow validation, spell checking, and a lockfile consistency
+check via `cargo metadata --locked`.
 
 ## CLI Integration Test
 

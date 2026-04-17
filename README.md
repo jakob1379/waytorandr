@@ -200,8 +200,8 @@ Reference:
 Use the Nix dev shell for local work:
 
 ```bash
-nix develop -c prek install
-nix develop -c prek run --all-files
+nix develop
+nix fmt
 nix develop -c just check
 ```
 
