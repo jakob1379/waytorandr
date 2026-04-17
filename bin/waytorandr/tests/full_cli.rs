@@ -374,6 +374,15 @@ fn exercise_virtual_workflows(
     assert_eq!(auto_builtin["target"], "builtin");
     assert_eq!(auto_builtin["target_type"], "virtual");
 
+    let top_level_help = env.run_text(["--help"])?;
+    let set_help = env.run_text(["set", "--help"])?;
+    let save_help = env.run_text(["save", "--help"])?;
+    let service_run_help = env.run_text(["service", "run", "--help"])?;
+    assert!(!top_level_help.contains("builtin"));
+    assert!(!set_help.contains("builtin"));
+    assert!(!save_help.contains("builtin"));
+    assert!(!service_run_help.contains("builtin"));
+
     env.write_backend_topology(&external_only_topology())?;
     let skipped_builtin = env.run_json_failure(["set", "--json"])?;
     assert!(skipped_builtin

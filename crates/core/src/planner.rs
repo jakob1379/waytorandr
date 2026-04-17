@@ -220,13 +220,11 @@ impl Planner {
             .iter()
             .map(|(name, state)| {
                 let mut state = state.clone();
-                let enable_output = if state.identity.is_ignored || state.identity.is_virtual {
-                    state.enabled
-                } else {
-                    is_internal_output(&state, builtin_output)
-                };
+                if state.identity.is_ignored || state.identity.is_virtual {
+                    return (name.clone(), state);
+                }
 
-                state.enabled = enable_output;
+                state.enabled = is_internal_output(&state, builtin_output);
                 state.position = Position { x: 0, y: 0 };
                 state.mirror_target = None;
                 (name.clone(), state)
@@ -860,6 +858,47 @@ mod tests {
         .unwrap();
         assert!(plan.outputs["DP-1"].enabled);
         assert!(!plan.outputs["HDMI-A-1"].enabled);
+    }
+
+    #[test]
+    fn builtin_preserves_virtual_and_ignored_output_layout_state() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state.position = Position::new(0, 0);
+                    state
+                }),
+                ("VIRT-1".to_string(), {
+                    let mut state = output("VIRT-1", 1920, 1080);
+                    state.identity.is_virtual = true;
+                    state.position = Position::new(7000, 500);
+                    state.mirror_target = Some("eDP-1".to_string());
+                    state
+                }),
+                ("IGNORED-1".to_string(), {
+                    let mut state = output("IGNORED-1", 800, 600);
+                    state.identity.is_ignored = true;
+                    state.position = Position::new(-300, 250);
+                    state.mirror_target = Some("eDP-1".to_string());
+                    state
+                }),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::Builtin, &topology, None, None).unwrap();
+        assert_eq!(plan.outputs["VIRT-1"].position, Position::new(7000, 500));
+        assert_eq!(plan.outputs["IGNORED-1"].position, Position::new(-300, 250));
+        assert_eq!(
+            plan.outputs["VIRT-1"].mirror_target.as_deref(),
+            Some("eDP-1")
+        );
+        assert_eq!(
+            plan.outputs["IGNORED-1"].mirror_target.as_deref(),
+            Some("eDP-1")
+        );
     }
 
     #[test]
