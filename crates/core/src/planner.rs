@@ -172,10 +172,10 @@ impl Planner {
             .reduce(|(min_x, min_y), (x, y)| (min_x.min(x), min_y.min(y)))
         {
             for state in outputs.values_mut() {
-                if state.enabled {
+                if state.enabled && !state.identity.is_ignored && !state.identity.is_virtual {
                     state.position.x -= min_x;
                     state.position.y -= min_y;
-                } else {
+                } else if !state.enabled {
                     state.position = Position { x: 0, y: 0 };
                 }
             }
@@ -697,6 +697,42 @@ mod tests {
         assert!(plan.outputs["HDMI-A-1"].enabled);
         assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["HDMI-A-1"].position, Position::new(2560, 0));
+    }
+
+    #[test]
+    fn external_does_not_rebase_enabled_ignored_or_virtual_outputs() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state.position = Position::new(0, 0);
+                    state
+                }),
+                ("DP-1".to_string(), {
+                    let mut state = output("DP-1", 2560, 1440);
+                    state.position = Position::new(1920, 40);
+                    state
+                }),
+                ("VIRT-1".to_string(), {
+                    let mut state = output("VIRT-1", 1920, 1080);
+                    state.identity.is_virtual = true;
+                    state.position = Position::new(7000, 500);
+                    state
+                }),
+                ("IGNORED-1".to_string(), {
+                    let mut state = output("IGNORED-1", 800, 600);
+                    state.identity.is_ignored = true;
+                    state.position = Position::new(-300, 250);
+                    state
+                }),
+            ]),
+        };
+
+        let plan = Planner::plan_from_preset(VirtualPreset::External, &topology, None).unwrap();
+        assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["VIRT-1"].position, Position::new(7000, 500));
+        assert_eq!(plan.outputs["IGNORED-1"].position, Position::new(-300, 250));
     }
 
     #[test]
