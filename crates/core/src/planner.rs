@@ -95,6 +95,7 @@ impl Planner {
     ) -> Result<LayoutPlan, PlanError> {
         match preset {
             VirtualPreset::Off => Self::plan_off(topology, builtin_output),
+            VirtualPreset::External => Self::plan_external(topology, builtin_output),
             VirtualPreset::Builtin => Self::plan_builtin(topology, builtin_output),
             VirtualPreset::Horizontal
             | VirtualPreset::HorizontalReverse
@@ -133,6 +134,68 @@ impl Planner {
         Ok(LayoutPlan {
             outputs,
             preset_used: Some(VirtualPreset::Off),
+        })
+    }
+
+    fn plan_external(
+        topology: &Topology,
+        builtin_output: Option<&OutputIdentity>,
+    ) -> Result<LayoutPlan, PlanError> {
+        if topology.outputs.is_empty() {
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs to configure".to_string(),
+            ));
+        }
+
+        let has_external_output = topology.outputs.values().any(|state| {
+            !state.identity.is_ignored
+                && !state.identity.is_virtual
+                && !is_internal_output(state, builtin_output)
+        });
+
+        let mut outputs: HashMap<_, _> = topology
+            .outputs
+            .iter()
+            .map(|(name, state)| {
+                let mut state = state.clone();
+                let enable_output = if state.identity.is_ignored || state.identity.is_virtual {
+                    state.enabled
+                } else if has_external_output {
+                    !is_internal_output(&state, builtin_output)
+                } else {
+                    is_internal_output(&state, builtin_output)
+                };
+
+                state.enabled = enable_output;
+                if !enable_output {
+                    state.position = Position { x: 0, y: 0 };
+                }
+                state.mirror_target = None;
+                (name.clone(), state)
+            })
+            .collect();
+
+        if let Some((min_x, min_y)) = outputs
+            .values()
+            .filter(|state| {
+                state.enabled && !state.identity.is_ignored && !state.identity.is_virtual
+            })
+            .map(|state| (state.position.x, state.position.y))
+            .reduce(|(min_x, min_y), (x, y)| (min_x.min(x), min_y.min(y)))
+        {
+            for state in outputs.values_mut() {
+                if state.enabled && !state.identity.is_ignored && !state.identity.is_virtual {
+                    state.position.x -= min_x;
+                    state.position.y -= min_y;
+                } else if !state.enabled {
+                    state.position = Position { x: 0, y: 0 };
+                }
+            }
+        }
+
+        Ok(LayoutPlan {
+            outputs,
+            preset_used: Some(VirtualPreset::External),
         })
     }
 
@@ -639,6 +702,110 @@ mod tests {
         let plan = Planner::plan_from_preset(VirtualPreset::Off, &topology, None, None).unwrap();
         assert!(!plan.outputs["A"].enabled);
         assert!(!plan.outputs["B"].enabled);
+    }
+
+    #[test]
+    fn external_disables_internal_outputs_and_keeps_externals() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state
+                }),
+                ("DP-1".to_string(), output("DP-1", 1280, 720)),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::External, &topology, None, None).unwrap();
+        assert!(!plan.outputs["eDP-1"].enabled);
+        assert!(plan.outputs["DP-1"].enabled);
+    }
+
+    #[test]
+    fn external_keeps_internal_outputs_when_no_external_exists() {
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), {
+                let mut state = output("eDP-1", 1920, 1080);
+                state.identity.description = Some("Built-in display".to_string());
+                state
+            })]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::External, &topology, None, None).unwrap();
+        assert!(plan.outputs["eDP-1"].enabled);
+    }
+
+    #[test]
+    fn external_rebases_enabled_outputs_to_origin() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state.position = Position::new(0, 0);
+                    state
+                }),
+                ("DP-1".to_string(), {
+                    let mut state = output("DP-1", 2560, 1440);
+                    state.position = Position::new(1920, 40);
+                    state
+                }),
+                ("HDMI-A-1".to_string(), {
+                    let mut state = output("HDMI-A-1", 1920, 1080);
+                    state.position = Position::new(4480, 40);
+                    state
+                }),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::External, &topology, None, None).unwrap();
+        assert!(!plan.outputs["eDP-1"].enabled);
+        assert_eq!(plan.outputs["eDP-1"].position, Position::new(0, 0));
+        assert!(plan.outputs["DP-1"].enabled);
+        assert!(plan.outputs["HDMI-A-1"].enabled);
+        assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["HDMI-A-1"].position, Position::new(2560, 0));
+    }
+
+    #[test]
+    fn external_does_not_rebase_enabled_ignored_or_virtual_outputs() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state.position = Position::new(0, 0);
+                    state
+                }),
+                ("DP-1".to_string(), {
+                    let mut state = output("DP-1", 2560, 1440);
+                    state.position = Position::new(1920, 40);
+                    state
+                }),
+                ("VIRT-1".to_string(), {
+                    let mut state = output("VIRT-1", 1920, 1080);
+                    state.identity.is_virtual = true;
+                    state.position = Position::new(7000, 500);
+                    state
+                }),
+                ("IGNORED-1".to_string(), {
+                    let mut state = output("IGNORED-1", 800, 600);
+                    state.identity.is_ignored = true;
+                    state.position = Position::new(-300, 250);
+                    state
+                }),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::External, &topology, None, None).unwrap();
+        assert_eq!(plan.outputs["DP-1"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["VIRT-1"].position, Position::new(7000, 500));
+        assert_eq!(plan.outputs["IGNORED-1"].position, Position::new(-300, 250));
     }
 
     #[test]

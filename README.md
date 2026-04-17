@@ -61,6 +61,7 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr save work-dock --setup-name office
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
+./result/bin/waytorandr set external --default
 ./result/bin/waytorandr set vertical --default
 ```
 
@@ -86,6 +87,7 @@ waytorandr service   Manage the waytorandrd user service
 Built-in `set` targets:
 
 - `off` - disable external outputs and keep built-in panels on when present
+- `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
 - `mirror` - native mirroring at one shared mode
@@ -106,14 +108,15 @@ for the full command reference and examples.
 
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
-unchanged set of connected displays. When the physical setup changes, it
-reapplies the configured default profile for the current fingerprint, or the best
-matching saved profile when no default profile is set for that fingerprint. If
-there is still no match, it applies the configured default target for new
-setups before falling back to remembering the current topology.
+unchanged set of connected displays. When the physical setup changes, it first
+tries the configured default profile for the current fingerprint, then a
+remembered layout for that setup, then the best matching saved profile, then
+the configured default target for new setups, and finally falls back to
+remembering the current topology. Remembered layouts that would leave all real
+outputs disabled are skipped instead of being reused.
 
 If you want the fallback target for new setups to mean "internal panel only",
-configure `builtin` in `profiles.json`. This is a config-only fallback target;
+configure `builtin` in `waytorandr.json`. This is a config-only fallback target;
 it is not advertised as an explicit `waytorandr set` target.
 
 ```json
@@ -192,12 +195,12 @@ Current option surface:
 
 Profiles and saved default settings remain in standard XDG config, while runtime state remains in XDG state:
 
-- `$XDG_CONFIG_HOME/waytorandr/profiles.json`
+- `$XDG_CONFIG_HOME/waytorandr/waytorandr.json`
 - `$XDG_STATE_HOME/waytorandr/state.toml`
 
 If the XDG variables are unset, these typically resolve to:
 
-- `~/.config/waytorandr/profiles.json`
+- `~/.config/waytorandr/waytorandr.json`
 - `~/.local/state/waytorandr/state.toml`
 
 ## Limits

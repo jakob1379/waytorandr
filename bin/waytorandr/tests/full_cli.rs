@@ -519,7 +519,7 @@ impl TestEnvironment {
     }
 
     fn profiles_file_path(&self) -> PathBuf {
-        self.config_home.join("waytorandr").join("profiles.json")
+        self.config_home.join("waytorandr").join("waytorandr.json")
     }
 
     fn write_profiles_settings(&self, settings: Value) -> Result<(), Box<dyn Error>> {
