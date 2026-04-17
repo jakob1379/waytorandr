@@ -12,7 +12,6 @@
     just
     rust
     cargo
-    rustfmt
     clippy
     alejandra
     deadnix
