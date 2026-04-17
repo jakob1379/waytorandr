@@ -5,7 +5,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::matcher::Matcher;
 use crate::model::{BackendKind, Topology, VirtualPreset};
 use crate::normalize::normalize_topology_with_known_outputs;
-use crate::planner::{LayoutPlan, Planner};
+use crate::planner::{topology_has_internal_output, LayoutPlan, Planner};
 use crate::profile::{Hooks, OutputMatcher, Profile};
 use crate::state::{State, StateStore};
 use crate::store::{DefaultTarget, ProfilesSettings};
@@ -150,7 +150,10 @@ pub fn resolve_default_target_for_topology(
             Matcher::match_profile(topology, &named_profiles)
                 .map(|matched| SelectedTarget::Profile(matched.profile))
         }
-        DefaultTarget::Virtual { preset } => Some(SelectedTarget::Virtual(*preset)),
+        DefaultTarget::Virtual { preset } => match preset {
+            VirtualPreset::Builtin if !topology_has_internal_output(topology) => None,
+            _ => Some(SelectedTarget::Virtual(*preset)),
+        },
     }
 }
 

@@ -30,6 +30,7 @@ pub enum Commands {
     #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
     #[command(after_long_help = "Virtual configurations:
   off        Disable external outputs and keep built-in panels on when present
+  builtin    Enable built-in panels only; skip this preset on setups without one
   external   Disable built-in panels and keep external outputs on when present
   common     Clone all connected outputs at the largest common resolution (not native mirroring)
   largest    Clone all connected outputs at the same origin using each output's largest mode
@@ -47,6 +48,7 @@ Examples:
   waytorandr set docked
   waytorandr set docked --default
   waytorandr set laptop --global-default
+  waytorandr set builtin --default
   waytorandr set external --default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run

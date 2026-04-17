@@ -92,6 +92,7 @@ impl Planner {
     ) -> Result<LayoutPlan, PlanError> {
         match preset {
             VirtualPreset::Off => Self::plan_off(topology),
+            VirtualPreset::Builtin => Self::plan_builtin(topology),
             VirtualPreset::External => Self::plan_external(topology),
             VirtualPreset::Horizontal
             | VirtualPreset::HorizontalReverse
@@ -166,6 +167,43 @@ impl Planner {
         Ok(LayoutPlan {
             outputs,
             preset_used: Some(VirtualPreset::External),
+        })
+    }
+
+    fn plan_builtin(topology: &Topology) -> Result<LayoutPlan, PlanError> {
+        if topology.outputs.is_empty() {
+            return Err(PlanError::InvalidConfiguration(
+                "No outputs to configure".to_string(),
+            ));
+        }
+
+        if !topology_has_internal_output(topology) {
+            return Err(PlanError::InvalidConfiguration(
+                "No built-in display is available for the `builtin` preset".to_string(),
+            ));
+        }
+
+        let outputs = topology
+            .outputs
+            .iter()
+            .map(|(name, state)| {
+                let mut state = state.clone();
+                let enable_output = if state.identity.is_ignored || state.identity.is_virtual {
+                    state.enabled
+                } else {
+                    is_internal_output(&state)
+                };
+
+                state.enabled = enable_output;
+                state.position = Position { x: 0, y: 0 };
+                state.mirror_target = None;
+                (name.clone(), state)
+            })
+            .collect();
+
+        Ok(LayoutPlan {
+            outputs,
+            preset_used: Some(VirtualPreset::Builtin),
         })
     }
 
@@ -437,6 +475,13 @@ fn is_internal_output(state: &OutputState) -> bool {
 }
 
 #[must_use]
+pub fn topology_has_internal_output(topology: &Topology) -> bool {
+    topology.outputs.values().any(|state| {
+        !state.identity.is_ignored && !state.identity.is_virtual && is_internal_output(state)
+    })
+}
+
+#[must_use]
 pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     let enabled: Vec<_> = topology
         .outputs
@@ -615,6 +660,38 @@ mod tests {
         let plan = Planner::plan_from_preset(VirtualPreset::Off, &topology, None).unwrap();
         assert!(!plan.outputs["A"].enabled);
         assert!(!plan.outputs["B"].enabled);
+    }
+
+    #[test]
+    fn builtin_keeps_internal_outputs_enabled_and_disables_externals() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), {
+                    let mut state = output("eDP-1", 1920, 1080);
+                    state.identity.description = Some("Built-in display".to_string());
+                    state
+                }),
+                ("DP-1".to_string(), output("DP-1", 1280, 720)),
+            ]),
+        };
+
+        let plan = Planner::plan_from_preset(VirtualPreset::Builtin, &topology, None).unwrap();
+        assert!(plan.outputs["eDP-1"].enabled);
+        assert!(!plan.outputs["DP-1"].enabled);
+    }
+
+    #[test]
+    fn builtin_errors_when_no_internal_output_exists() {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1", 1920, 1080))]),
+        };
+
+        let err = Planner::plan_from_preset(VirtualPreset::Builtin, &topology, None)
+            .expect_err("builtin should require an internal output");
+        assert_eq!(
+            err.to_string(),
+            "Invalid configuration: No built-in display is available for the `builtin` preset"
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub fn resolve_virtual_preset(
 ) -> Result<Option<VirtualPreset>> {
     let preset = match name {
         "off" => Some(VirtualPreset::Off),
+        "builtin" => Some(VirtualPreset::Builtin),
         "external" => Some(VirtualPreset::External),
         "common" => Some(if largest {
             VirtualPreset::Largest
@@ -50,6 +51,7 @@ pub fn virtual_completion_candidates(
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
         ("off", "virtual"),
+        ("builtin", "virtual"),
         ("external", "virtual"),
         ("common", "virtual"),
         ("largest", "virtual"),
@@ -98,6 +100,14 @@ mod tests {
         assert_eq!(
             resolve_virtual_preset("external", false, false).unwrap(),
             Some(VirtualPreset::External)
+        );
+    }
+
+    #[test]
+    fn resolve_virtual_preset_accepts_builtin() {
+        assert_eq!(
+            resolve_virtual_preset("builtin", false, false).unwrap(),
+            Some(VirtualPreset::Builtin)
         );
     }
 }

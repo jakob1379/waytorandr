@@ -53,6 +53,7 @@ impl std::fmt::Display for BackendKind {
 #[serde(rename_all = "kebab-case")]
 pub enum VirtualPreset {
     Off,
+    Builtin,
     External,
     Common,
     Largest,
@@ -68,6 +69,7 @@ impl VirtualPreset {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
+            Self::Builtin => "builtin",
             Self::External => "external",
             Self::Common => "common",
             Self::Largest => "largest",

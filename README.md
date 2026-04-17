@@ -62,6 +62,7 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
 ./result/bin/waytorandr set laptop --global-default
+./result/bin/waytorandr set builtin --default
 ./result/bin/waytorandr set external --default
 ```
 
@@ -86,7 +87,8 @@ waytorandr service   Manage the waytorandrd user service
 
 Built-in `set` targets:
 
-- `off`
+- `off` - disable external outputs and keep built-in panels on when present
+- `builtin` - enable built-in panels only; skipped when no built-in display exists for the setup
 - `external` - disable built-in panels and keep external outputs on when present
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
