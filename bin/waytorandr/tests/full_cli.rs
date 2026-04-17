@@ -229,6 +229,15 @@ fn exercise_virtual_workflows(
     env: &TestEnvironment,
     supports_native_mirror: bool,
 ) -> Result<(), Box<dyn Error>> {
+    let builtin = env.run_json(["set", "builtin", "--json"])?;
+    assert_eq!(builtin["target"], "builtin");
+    assert_eq!(builtin["target_type"], "virtual");
+    let topology = env.backend_topology()?;
+    assert!(!topology.outputs["DP-1"].enabled);
+    assert!(topology.outputs["eDP-1"].enabled);
+    assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 0));
+    assert_eq!(topology.outputs["eDP-1"].position, Position::new(0, 0));
+
     let off = env.run_json(["set", "off", "--json"])?;
     assert_eq!(off["target"], "off");
     assert_eq!(off["target_type"], "virtual");
@@ -359,6 +368,26 @@ fn exercise_virtual_workflows(
     assert_eq!(auto_set["selection"], "auto");
     assert_eq!(auto_set["target"], "external");
     assert_eq!(auto_set["target_type"], "virtual");
+
+    let builtin_default = env.run_json(["set", "builtin", "--default", "--json"])?;
+    assert_eq!(builtin_default["target"], "builtin");
+    assert_eq!(builtin_default["default_set"], true);
+    assert_eq!(builtin_default["default_scope"], "new_setups");
+
+    let status = env.run_json(["status", "--json"])?;
+    assert_eq!(status["new_setup_default"]["kind"], "virtual");
+    assert_eq!(status["new_setup_default"]["preset"], "builtin");
+
+    let auto_builtin = env.run_json(["set", "--json"])?;
+    assert_eq!(auto_builtin["selection"], "auto");
+    assert_eq!(auto_builtin["target"], "builtin");
+    assert_eq!(auto_builtin["target_type"], "virtual");
+
+    env.write_backend_topology(&external_only_topology())?;
+    let skipped_builtin = env.run_json_failure(["set", "--json"])?;
+    assert!(skipped_builtin
+        .stderr
+        .contains("no matching profile and no default target configured"));
 
     Ok(())
 }
@@ -735,6 +764,29 @@ fn alternate_topology() -> Topology {
                 1920,
                 1080,
                 &[Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)],
+                0,
+                0,
+            ),
+        )]
+        .into_iter()
+        .collect(),
+    }
+}
+
+fn external_only_topology() -> Topology {
+    Topology {
+        outputs: [(
+            "DP-1".to_string(),
+            output(
+                "DP-1",
+                Some("Dell U2720Q"),
+                2560,
+                1440,
+                &[
+                    Mode::new(2560, 1440, 60),
+                    Mode::new(1920, 1080, 60),
+                    Mode::new(1280, 720, 60),
+                ],
                 0,
                 0,
             ),

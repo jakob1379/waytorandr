@@ -853,6 +853,108 @@ mod tests {
     }
 
     #[test]
+    fn builtin_default_applies_on_internal_only_setups() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: Topology {
+                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+                },
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(state.last_profile, None);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_default_is_skipped_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: topology.clone(),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                state
+                    .remembered_setups
+                    .get(&topology.setup_fingerprint())
+                    .map(Topology::fingerprint),
+                Some(topology.fingerprint())
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
     fn remembered_setup_is_applied_without_setting_last_profile() -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;

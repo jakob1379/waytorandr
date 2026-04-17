@@ -9,7 +9,6 @@ pub fn resolve_virtual_preset(
 ) -> Result<Option<VirtualPreset>> {
     let preset = match name {
         "off" => Some(VirtualPreset::Off),
-        "external" => Some(VirtualPreset::External),
         "common" => Some(if largest {
             VirtualPreset::Largest
         } else {
@@ -30,17 +29,7 @@ pub fn resolve_virtual_preset(
         _ => None,
     };
 
-    if reverse
-        && !matches!(
-            preset,
-            Some(
-                VirtualPreset::Horizontal
-                    | VirtualPreset::HorizontalReverse
-                    | VirtualPreset::Vertical
-                    | VirtualPreset::VerticalReverse
-            )
-        )
-    {
+    if reverse && preset.is_none() {
         bail!("--reverse can only be used with virtual 'horizontal' or 'vertical' set targets")
     }
 
@@ -60,7 +49,6 @@ pub fn virtual_completion_candidates(
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
         ("off", "virtual"),
-        ("external", "virtual"),
         ("common", "virtual"),
         ("largest", "virtual"),
         ("mirror", "virtual"),
@@ -101,22 +89,5 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["vertical"]);
-    }
-
-    #[test]
-    fn resolve_virtual_preset_accepts_external() {
-        assert_eq!(
-            resolve_virtual_preset("external", false, false).unwrap(),
-            Some(VirtualPreset::External)
-        );
-    }
-
-    #[test]
-    fn resolve_virtual_preset_rejects_reverse_for_external() {
-        let err = resolve_virtual_preset("external", true, false).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
-        );
     }
 }

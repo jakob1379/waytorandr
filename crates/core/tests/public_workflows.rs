@@ -542,6 +542,50 @@ fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
+fn runtime_returns_builtin_default_when_internal_output_exists() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            }),
+        };
+
+        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
+            .ok_or_else(|| std::io::Error::other("builtin default should be selected"))?;
+
+        assert!(matches!(
+            selected,
+            workflow::SelectedTarget::Virtual(VirtualPreset::Builtin)
+        ));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn runtime_skips_builtin_default_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            }),
+        };
+
+        assert!(workflow::select_target_for_topology(&topology, &[], &settings).is_none());
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn setup_names_persist_per_setup_fingerprint() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let state_store = StateStore::bootstrap()?;
