@@ -86,7 +86,7 @@ waytorandr service   Manage the waytorandrd user service
 Built-in `set` targets:
 
 - `off`
-- `external` - disable built-in panels and keep external outputs on when present
+- `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
 - `mirror` - native mirroring at one shared mode

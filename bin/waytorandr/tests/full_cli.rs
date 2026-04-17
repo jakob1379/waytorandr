@@ -379,6 +379,8 @@ fn cli_help_renders_correctly() -> Result<(), Box<dyn Error>> {
     let set_help = env.run_text(["set", "--help"])?;
     assert!(set_help.contains("USAGE") || set_help.contains("Usage"));
     assert!(set_help.contains("set"));
+    assert!(set_help
+        .contains("Prefer external outputs; if none are present, keep built-in panels enabled"));
 
     let service_run_help = env.run_text(["service", "run", "--help"])?;
     assert!(service_run_help.contains("Usage") || service_run_help.contains("USAGE"));
