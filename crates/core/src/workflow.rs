@@ -211,17 +211,17 @@ pub fn current_profile_name(
     profiles: &[Profile],
     state: &State,
 ) -> Option<String> {
-    if let Some(profile) = state
+    state
         .last_profile
         .as_deref()
         .and_then(|last_profile| profiles.iter().find(|profile| profile.name == last_profile))
-    {
-        if Matcher::match_profile(topology, std::slice::from_ref(profile)).is_some() {
-            return Some(profile.name.clone());
-        }
-    }
-
-    Matcher::match_profile(topology, profiles).map(|matched| matched.profile.name)
+        .and_then(|profile| {
+            if Matcher::match_profile(topology, std::slice::from_ref(profile)).is_some() {
+                Some(profile.name.clone())
+            } else {
+                None
+            }
+        })
 }
 
 #[must_use]
@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn current_profile_name_falls_back_when_recorded_profile_is_stale() {
+    fn current_profile_name_returns_none_when_recorded_profile_is_stale() {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
         };
@@ -787,7 +787,19 @@ mod tests {
 
         let selected = current_profile_name(&topology, &profiles, &state);
 
-        assert_eq!(selected.as_deref(), Some("desk"));
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn current_profile_name_returns_none_without_recorded_profile() {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let profiles = vec![profile("desk", "DP-1")];
+
+        let selected = current_profile_name(&topology, &profiles, &State::default());
+
+        assert_eq!(selected, None);
     }
 
     #[test]
