@@ -19,6 +19,16 @@ use waytorandr_core::workflow;
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
 
+#[derive(Clone, Copy)]
+pub(super) struct SetOptions {
+    pub(super) dry_run: bool,
+    pub(super) make_default: bool,
+    pub(super) global_default: bool,
+    pub(super) save: bool,
+    pub(super) reverse: bool,
+    pub(super) largest: bool,
+}
+
 struct SavedCurrentLayout {
     backend_kind: BackendKind,
     topology: Topology,
@@ -157,14 +167,17 @@ pub(super) fn cmd_save(
 
 pub(super) fn cmd_set(
     name: Option<&str>,
-    dry_run: bool,
-    make_default: bool,
-    global_default: bool,
-    save: bool,
-    reverse: bool,
-    largest: bool,
+    options: SetOptions,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let SetOptions {
+        dry_run,
+        make_default,
+        global_default,
+        save,
+        reverse,
+        largest,
+    } = options;
     let save_for_current_setup = make_default || save;
 
     if global_default && (make_default || save) {
@@ -332,12 +345,14 @@ mod tests {
     fn cmd_set_requires_explicit_target_for_reverse_flag() {
         let err = cmd_set(
             None,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
+            SetOptions {
+                dry_run: false,
+                make_default: false,
+                global_default: false,
+                save: false,
+                reverse: true,
+                largest: false,
+            },
             OutputMode::Text,
         )
         .expect_err("expected reverse validation to fail");
@@ -352,12 +367,14 @@ mod tests {
     fn cmd_set_rejects_default_without_explicit_target() {
         let err = cmd_set(
             None,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
+            SetOptions {
+                dry_run: false,
+                make_default: true,
+                global_default: false,
+                save: false,
+                reverse: false,
+                largest: false,
+            },
             OutputMode::Text,
         )
         .expect_err("expected default validation to fail");
@@ -372,12 +389,14 @@ mod tests {
     fn cmd_set_rejects_reverse_for_unknown_target() {
         let err = cmd_set(
             Some("desk"),
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
+            SetOptions {
+                dry_run: false,
+                make_default: false,
+                global_default: false,
+                save: false,
+                reverse: true,
+                largest: false,
+            },
             OutputMode::Text,
         )
         .expect_err("expected preset resolution to fail");

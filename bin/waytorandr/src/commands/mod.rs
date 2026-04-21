@@ -40,12 +40,14 @@ pub(crate) fn run() -> Result<()> {
     match cli.command {
         Commands::Set(args) => write::cmd_set(
             args.target.as_deref(),
-            args.dry_run,
-            args.make_default,
-            args.global_default,
-            args.save,
-            args.reverse,
-            args.largest,
+            write::SetOptions {
+                dry_run: args.dry_run,
+                make_default: args.make_default,
+                global_default: args.global_default,
+                save: args.save,
+                reverse: args.reverse,
+                largest: args.largest,
+            },
             output_mode,
         ),
         Commands::Save(args) => write::cmd_save(
