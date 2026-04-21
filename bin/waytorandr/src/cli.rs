@@ -45,12 +45,20 @@ Examples:
   waytorandr set
   waytorandr set docked
   waytorandr set docked --default
-  waytorandr set external --default
+  waytorandr set vertical --save
   waytorandr set vertical --default
+  waytorandr set external --global-default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run
   waytorandr set mirror --dry-run
   waytorandr set vertical --reverse --dry-run
+
+`--default` only affects the current setup fingerprint.
+With virtual configurations, `--default` saves the resulting layout as profile `default`
+and makes that saved profile the default for the current setup.
+Use `--global-default` with a virtual configuration to set the fallback target for new setups.
+Use `--save` with a virtual configuration as a shortcut for saving the resulting layout
+as profile `default` and making it the default for the current setup.
 
 When a backend cannot support `mirror`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
     Set(SetArgs),
@@ -66,7 +74,7 @@ When a backend cannot support `mirror`, waytorandr prints backend-specific guida
 
 If the profile name is omitted, `default` is used.
 Use `--setup-name` to assign a friendly name to the current setup while keeping fingerprint-based matching.
-Use `--default` together with `save` when the current screen setup may match multiple saved profiles and you want this saved layout to become the default profile for this setup.")]
+Use `--default` together with `save` when you want this saved layout to become the default profile for the current setup fingerprint.")]
     Save(SaveArgs),
 
     #[command(about = "Remove a saved profile")]
@@ -149,9 +157,22 @@ pub struct SetArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "With saved profiles: set the default for this setup. With virtual configurations: set the default for new setups"
+        help = "Make the resulting layout the default for the current setup fingerprint"
     )]
     pub(crate) make_default: bool,
+
+    #[arg(
+        long = "global-default",
+        help = "With virtual configurations: set the fallback target for new setups"
+    )]
+    pub(crate) global_default: bool,
+
+    #[arg(
+        short = 's',
+        long = "save",
+        help = "With virtual configurations: save the resulting layout as profile `default` and make it the default for the current setup"
+    )]
+    pub(crate) save: bool,
 
     #[arg(
         short = 'l',
@@ -189,7 +210,7 @@ pub struct SaveArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Also set the saved profile as the default profile for this setup"
+        help = "Also set the saved profile as the default profile for the current setup fingerprint"
     )]
     pub(crate) make_default: bool,
 
@@ -286,6 +307,16 @@ mod tests {
         match cli.command {
             Commands::Save(args) => assert_eq!(args.setup_name.as_deref(), Some("office")),
             _ => panic!("expected save command"),
+        }
+    }
+
+    #[test]
+    fn set_parses_save_short_flag() {
+        let cli = Cli::parse_from(["waytorandr", "set", "vertical", "-s"]);
+
+        match cli.command {
+            Commands::Set(args) => assert!(args.save),
+            _ => panic!("expected set command"),
         }
     }
 

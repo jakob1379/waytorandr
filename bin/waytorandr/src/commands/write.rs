@@ -2,18 +2,61 @@ use anyhow::{anyhow, bail, Result};
 
 use super::apply::{
     current_setup_fingerprint, emit_action_outcome, execute_profile_action, execute_virtual_action,
-    set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse, JsonSaveResponse,
+    save_runtime_state, set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse,
+    JsonSaveResponse,
 };
 use super::output::{failure, print_plan_summary, success, value, warning, write_json};
 use super::shared::plan_outputs;
 use super::OutputMode;
 use crate::preset::resolve_virtual_preset;
 use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::model::{BackendKind, Topology};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
 use waytorandr_core::workflow;
+
+const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
+
+struct SavedCurrentLayout {
+    backend_kind: BackendKind,
+    topology: Topology,
+}
+
+fn save_current_layout(
+    name: &str,
+    setup_name: Option<&str>,
+    make_default: bool,
+) -> Result<SavedCurrentLayout> {
+    let store = ProfileStore::bootstrap()?;
+    let state_store = StateStore::bootstrap()?;
+    let backend = connect_backend()?;
+    let backend_kind = backend.capabilities().backend;
+    let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
+    let setup_fingerprint = topology.setup_fingerprint();
+
+    if topology.outputs.is_empty() {
+        bail!("cannot save a profile from an empty topology")
+    }
+
+    let profile = workflow::profile_from_topology(name, &topology);
+    let observed_topology =
+        workflow::observed_topology_from_backend(backend.as_ref(), &state_store)?;
+
+    store.save(&profile, &state_store)?;
+    if let Some(setup_name) = setup_name {
+        workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
+    }
+    if make_default {
+        set_default_profile_for_fingerprint(name, &setup_fingerprint)?;
+    }
+
+    Ok(SavedCurrentLayout {
+        backend_kind,
+        topology: observed_topology,
+    })
+}
 
 pub(super) fn cmd_save(
     name: &str,
@@ -22,11 +65,9 @@ pub(super) fn cmd_save(
     make_default: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
     let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
-    let setup_fingerprint = topology.setup_fingerprint();
 
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
@@ -78,14 +119,7 @@ pub(super) fn cmd_save(
         return Ok(());
     }
 
-    let _topology = workflow::observed_topology_from_backend(backend.as_ref(), &state_store)?;
-    store.save(&profile, &state_store)?;
-    if let Some(setup_name) = setup_name {
-        workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
-    }
-    if make_default {
-        set_default_profile_for_fingerprint(name, &setup_fingerprint)?;
-    }
+    let _saved_layout = save_current_layout(name, setup_name, make_default)?;
     if output_mode.is_json() {
         return write_json(&JsonSaveResponse {
             command: "save",
@@ -125,10 +159,18 @@ pub(super) fn cmd_set(
     name: Option<&str>,
     dry_run: bool,
     make_default: bool,
+    global_default: bool,
+    save: bool,
     reverse: bool,
     largest: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let save_for_current_setup = make_default || save;
+
+    if global_default && (make_default || save) {
+        bail!("--global-default cannot be combined with --default or --save")
+    }
+
     if name.is_none() {
         if reverse {
             bail!("--reverse requires a virtual 'horizontal' or 'vertical' set target")
@@ -136,16 +178,35 @@ pub(super) fn cmd_set(
         if largest {
             bail!("--largest is deprecated; use `waytorandr set largest`")
         }
-        if make_default {
-            bail!("--default requires an explicit saved profile or virtual set target")
+        if save_for_current_setup || global_default {
+            bail!("--default, --global-default, and --save require an explicit set target")
         }
         return cmd_change(dry_run, output_mode);
     }
 
     let name = name.expect("checked above");
     if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-        let outcome = execute_virtual_action(preset, dry_run, make_default, None)?;
+        let mut outcome = execute_virtual_action(preset, dry_run, global_default, None)?;
+        if save_for_current_setup {
+            outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
+            outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
+            if !dry_run {
+                let saved_layout = save_current_layout(DEFAULT_SAVED_PROFILE_NAME, None, true)?;
+                save_runtime_state(
+                    DEFAULT_SAVED_PROFILE_NAME,
+                    Some(saved_layout.backend_kind),
+                    &saved_layout.topology,
+                )?;
+            }
+        }
         return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
+    }
+
+    if global_default {
+        bail!("--global-default can only be used with virtual set targets")
+    }
+    if save {
+        bail!("--save can only be used with virtual set targets")
     }
 
     let store = ProfileStore::bootstrap()?;
@@ -269,8 +330,17 @@ mod tests {
 
     #[test]
     fn cmd_set_requires_explicit_target_for_reverse_flag() {
-        let err = cmd_set(None, false, false, true, false, OutputMode::Text)
-            .expect_err("expected reverse validation to fail");
+        let err = cmd_set(
+            None,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            OutputMode::Text,
+        )
+        .expect_err("expected reverse validation to fail");
 
         assert_eq!(
             err.to_string(),
@@ -280,19 +350,37 @@ mod tests {
 
     #[test]
     fn cmd_set_rejects_default_without_explicit_target() {
-        let err = cmd_set(None, false, true, false, false, OutputMode::Text)
-            .expect_err("expected default validation to fail");
+        let err = cmd_set(
+            None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            OutputMode::Text,
+        )
+        .expect_err("expected default validation to fail");
 
         assert_eq!(
             err.to_string(),
-            "--default requires an explicit saved profile or virtual set target"
+            "--default, --global-default, and --save require an explicit set target"
         );
     }
 
     #[test]
     fn cmd_set_rejects_reverse_for_unknown_target() {
-        let err = cmd_set(Some("desk"), false, false, true, false, OutputMode::Text)
-            .expect_err("expected preset resolution to fail");
+        let err = cmd_set(
+            Some("desk"),
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            OutputMode::Text,
+        )
+        .expect_err("expected preset resolution to fail");
 
         assert_eq!(
             err.to_string(),

@@ -255,6 +255,16 @@ fn exercise_virtual_workflows(
     assert_eq!(topology.outputs["eDP-1"].position, Position::new(320, 0));
     assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 1080));
 
+    let set_setup_default = env.run_json(["set", "vertical", "--default", "--json"])?;
+    assert_eq!(set_setup_default["target"], "vertical");
+    assert_eq!(set_setup_default["saved_profile"], "default");
+    assert_eq!(set_setup_default["default_set"], true);
+    assert_eq!(set_setup_default["default_scope"], "setup");
+    assert_eq!(set_setup_default["default_target"], "default");
+    assert_saved_profiles(env, &["default"])?;
+    assert_default_and_active(env, Some("default"), Some("default"))?;
+    assert_eq!(env.run_json(["status", "--json"])?["profile"], "default");
+
     let invalid_reverse = env.run_json_failure(["set", "external", "--reverse", "--json"])?;
     assert!(invalid_reverse.stderr.contains(
         "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
@@ -341,10 +351,11 @@ fn exercise_virtual_workflows(
         assert!(mirror.stderr.contains("wl-mirror"));
     }
 
-    let set_default = env.run_json(["set", "external", "--default", "--json"])?;
-    assert_eq!(set_default["target"], "external");
-    assert_eq!(set_default["default_set"], true);
-    assert_eq!(set_default["default_scope"], "new_setups");
+    let set_global_default = env.run_json(["set", "external", "--global-default", "--json"])?;
+    assert_eq!(set_global_default["target"], "external");
+    assert_eq!(set_global_default["default_set"], true);
+    assert_eq!(set_global_default["default_scope"], "new_setups");
+    assert_eq!(set_global_default["default_target"], "external");
 
     let topology = env.backend_topology()?;
     assert!(topology.outputs["DP-1"].enabled);
