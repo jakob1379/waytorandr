@@ -109,8 +109,8 @@ for the full command reference and examples.
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. When the physical setup changes, it first
-tries the configured default profile for the current fingerprint, then a
-remembered layout for that setup, then the best matching saved profile, then
+tries the configured default profile for the current fingerprint, then the best
+matching saved profile, then a remembered layout for that setup, then
 the configured default target for new setups, and finally falls back to
 remembering the current topology. Remembered layouts that would leave all real
 outputs disabled are skipped instead of being reused.

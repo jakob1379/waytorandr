@@ -158,7 +158,7 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
     let current_setup_name = state
         .setup_name_for_setup(&current_setup)
         .map(str::to_string);
-    let profiles = store.profiles(&state_store)?;
+    let current_profiles = store.profiles_for_setup(&current_setup, &state_store)?;
     let all_profiles = store.list(&state_store)?;
     let has_saved_profiles = !all_profiles.is_empty();
     let listed_profiles: Vec<StoredProfile> = if show_all {
@@ -175,10 +175,18 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
             priority: stored.profile.priority,
         })
         .collect();
-    let list = build_list_view(&entries, show_all, Some(current_setup), &state, &settings);
+    let active_profile = workflow::current_profile_name(&topology, &current_profiles, &state);
+    let list = build_list_view(
+        &entries,
+        show_all,
+        Some(current_setup),
+        active_profile.as_deref(),
+        &state,
+        &settings,
+    );
 
     Ok(StatusView {
-        profile: workflow::current_profile_name(&topology, &profiles, &state),
+        profile: active_profile,
         topology,
         setup_name: current_setup_name,
         builtin_output: settings.builtin_output.clone(),
@@ -205,6 +213,7 @@ fn build_list_view(
     listed_profiles: &[ListEntry],
     show_all: bool,
     current_setup: Option<String>,
+    active_profile: Option<&str>,
     state: &waytorandr_core::state::State,
     settings: &ProfilesSettings,
 ) -> ListView {
@@ -231,7 +240,8 @@ fn build_list_view(
             priority: stored.priority,
             is_default: settings.setup_default_profile(&stored.setup_fingerprint)
                 == Some(stored.name.as_str()),
-            is_active: state.last_profile.as_ref() == Some(&stored.name),
+            is_active: current_setup.as_deref() == Some(stored.setup_fingerprint.as_str())
+                && active_profile == Some(stored.name.as_str()),
         });
     }
 
@@ -369,6 +379,7 @@ mod tests {
             &listed_profiles,
             true,
             Some("setup-a".to_string()),
+            Some("desk"),
             &state,
             &settings,
         );
@@ -378,6 +389,36 @@ mod tests {
         assert_eq!(view.setups[0].setup_name.as_deref(), Some("office"));
         assert_eq!(view.setups[0].profiles.len(), 2);
         assert!(view.setups[0].profiles[0].is_default);
+        assert!(view.setups[0].profiles[0].is_active);
+    }
+
+    #[test]
+    fn build_list_view_scopes_active_profile_to_current_setup() {
+        let state = waytorandr_core::state::State::default();
+        let listed_profiles = vec![
+            ListEntry {
+                setup_fingerprint: "setup-a".to_string(),
+                name: "default".to_string(),
+                priority: 0,
+            },
+            ListEntry {
+                setup_fingerprint: "setup-b".to_string(),
+                name: "default".to_string(),
+                priority: 0,
+            },
+        ];
+
+        let view = build_list_view(
+            &listed_profiles,
+            true,
+            Some("setup-a".to_string()),
+            Some("default"),
+            &state,
+            &ProfilesSettings::default(),
+        );
+
+        assert!(view.setups[0].profiles[0].is_active);
+        assert!(!view.setups[1].profiles[0].is_active);
     }
 
     #[test]

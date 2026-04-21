@@ -45,14 +45,6 @@ pub(crate) fn enforce_topology_policy(
             }
         };
 
-        if !topology.has_enabled_real_outputs() {
-            tracing::warn!(
-                fingerprint = %topology.fingerprint(),
-                "skipping daemon apply because no real outputs are currently enabled"
-            );
-            return Ok(());
-        }
-
         match maybe_apply_matching_profile(backend, store, state_store, &topology)? {
             DaemonOutcome::Applied | DaemonOutcome::NoMatch => return Ok(()),
             DaemonOutcome::TopologyChanged => {
@@ -141,6 +133,17 @@ fn maybe_apply_matching_profile(
         );
     }
 
+    if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
+        tracing::info!(profile = %matched.profile.name, "selected matching profile for current topology");
+        return apply_profile(
+            backend,
+            state_store,
+            &matched.profile,
+            topology,
+            Some(&matched.profile.name),
+        );
+    }
+
     if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
         if topology_has_enabled_real_output(remembered) {
             tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
@@ -151,17 +154,6 @@ fn maybe_apply_matching_profile(
         tracing::warn!(
             fingerprint = %setup_fingerprint,
             "skipping remembered layout because it would leave all real outputs disabled"
-        );
-    }
-
-    if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
-        tracing::info!(profile = %matched.profile.name, "selected matching profile for current topology");
-        return apply_profile(
-            backend,
-            state_store,
-            &matched.profile,
-            topology,
-            Some(&matched.profile.name),
         );
     }
 
@@ -486,7 +478,8 @@ mod tests {
     }
 
     struct StubBackend {
-        topology: Topology,
+        enumerated_topology: Topology,
+        applied_topology: Option<Topology>,
         test_success: bool,
         test_failure: Option<ConfigFailureKind>,
         test_message: Option<String>,
@@ -502,7 +495,7 @@ mod tests {
         }
 
         fn enumerate_outputs(&self) -> waytorandr_core::error::CoreResult<Topology> {
-            Ok(self.topology.clone())
+            Ok(self.enumerated_topology.clone())
         }
 
         fn watch_outputs(&self) -> waytorandr_core::error::CoreResult<Box<dyn OutputWatcher>> {
@@ -531,7 +524,11 @@ mod tests {
             let mut result = ApplyResult::default();
             result.success = true;
             result.message = Some("applied".to_string());
-            result.applied_state = Some(self.topology.clone());
+            result.applied_state = Some(
+                self.applied_topology
+                    .clone()
+                    .unwrap_or_else(|| self.enumerated_topology.clone()),
+            );
             Ok(result)
         }
     }
@@ -595,7 +592,8 @@ mod tests {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: false,
                 test_failure: Some(ConfigFailureKind::TopologyChanged),
                 test_message: None,
@@ -639,7 +637,8 @@ mod tests {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -670,7 +669,8 @@ mod tests {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -693,7 +693,8 @@ mod tests {
     }
 
     #[test]
-    fn enforce_topology_policy_skips_blank_real_output_topologies() -> Result<(), Box<dyn Error>> {
+    fn enforce_topology_policy_leaves_blank_topologies_unapplied_without_defaults(
+    ) -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;
             let store = ProfileStore::bootstrap()?;
@@ -703,7 +704,8 @@ mod tests {
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
-                topology,
+                enumerated_topology: topology,
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -725,7 +727,69 @@ mod tests {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
                 0
             );
-            assert!(state_store.load_state()?.is_none());
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+            assert!(state.daemon_enabled);
+            assert_eq!(state.last_profile, None);
+            assert!(state.remembered_setups.is_empty());
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn enforce_topology_policy_applies_default_after_disconnect_blank_topology(
+    ) -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: topology.clone(),
+                applied_topology: Some(Topology {
+                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+                }),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            enforce_topology_policy(&backend, &store, &state_store)?;
+
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(state.last_profile, None);
+            assert_eq!(
+                state
+                    .remembered_setups
+                    .get(&topology.setup_fingerprint())
+                    .map(Topology::fingerprint),
+                Some("eDP-1:on".to_string())
+            );
             Ok(())
         })?;
         Ok(())
@@ -741,7 +805,8 @@ mod tests {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: false,
                 test_failure: Some(ConfigFailureKind::TopologyChanged),
                 test_message: None,
@@ -775,7 +840,8 @@ mod tests {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -823,7 +889,8 @@ mod tests {
                 outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
             };
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -865,9 +932,10 @@ mod tests {
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
-                topology: Topology {
+                enumerated_topology: Topology {
                     outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
                 },
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -914,7 +982,8 @@ mod tests {
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
-                topology: topology.clone(),
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -970,7 +1039,8 @@ mod tests {
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
-                topology: remembered.clone(),
+                enumerated_topology: remembered.clone(),
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
@@ -1010,6 +1080,48 @@ mod tests {
     }
 
     #[test]
+    fn matching_saved_profile_is_preferred_over_remembered_layout() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", false))]),
+            };
+            let remembered = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
+            };
+            let backend = StubBackend {
+                enumerated_topology: current.clone(),
+                applied_topology: None,
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: Arc::new(Mutex::new(0)),
+                test_calls: Arc::new(Mutex::new(0)),
+            };
+            let profile = profile("desk", "DP-1", false);
+
+            store.save(&profile, &state_store)?;
+
+            let mut state = state_store.load_state()?.unwrap_or_default();
+            state
+                .remembered_setups
+                .insert(current.setup_fingerprint(), remembered);
+            state_store.save_state(&state)?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &current)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(state.last_profile.as_deref(), Some("desk"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
     fn unsafe_remembered_layout_falls_back_to_builtin_default() -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;
@@ -1021,9 +1133,10 @@ mod tests {
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
-                topology: Topology {
+                enumerated_topology: Topology {
                     outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
                 },
+                applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
