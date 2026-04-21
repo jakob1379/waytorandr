@@ -61,8 +61,9 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr save work-dock --setup-name office
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
-./result/bin/waytorandr set external --default
+./result/bin/waytorandr set vertical --save
 ./result/bin/waytorandr set vertical --default
+./result/bin/waytorandr set external --global-default
 ```
 
 Preview a virtual layout without applying it:
@@ -93,6 +94,12 @@ Built-in `set` targets:
 - `mirror` - native mirroring at one shared mode
 - `horizontal`
 - `vertical`
+
+`--default` is setup-local: it only updates the default for the current setup
+fingerprint. With virtual targets, `set --default` saves the resulting layout as
+profile `default` and makes that saved profile the default for the current setup.
+Use `set --global-default` when you want to change the fallback virtual target
+for new setups.
 
 Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
 for the full command reference and examples.
