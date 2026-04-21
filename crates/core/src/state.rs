@@ -233,8 +233,10 @@ daemon_enabled = false
 
     #[test]
     fn record_observed_topology_skips_blank_real_output_layouts() {
-        let mut state = State::default();
-        state.last_profile = Some("desk".to_string());
+        let mut state = State {
+            last_profile: Some("desk".to_string()),
+            ..State::default()
+        };
 
         let mut disabled = OutputState::new("DP-1");
         disabled.enabled = false;
