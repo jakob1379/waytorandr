@@ -251,4 +251,22 @@ daemon_enabled = false
         assert_eq!(state.backend, Some(BackendKind::Wlroots));
         assert!(state.remembered_setups.is_empty());
     }
+
+    #[test]
+    fn record_applied_profile_skips_blank_real_output_layouts() {
+        let mut state = State::default();
+
+        let mut disabled = OutputState::new("DP-1");
+        disabled.enabled = false;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), disabled)]),
+        };
+
+        state.record_applied_profile("desk", Some(BackendKind::Wlroots), &topology);
+
+        assert_eq!(state.last_profile.as_deref(), Some("desk"));
+        assert_eq!(state.last_topology_fingerprint.as_deref(), Some("DP-1:off"));
+        assert!(!state.remembered_setups.contains_key(&topology.setup_fingerprint()));
+        assert_eq!(state.backend, Some(BackendKind::Wlroots));
+    }
 }
