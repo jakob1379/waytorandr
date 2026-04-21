@@ -266,7 +266,9 @@ daemon_enabled = false
 
         assert_eq!(state.last_profile.as_deref(), Some("desk"));
         assert_eq!(state.last_topology_fingerprint.as_deref(), Some("DP-1:off"));
-        assert!(!state.remembered_setups.contains_key(&topology.setup_fingerprint()));
+        assert!(!state
+            .remembered_setups
+            .contains_key(&topology.setup_fingerprint()));
         assert_eq!(state.backend, Some(BackendKind::Wlroots));
     }
 }
