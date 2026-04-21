@@ -44,6 +44,15 @@ pub(crate) fn enforce_topology_policy(
                 topology
             }
         };
+
+        if !topology.has_enabled_real_outputs() {
+            tracing::warn!(
+                fingerprint = %topology.fingerprint(),
+                "skipping daemon apply because no real outputs are currently enabled"
+            );
+            return Ok(());
+        }
+
         match maybe_apply_matching_profile(backend, store, state_store, &topology)? {
             DaemonOutcome::Applied | DaemonOutcome::NoMatch => return Ok(()),
             DaemonOutcome::TopologyChanged => {
@@ -678,6 +687,45 @@ mod tests {
             )?;
 
             assert!(matches!(outcome, TopologyStability::TimedOut(_)));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn enforce_topology_policy_skips_blank_real_output_topologies() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", false))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology,
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            enforce_topology_policy(&backend, &store, &state_store)?;
+
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert!(state_store.load_state()?.is_none());
             Ok(())
         })?;
         Ok(())

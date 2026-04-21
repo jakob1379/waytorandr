@@ -74,16 +74,20 @@ impl State {
     ) {
         self.last_profile = Some(profile_name.to_string());
         self.last_topology_fingerprint = Some(topology.fingerprint());
-        self.remembered_setups
-            .insert(topology.setup_fingerprint(), topology.clone());
+        if topology.has_enabled_real_outputs() {
+            self.remembered_setups
+                .insert(topology.setup_fingerprint(), topology.clone());
+        }
         self.backend = backend;
     }
 
     pub fn record_observed_topology(&mut self, backend: Option<BackendKind>, topology: &Topology) {
         self.last_profile = None;
         self.last_topology_fingerprint = Some(topology.fingerprint());
-        self.remembered_setups
-            .insert(topology.setup_fingerprint(), topology.clone());
+        if topology.has_enabled_real_outputs() {
+            self.remembered_setups
+                .insert(topology.setup_fingerprint(), topology.clone());
+        }
         self.backend = backend;
     }
 
@@ -207,6 +211,8 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::OutputState;
+    use std::collections::HashMap;
 
     #[test]
     fn deserializes_legacy_backend_strings() {
@@ -223,5 +229,46 @@ daemon_enabled = false
 
         assert_eq!(state.backend, Some(BackendKind::Wlroots));
         assert!(state.setup_names.is_empty());
+    }
+
+    #[test]
+    fn record_observed_topology_skips_blank_real_output_layouts() {
+        let mut state = State {
+            last_profile: Some("desk".to_string()),
+            ..State::default()
+        };
+
+        let mut disabled = OutputState::new("DP-1");
+        disabled.enabled = false;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), disabled)]),
+        };
+
+        state.record_observed_topology(Some(BackendKind::Wlroots), &topology);
+
+        assert_eq!(state.last_profile, None);
+        assert_eq!(state.last_topology_fingerprint.as_deref(), Some("DP-1:off"));
+        assert_eq!(state.backend, Some(BackendKind::Wlroots));
+        assert!(state.remembered_setups.is_empty());
+    }
+
+    #[test]
+    fn record_applied_profile_skips_blank_real_output_layouts() {
+        let mut state = State::default();
+
+        let mut disabled = OutputState::new("DP-1");
+        disabled.enabled = false;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), disabled)]),
+        };
+
+        state.record_applied_profile("desk", Some(BackendKind::Wlroots), &topology);
+
+        assert_eq!(state.last_profile.as_deref(), Some("desk"));
+        assert_eq!(state.last_topology_fingerprint.as_deref(), Some("DP-1:off"));
+        assert!(!state
+            .remembered_setups
+            .contains_key(&topology.setup_fingerprint()));
+        assert_eq!(state.backend, Some(BackendKind::Wlroots));
     }
 }
