@@ -470,6 +470,7 @@ fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn 
         let profiles = vec![profile("desk", "DP-1"), profile("fallback", "HDMI-A-1")];
         let settings = ProfilesSettings {
             setup_defaults: HashMap::new(),
+            builtin_output: None,
             new_setup_default: Some(DefaultTarget::Profile {
                 name: "fallback".to_string(),
             }),
@@ -524,6 +525,7 @@ fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>>
         };
         let settings = ProfilesSettings {
             setup_defaults: HashMap::new(),
+            builtin_output: None,
             new_setup_default: Some(DefaultTarget::Virtual {
                 preset: VirtualPreset::Vertical,
             }),
@@ -535,6 +537,78 @@ fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>>
         assert!(matches!(
             selected,
             workflow::SelectedTarget::Virtual(VirtualPreset::Vertical)
+        ));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn runtime_returns_builtin_default_when_internal_output_exists() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            builtin_output: None,
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            }),
+        };
+
+        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
+            .ok_or_else(|| std::io::Error::other("builtin default should be selected"))?;
+
+        assert!(matches!(
+            selected,
+            workflow::SelectedTarget::Virtual(VirtualPreset::Builtin)
+        ));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn runtime_skips_builtin_default_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            builtin_output: None,
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            }),
+        };
+
+        assert!(workflow::select_target_for_topology(&topology, &[], &settings).is_none());
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn runtime_uses_builtin_override_when_detection_would_not() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let settings = ProfilesSettings {
+            setup_defaults: HashMap::new(),
+            builtin_output: Some(OutputIdentity::new("DP-1")),
+            new_setup_default: Some(DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            }),
+        };
+
+        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
+            .ok_or_else(|| std::io::Error::other("builtin override should be selected"))?;
+
+        assert!(matches!(
+            selected,
+            workflow::SelectedTarget::Virtual(VirtualPreset::Builtin)
         ));
         Ok(())
     })?;

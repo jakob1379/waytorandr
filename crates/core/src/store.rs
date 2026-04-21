@@ -35,6 +35,8 @@ pub struct ProfilesSettings {
     #[serde(default)]
     pub setup_defaults: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_output: Option<OutputIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_setup_default: Option<DefaultTarget>,
 }
 

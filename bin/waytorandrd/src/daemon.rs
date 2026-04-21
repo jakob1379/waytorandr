@@ -22,12 +22,6 @@ enum DaemonOutcome {
     TopologyChanged,
 }
 
-enum ApplyOutcome {
-    Applied,
-    Rejected,
-    TopologyChanged,
-}
-
 enum TopologyStability {
     Stable(Topology),
     TimedOut(Topology),
@@ -138,8 +132,7 @@ fn maybe_apply_matching_profile(
             .find(|profile| profile.name == default_name)
         {
             tracing::info!(profile = %profile.name, "selected explicit default profile for current topology");
-            return apply_profile(backend, state_store, profile, topology, Some(&profile.name))
-                .and_then(strict_daemon_outcome_from_apply);
+            return apply_profile(backend, state_store, profile, topology, Some(&profile.name));
         }
         tracing::warn!(
             profile = %default_name,
@@ -149,10 +142,16 @@ fn maybe_apply_matching_profile(
     }
 
     if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
-        tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
-        let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
-        return apply_profile(backend, state_store, &remembered_profile, topology, None)
-            .and_then(strict_daemon_outcome_from_apply);
+        if topology_has_enabled_real_output(remembered) {
+            tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
+            let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
+            return apply_profile(backend, state_store, &remembered_profile, topology, None);
+        }
+
+        tracing::warn!(
+            fingerprint = %setup_fingerprint,
+            "skipping remembered layout because it would leave all real outputs disabled"
+        );
     }
 
     if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
@@ -163,14 +162,16 @@ fn maybe_apply_matching_profile(
             &matched.profile,
             topology,
             Some(&matched.profile.name),
-        )
-        .and_then(strict_daemon_outcome_from_apply);
+        );
     }
 
     if let Some(default_target) = settings.new_setup_default.as_ref() {
-        if let Some(target) =
-            workflow::resolve_default_target_for_topology(topology, &all_profiles, default_target)
-        {
+        if let Some(target) = workflow::resolve_default_target_for_topology(
+            topology,
+            &all_profiles,
+            settings.builtin_output.as_ref(),
+            default_target,
+        ) {
             tracing::info!(fingerprint = %setup_fingerprint, "using configured default for new setups");
             let outcome = match target {
                 workflow::SelectedTarget::Profile(profile) => apply_profile(
@@ -180,18 +181,22 @@ fn maybe_apply_matching_profile(
                     topology,
                     Some(&profile.name),
                 ),
-                workflow::SelectedTarget::Virtual(preset) => {
-                    apply_preset(backend, state_store, preset, topology)
-                }
+                workflow::SelectedTarget::Virtual(preset) => apply_preset(
+                    backend,
+                    state_store,
+                    preset,
+                    topology,
+                    settings.builtin_output.as_ref(),
+                ),
             };
 
             return match outcome {
-                Ok(ApplyOutcome::Applied) => Ok(DaemonOutcome::Applied),
-                Ok(ApplyOutcome::TopologyChanged) => Ok(DaemonOutcome::TopologyChanged),
-                Ok(ApplyOutcome::Rejected) => {
+                Ok(result) => Ok(result),
+                Err(err) => {
                     tracing::warn!(
                         fingerprint = %setup_fingerprint,
-                        "configured default for new setups rejected by backend; remembering current topology"
+                        error = %err,
+                        "configured default for new setups could not be applied; remembering current topology"
                     );
                     remember_current_topology(
                         state_store,
@@ -200,7 +205,6 @@ fn maybe_apply_matching_profile(
                     )?;
                     Ok(DaemonOutcome::NoMatch)
                 }
-                Err(err) => Err(err),
             };
         }
 
@@ -224,32 +228,29 @@ fn apply_preset(
     state_store: &StateStore,
     preset: VirtualPreset,
     topology: &Topology,
-) -> Result<ApplyOutcome> {
+    builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
+) -> Result<DaemonOutcome> {
     let backend_kind = backend.capabilities().backend;
     if let Some(message) = backend
         .capabilities()
         .virtual_preset_unavailable_message(preset)
     {
-        tracing::warn!(
-            preset = %preset,
-            message = %message,
-            "virtual preset is unavailable on this backend"
-        );
-        return Ok(ApplyOutcome::Rejected);
+        bail!(message);
     }
 
-    let plan = Planner::plan_from_preset(preset, topology, None).map_err(anyhow::Error::from)?;
-    if plan_matches_topology_including_virtuals(&plan, topology) {
+    let plan = Planner::plan_from_preset(preset, topology, builtin_output, None)
+        .map_err(anyhow::Error::from)?;
+    if plan_matches_topology(&plan, topology) {
         persist_runtime_state(state_store, None, backend_kind, topology)?;
         tracing::info!(preset = %preset, "virtual preset already matches current topology");
-        return Ok(ApplyOutcome::Applied);
+        return Ok(DaemonOutcome::Applied);
     }
 
-    let execution = workflow::apply_preset_workflow(backend, state_store, preset)
+    let execution = workflow::apply_preset_workflow(backend, state_store, preset, builtin_output)
         .map_err(anyhow::Error::from)?;
 
     if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
-        return Ok(ApplyOutcome::TopologyChanged);
+        return Ok(DaemonOutcome::TopologyChanged);
     }
 
     match execution {
@@ -258,16 +259,25 @@ fn apply_preset(
         } => {
             persist_runtime_state(state_store, None, backend_kind, &applied_topology)?;
             tracing::info!(preset = %preset, "applied virtual preset");
-            Ok(ApplyOutcome::Applied)
+            Ok(DaemonOutcome::Applied)
         }
-        workflow::ApplyExecution::ApplyFailed { .. } => bail!(
-            "{}",
-            execution
-                .failure_message()
-                .unwrap_or("backend failed to apply configuration")
-        ),
+        workflow::ApplyExecution::ApplyFailed { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend failed to apply configuration")
+            );
+        }
         workflow::ApplyExecution::Unsupported { .. }
-        | workflow::ApplyExecution::Rejected { .. } => Ok(ApplyOutcome::Rejected),
+        | workflow::ApplyExecution::Rejected { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend rejected configuration")
+            );
+        }
     }
 }
 
@@ -277,7 +287,7 @@ fn apply_profile(
     profile: &Profile,
     topology: &Topology,
     recorded_profile_name: Option<&str>,
-) -> Result<ApplyOutcome> {
+) -> Result<DaemonOutcome> {
     let backend_kind = backend.capabilities().backend;
     let plan =
         workflow::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
@@ -288,14 +298,14 @@ fn apply_profile(
         } else {
             tracing::info!("remembered layout already matches current topology");
         }
-        return Ok(ApplyOutcome::Applied);
+        return Ok(DaemonOutcome::Applied);
     }
 
     let execution = workflow::apply_profile_workflow(backend, state_store, profile)
         .map_err(anyhow::Error::from)?;
 
     if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
-        return Ok(ApplyOutcome::TopologyChanged);
+        return Ok(DaemonOutcome::TopologyChanged);
     }
 
     match execution {
@@ -314,16 +324,25 @@ fn apply_profile(
             } else {
                 tracing::info!("applied remembered layout");
             }
-            Ok(ApplyOutcome::Applied)
+            Ok(DaemonOutcome::Applied)
         }
-        workflow::ApplyExecution::ApplyFailed { .. } => bail!(
-            "{}",
-            execution
-                .failure_message()
-                .unwrap_or("backend failed to apply configuration")
-        ),
+        workflow::ApplyExecution::ApplyFailed { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend failed to apply configuration")
+            );
+        }
         workflow::ApplyExecution::Unsupported { .. }
-        | workflow::ApplyExecution::Rejected { .. } => Ok(ApplyOutcome::Rejected),
+        | workflow::ApplyExecution::Rejected { .. } => {
+            bail!(
+                "{}",
+                execution
+                    .failure_message()
+                    .unwrap_or("backend rejected configuration")
+            );
+        }
     }
 }
 
@@ -353,15 +372,23 @@ fn remember_current_topology(
     backend: BackendKind,
     topology: &Topology,
 ) -> Result<()> {
+    if !topology_has_enabled_real_output(topology) {
+        tracing::warn!(
+            fingerprint = %topology.setup_fingerprint(),
+            "skipping remembered layout update because current topology has no enabled real outputs"
+        );
+        workflow::record_daemon_started_in_store(state_store, backend)?;
+        return Ok(());
+    }
+
     persist_runtime_state(state_store, None, backend, topology)
 }
 
-fn strict_daemon_outcome_from_apply(outcome: ApplyOutcome) -> Result<DaemonOutcome> {
-    match outcome {
-        ApplyOutcome::Applied => Ok(DaemonOutcome::Applied),
-        ApplyOutcome::TopologyChanged => Ok(DaemonOutcome::TopologyChanged),
-        ApplyOutcome::Rejected => bail!("backend rejected configuration"),
-    }
+fn topology_has_enabled_real_output(topology: &Topology) -> bool {
+    topology
+        .outputs
+        .values()
+        .any(|output| output.enabled && !output.identity.is_ignored && !output.identity.is_virtual)
 }
 
 fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
@@ -369,25 +396,6 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
         .outputs
         .iter()
         .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
-        .all(|(name, current)| match plan.outputs.get(name) {
-            Some(desired) => desired.same_layout_as(current),
-            None => !current.enabled,
-        })
-}
-
-fn plan_matches_topology_including_virtuals(plan: &LayoutPlan, topology: &Topology) -> bool {
-    // Check that all planned outputs exist in the topology
-    for name in plan.outputs.keys() {
-        if !topology.outputs.contains_key(name) {
-            return false;
-        }
-    }
-
-    // Check that all topology outputs (including virtual ones) match the plan
-    topology
-        .outputs
-        .iter()
-        .filter(|(_, output)| !output.identity.is_ignored)
         .all(|(name, current)| match plan.outputs.get(name) {
             Some(desired) => desired.same_layout_as(current),
             None => !current.enabled,
@@ -604,7 +612,7 @@ mod tests {
                 Some(&profile.name),
             )?;
 
-            assert!(matches!(outcome, ApplyOutcome::TopologyChanged));
+            assert!(matches!(outcome, DaemonOutcome::TopologyChanged));
             assert_eq!(
                 *test_calls
                     .lock()
@@ -787,7 +795,7 @@ mod tests {
                 .load_state()?
                 .ok_or_else(|| std::io::Error::other("state should exist"))?;
 
-            assert!(matches!(outcome, ApplyOutcome::Applied));
+            assert!(matches!(outcome, DaemonOutcome::Applied));
             assert_eq!(
                 *test_calls
                     .lock()
@@ -801,60 +809,6 @@ mod tests {
                 0
             );
             assert_eq!(state.last_profile.as_deref(), Some("desk"));
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn remembers_current_topology_when_virtual_default_unavailable() -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
-            };
-            let apply_calls = Arc::new(Mutex::new(0));
-            let test_calls = Arc::new(Mutex::new(0));
-            let backend = StubBackend {
-                topology: topology.clone(),
-                test_success: true,
-                test_failure: None,
-                test_message: None,
-                apply_calls: apply_calls.clone(),
-                test_calls: test_calls.clone(),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Mirror,
-            })?;
-
-            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let state = state_store
-                .load_state()?
-                .ok_or_else(|| std::io::Error::other("state should exist"))?;
-
-            assert!(matches!(outcome, DaemonOutcome::NoMatch));
-            assert_eq!(
-                *test_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                0
-            );
-            assert_eq!(
-                *apply_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                0
-            );
-            assert_eq!(state.last_profile, None);
-            assert_eq!(
-                state
-                    .remembered_setups
-                    .get(&topology.setup_fingerprint())
-                    .map(Topology::fingerprint),
-                Some(topology.fingerprint())
-            );
             Ok(())
         })?;
         Ok(())
@@ -901,15 +855,117 @@ mod tests {
     }
 
     #[test]
+    fn builtin_default_applies_on_internal_only_setups() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: Topology {
+                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+                },
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(state.last_profile, None);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_default_is_skipped_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: topology.clone(),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                state
+                    .remembered_setups
+                    .get(&topology.setup_fingerprint())
+                    .map(Topology::fingerprint),
+                Some(topology.fingerprint())
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
     fn remembered_setup_is_applied_without_setting_last_profile() -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;
             let store = ProfileStore::bootstrap()?;
             let current = Topology {
-                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", false))]),
             };
             let remembered = Topology {
-                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", false))]),
+                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
             let apply_calls = Arc::new(Mutex::new(0));
             let test_calls = Arc::new(Mutex::new(0));
@@ -948,6 +1004,68 @@ mod tests {
                 1
             );
             assert_eq!(state.last_profile, None);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn unsafe_remembered_layout_falls_back_to_builtin_default() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let remembered = current.clone();
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                topology: Topology {
+                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+                },
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let mut state = state_store.load_state()?.unwrap_or_default();
+            state
+                .remembered_setups
+                .insert(current.setup_fingerprint(), remembered);
+            state_store.save_state(&state)?;
+
+            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &current)?;
+            let state = state_store
+                .load_state()?
+                .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                state
+                    .remembered_setups
+                    .get(&current.setup_fingerprint())
+                    .map(Topology::fingerprint),
+                Some("eDP-1:on".to_string())
+            );
             Ok(())
         })?;
         Ok(())

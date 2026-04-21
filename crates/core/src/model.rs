@@ -54,6 +54,7 @@ impl std::fmt::Display for BackendKind {
 pub enum VirtualPreset {
     Off,
     External,
+    Builtin,
     Common,
     Largest,
     Mirror,
@@ -69,6 +70,7 @@ impl VirtualPreset {
         match self {
             Self::Off => "off",
             Self::External => "external",
+            Self::Builtin => "builtin",
             Self::Common => "common",
             Self::Largest => "largest",
             Self::Mirror => "mirror",
@@ -225,7 +227,7 @@ impl OutputState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct OutputIdentity {
     pub edid_hash: Option<String>,

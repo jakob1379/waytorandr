@@ -37,7 +37,7 @@ pub enum Commands {
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
 
-When [target] is omitted, `set` first applies the configured default for the current hardware setup.
+When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
 If no setup default is configured, it applies the best matching saved profile.
 If there is no match, it applies the configured default for new setups.
 
@@ -46,6 +46,7 @@ Examples:
   waytorandr set docked
   waytorandr set docked --default
   waytorandr set external --default
+  waytorandr set vertical --default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run
   waytorandr set mirror --dry-run
@@ -132,8 +133,8 @@ pub enum ServiceCommands {
 #[derive(Args)]
 pub struct SetArgs {
     #[arg(
-        value_name = "target",
-        help = "Saved target or virtual preset; omit to apply an auto-selected target or use a default/virtual preset",
+        value_name = "profile",
+        help = "Saved profile or virtual configuration; omit to set setup default, best match, or new-setup default",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,

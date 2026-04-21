@@ -62,6 +62,7 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
 ./result/bin/waytorandr set external --default
+./result/bin/waytorandr set vertical --default
 ```
 
 Preview a virtual layout without applying it:
@@ -85,7 +86,7 @@ waytorandr service   Manage the waytorandrd user service
 
 Built-in `set` targets:
 
-- `off`
+- `off` - disable external outputs and keep built-in panels on when present
 - `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
@@ -101,19 +102,40 @@ for the full command reference and examples.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
-> `waytorandr set --json` and `waytorandr save --json` include optional `default_scope` when `default_set` is true. The value is `setup` for setup-specific defaults and `new_setups` for fallback targets for unseen hardware.
-> `waytorandr status --json` includes optional `setup_name` fields when a setup alias is configured and optional `new_setup_default` when a fallback target is configured.
+> `waytorandr status --json` includes optional `setup_name`, `builtin_output`, and `new_setup_default` fields when they are configured.
 
 ## Daemon
 
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
-unchanged set of connected displays. When the physical setup changes, it
-first reapplies the configured default profile for the current fingerprint. If
-that does not resolve the setup, it retries the remembered topology for that
-setup, then the best matching saved profile, then the configured default target
-for new setups (`new_setup_default`), and finally falls back to remembering the
-current topology.
+unchanged set of connected displays. When the physical setup changes, it first
+tries the configured default profile for the current fingerprint, then a
+remembered layout for that setup, then the best matching saved profile, then
+the configured default target for new setups, and finally falls back to
+remembering the current topology. Remembered layouts that would leave all real
+outputs disabled are skipped instead of being reused.
+
+If you want the fallback target for new setups to mean "internal panel only",
+configure `builtin` in `waytorandr.json`. This is a config-only fallback target;
+it is not advertised as an explicit `waytorandr set` target.
+
+```json
+{
+  "settings": {
+    "builtin_output": {
+      "connector": "eDP-1"
+    },
+    "new_setup_default": {
+      "kind": "virtual",
+      "preset": "builtin"
+    }
+  }
+}
+```
+
+`builtin_output` is optional. When omitted, waytorandr falls back to its built-in
+display heuristics. When set, it overrides those heuristics and treats the matching
+output identity as the built-in display for `builtin` fallback decisions.
 
 To avoid reinforcing transient compositor glitches during output churn, the
 daemon ignores intermediate topologies that leave every real output disabled
@@ -204,8 +226,8 @@ Reference:
 Use the Nix dev shell for local work:
 
 ```bash
-nix develop
-nix fmt
+nix develop -c prek install
+nix develop -c prek run --all-files
 nix develop -c just check
 ```
 

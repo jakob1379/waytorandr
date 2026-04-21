@@ -144,7 +144,7 @@ pub(super) fn cmd_set(
 
     let name = name.expect("checked above");
     if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-        let outcome = execute_virtual_action(preset, dry_run, make_default)?;
+        let outcome = execute_virtual_action(preset, dry_run, make_default, None)?;
         return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
     }
 
@@ -172,7 +172,7 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
             execute_profile_action(&profile, dry_run, false)?
         }
         workflow::SelectedTarget::Virtual(preset) => {
-            execute_virtual_action(preset, dry_run, false)?
+            execute_virtual_action(preset, dry_run, false, settings.builtin_output.as_ref())?
         }
     };
 
