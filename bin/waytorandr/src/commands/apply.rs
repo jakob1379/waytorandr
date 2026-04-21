@@ -45,6 +45,8 @@ pub(super) struct ActionOutcome {
     validation: Option<TestResult>,
     default_set: bool,
     default_scope: Option<DefaultScope>,
+    default_target: Option<String>,
+    saved_profile: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +68,28 @@ impl DefaultScope {
             Self::Setup => format!("'{target}' as the default profile for this setup"),
             Self::NewSetups => format!("'{target}' as the default for new setups"),
         }
+    }
+}
+
+impl ActionOutcome {
+    pub(super) fn record_saved_profile(&mut self, profile_name: impl Into<String>) {
+        self.saved_profile = Some(profile_name.into());
+    }
+
+    fn default_description_target(&self) -> &str {
+        self.default_target
+            .as_deref()
+            .unwrap_or(self.target.as_str())
+    }
+
+    pub(super) fn set_default_assignment(
+        &mut self,
+        target: impl Into<String>,
+        scope: DefaultScope,
+    ) {
+        self.default_set = true;
+        self.default_scope = Some(scope);
+        self.default_target = Some(target.into());
     }
 }
 
@@ -94,6 +118,10 @@ struct JsonActionResponse {
     default_set: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     default_scope: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saved_profile: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -155,15 +183,20 @@ fn build_dry_run_outcome(
     execution: workflow::ValidationExecution,
 ) -> Result<ActionOutcome> {
     match execution {
-        workflow::ValidationExecution::Accepted { plan, validation } => Ok(ActionOutcome {
-            target,
-            target_type,
-            dry_run: true,
-            plan,
-            validation: Some(validation),
-            default_set,
-            default_scope,
-        }),
+        workflow::ValidationExecution::Accepted { plan, validation } => {
+            let default_target = default_set.then(|| target.clone());
+            Ok(ActionOutcome {
+                target,
+                target_type,
+                dry_run: true,
+                plan,
+                validation: Some(validation),
+                default_set,
+                default_scope,
+                default_target,
+                saved_profile: None,
+            })
+        }
         other => bail!(
             "{}",
             other
@@ -181,15 +214,20 @@ fn build_apply_outcome(
     execution: workflow::ApplyExecution,
 ) -> Result<ActionOutcome> {
     match execution {
-        workflow::ApplyExecution::Applied { plan, .. } => Ok(ActionOutcome {
-            target,
-            target_type,
-            dry_run: false,
-            plan,
-            validation: None,
-            default_set,
-            default_scope,
-        }),
+        workflow::ApplyExecution::Applied { plan, .. } => {
+            let default_target = default_set.then(|| target.clone());
+            Ok(ActionOutcome {
+                target,
+                target_type,
+                dry_run: false,
+                plan,
+                validation: None,
+                default_set,
+                default_scope,
+                default_target,
+                saved_profile: None,
+            })
+        }
         workflow::ApplyExecution::ApplyFailed { .. } => bail!(
             "{}",
             execution
@@ -331,6 +369,8 @@ pub(super) fn emit_action_outcome(
             validation: outcome.validation.as_ref().map(json_validation),
             default_set: outcome.default_set,
             default_scope: outcome.default_scope.map(DefaultScope::as_json),
+            default_target: outcome.default_target.clone(),
+            saved_profile: outcome.saved_profile.clone(),
         })?;
         if let Some(message) = validation_failure {
             bail!(message);
@@ -352,6 +392,13 @@ pub(super) fn emit_action_outcome(
         if let Some(test) = &outcome.validation {
             print_validation_result(&Ok(test.clone()));
         }
+        if let Some(saved_profile) = &outcome.saved_profile {
+            println!(
+                "{} {}",
+                warning("Would also save"),
+                value(format!("profile '{saved_profile}'"))
+            );
+        }
         if outcome.default_set {
             println!(
                 "{} {}",
@@ -360,7 +407,7 @@ pub(super) fn emit_action_outcome(
                     outcome
                         .default_scope
                         .expect("default scope should be set when default_set is true")
-                        .description(&outcome.target)
+                        .description(outcome.default_description_target())
                 )
             );
         }
@@ -380,6 +427,13 @@ pub(super) fn emit_action_outcome(
         ))
     );
     print_plan_summary(&outcome.plan);
+    if let Some(saved_profile) = &outcome.saved_profile {
+        println!(
+            "{} {}",
+            success("Saved"),
+            value(format!("profile '{saved_profile}'"))
+        );
+    }
     if outcome.default_set {
         println!(
             "{} {}",
@@ -388,7 +442,7 @@ pub(super) fn emit_action_outcome(
                 outcome
                     .default_scope
                     .expect("default scope should be set when default_set is true")
-                    .description(&outcome.target)
+                    .description(outcome.default_description_target())
             )
         );
     }
