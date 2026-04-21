@@ -160,6 +160,13 @@ impl Topology {
         parts.sort();
         parts.join(";")
     }
+
+    #[must_use]
+    pub fn has_enabled_real_outputs(&self) -> bool {
+        self.outputs.values().any(|output| {
+            output.enabled && !output.identity.is_ignored && !output.identity.is_virtual
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

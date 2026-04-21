@@ -115,6 +115,10 @@ setup, then the best matching saved profile, then the configured default target
 for new setups (`new_setup_default`), and finally falls back to remembering the
 current topology.
 
+To avoid reinforcing transient compositor glitches during output churn, the
+daemon ignores intermediate topologies that leave every real output disabled
+and does not remember those blank layouts as setup state.
+
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup
 fingerprint internally; the alias is only for display and organization.
