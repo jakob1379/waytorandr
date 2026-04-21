@@ -1090,14 +1090,16 @@ mod tests {
             let remembered = Topology {
                 outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
             };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
             let backend = StubBackend {
                 enumerated_topology: current.clone(),
                 applied_topology: None,
                 test_success: true,
                 test_failure: None,
                 test_message: None,
-                apply_calls: Arc::new(Mutex::new(0)),
-                test_calls: Arc::new(Mutex::new(0)),
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
             };
             let profile = profile("desk", "DP-1", false);
 
@@ -1115,6 +1117,18 @@ mod tests {
                 .ok_or_else(|| std::io::Error::other("state should exist"))?;
 
             assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
             assert_eq!(state.last_profile.as_deref(), Some("desk"));
             Ok(())
         })?;
