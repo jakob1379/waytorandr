@@ -141,6 +141,20 @@ impl WlrootsBackend {
             inner: Mutex::new(client),
         })
     }
+
+    fn enumerate_live_topology(&self) -> CoreResult<Topology> {
+        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+            source: anyhow!("backend lock poisoned"),
+        })?;
+        inner
+            .sync()
+            .map_err(|source| CoreError::Backend { source })?;
+        Ok(inner.export_topology())
+    }
+
+    fn snapshot_topology() -> CoreResult<Topology> {
+        Self::connect()?.enumerate_live_topology()
+    }
 }
 
 impl Backend for WlrootsBackend {
@@ -151,21 +165,17 @@ impl Backend for WlrootsBackend {
     }
 
     fn enumerate_outputs(&self) -> CoreResult<Topology> {
-        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
-            source: anyhow!("backend lock poisoned"),
-        })?;
-        inner
-            .sync()
-            .map_err(|source| CoreError::Backend { source })?;
-        Ok(inner.export_topology())
+        // Use a fresh output-manager snapshot for reads so stale head objects do
+        // not leak into later polls after disconnect/reconfigure churn.
+        Self::snapshot_topology()
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.setup_fingerprint();
+        let initial = self.enumerate_outputs()?;
         Ok(Box::new(PollingOutputWatcher::new(
             WlrootsBackend::connect()?,
             POLL_INTERVAL,
-            Some(initial),
+            Some(initial.setup_fingerprint()),
         )))
     }
 
@@ -195,16 +205,15 @@ impl Backend for WlrootsBackend {
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
-        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
-            source: anyhow!("backend lock poisoned"),
-        })?;
-        let status = inner
-            .submit_with_retry(plan, false, 3)
-            .map_err(|source| CoreError::Backend { source })?;
-        inner
-            .sync()
-            .map_err(|source| CoreError::Backend { source })?;
-        let applied_state = inner.export_topology();
+        let status = {
+            let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+                source: anyhow!("backend lock poisoned"),
+            })?;
+            inner
+                .submit_with_retry(plan, false, 3)
+                .map_err(|source| CoreError::Backend { source })?
+        };
+        let applied_state = Self::snapshot_topology()?;
         let mut result = ApplyResult::default();
         result.success = matches!(status, ConfigStatus::Succeeded);
         result.failure = config_failure(status);

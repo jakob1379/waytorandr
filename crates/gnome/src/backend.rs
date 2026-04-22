@@ -231,11 +231,11 @@ impl Backend for GnomeBackend {
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?.setup_fingerprint();
+        let initial = self.enumerate_outputs()?;
         Ok(Box::new(PollingOutputWatcher::new(
             self.clone(),
             POLL_INTERVAL,
-            Some(initial),
+            Some(initial.setup_fingerprint()),
         )))
     }
 

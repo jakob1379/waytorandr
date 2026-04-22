@@ -630,4 +630,33 @@ mod tests {
 
         assert_eq!(changed, Some(changed_topology));
     }
+
+    #[test]
+    fn polling_output_watcher_reports_blank_setup_changes() {
+        let mut initial = Topology::default();
+        initial.outputs.insert("eDP-1".to_string(), {
+            let mut output = OutputState::new("eDP-1");
+            output.enabled = true;
+            output
+        });
+        initial.outputs.insert("DP-1".to_string(), {
+            let mut output = OutputState::new("DP-1");
+            output.enabled = true;
+            output
+        });
+
+        let blank = topology_with_output(false, 0);
+        let recovered = topology_with_output(true, 0);
+        let backend = SequenceBackend {
+            states: Arc::new(Mutex::new(vec![blank.clone(), recovered.clone()])),
+        };
+        let mut watcher = PollingOutputWatcher::new(
+            backend,
+            Duration::from_millis(0),
+            Some(initial.setup_fingerprint()),
+        );
+
+        assert_eq!(watcher.poll_changed().unwrap(), Some(blank));
+        assert!(watcher.poll_changed().unwrap().is_none());
+    }
 }

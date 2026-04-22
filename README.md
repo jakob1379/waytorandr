@@ -120,7 +120,10 @@ tries the configured default profile for the current fingerprint, then the best
 matching saved profile, then a remembered layout for that setup, then
 the configured default target for new setups, and finally falls back to
 remembering the current topology. Remembered layouts that would leave all real
-outputs disabled are skipped instead of being reused.
+outputs disabled are skipped instead of being reused. Transient all-disabled
+topologies are still evaluated so a matching profile or configured default can
+re-enable the right outputs, but blank layouts are not remembered as setup
+state.
 
 If you want the fallback target for new setups to mean "internal panel only",
 configure `builtin` in `waytorandr.json`. This is a config-only fallback target;
