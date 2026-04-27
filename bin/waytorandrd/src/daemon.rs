@@ -145,7 +145,7 @@ fn maybe_apply_matching_profile(
     }
 
     if let Some(remembered) = state.remembered_topology_for_setup(&setup_fingerprint) {
-        if topology_has_enabled_real_output(remembered) {
+        if remembered.has_enabled_real_outputs() {
             tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
             let remembered_profile = workflow::profile_from_topology("__remembered__", remembered);
             return apply_profile(backend, state_store, &remembered_profile, topology, None);
@@ -364,7 +364,7 @@ fn remember_current_topology(
     backend: BackendKind,
     topology: &Topology,
 ) -> Result<()> {
-    if !topology_has_enabled_real_output(topology) {
+    if !topology.has_enabled_real_outputs() {
         tracing::warn!(
             fingerprint = %topology.setup_fingerprint(),
             "skipping remembered layout update because current topology has no enabled real outputs"
@@ -374,13 +374,6 @@ fn remember_current_topology(
     }
 
     persist_runtime_state(state_store, None, backend, topology)
-}
-
-fn topology_has_enabled_real_output(topology: &Topology) -> bool {
-    topology
-        .outputs
-        .values()
-        .any(|output| output.enabled && !output.identity.is_ignored && !output.identity.is_virtual)
 }
 
 fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
