@@ -206,28 +206,10 @@ pub fn format_mode(mode: Option<Mode>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use waytorandr_core::store::{DefaultTarget, ProfilesSettings};
 
     #[test]
     fn format_mode_handles_absent_mode() {
         assert_eq!(format_mode(None), "no mode");
-    }
-
-    #[test]
-    fn setup_default_is_stored_separately_from_new_setup_default() {
-        let mut settings = ProfilesSettings::default();
-        settings.set_setup_default_profile("dock", "desk");
-        settings.new_setup_default = Some(DefaultTarget::Profile {
-            name: "fallback".to_string(),
-        });
-
-        assert_eq!(settings.setup_default_profile("dock"), Some("desk"));
-        assert_eq!(
-            settings.new_setup_default,
-            Some(DefaultTarget::Profile {
-                name: "fallback".to_string()
-            })
-        );
     }
 
     #[test]

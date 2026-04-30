@@ -358,39 +358,13 @@ fn exercise_virtual_workflows(
         assert!(mirror.stderr.contains("wl-mirror"));
     }
 
-    let set_global_default = env.run_json(["set", "external", "--global-default", "--json"])?;
-    assert_eq!(set_global_default["target"], "external");
-    assert_eq!(set_global_default["default_set"], true);
-    assert_eq!(set_global_default["default_scope"], "new_setups");
-    assert_eq!(set_global_default["default_target"], "external");
+    let set_external = env.run_json(["set", "external", "--json"])?;
+    assert_eq!(set_external["target"], "external");
+    assert_eq!(set_external["target_type"], "virtual");
 
     let topology = env.backend_topology()?;
     assert!(topology.outputs["DP-1"].enabled);
     assert!(!topology.outputs["eDP-1"].enabled);
-
-    let status = env.run_json(["status", "--json"])?;
-    assert_eq!(status["new_setup_default"]["kind"], "virtual");
-    assert_eq!(status["new_setup_default"]["preset"], "external");
-
-    env.write_backend_topology(&alternate_topology())?;
-    let auto_set = env.run_json(["set", "auto", "--json"])?;
-    assert_eq!(auto_set["selection"], "auto");
-    assert_eq!(auto_set["target"], "external");
-    assert_eq!(auto_set["target_type"], "virtual");
-
-    env.write_profiles_settings(serde_json::json!({
-        "new_setup_default": { "kind": "virtual", "preset": "builtin" }
-    }))?;
-
-    let status = env.run_json(["status", "--json"])?;
-    assert_eq!(status["new_setup_default"]["kind"], "virtual");
-    assert_eq!(status["new_setup_default"]["preset"], "builtin");
-    assert!(status["builtin_output"].is_null());
-
-    let auto_builtin = env.run_json(["set", "auto", "--json"])?;
-    assert_eq!(auto_builtin["selection"], "auto");
-    assert_eq!(auto_builtin["target"], "builtin");
-    assert_eq!(auto_builtin["target_type"], "virtual");
 
     let top_level_help = env.run_text(["--help"])?;
     let set_help = env.run_text(["set", "--help"])?;
@@ -400,26 +374,6 @@ fn exercise_virtual_workflows(
     assert!(!set_help.contains("builtin"));
     assert!(!save_help.contains("builtin"));
     assert!(!service_run_help.contains("builtin"));
-
-    env.write_backend_topology(&external_only_topology())?;
-    let skipped_builtin = env.run_json_failure(["set", "auto", "--json"])?;
-    assert!(skipped_builtin
-        .stderr
-        .contains("no matching profile and no default target configured"));
-
-    env.write_profiles_settings(serde_json::json!({
-        "builtin_output": { "connector": "DP-1" },
-        "new_setup_default": { "kind": "virtual", "preset": "builtin" }
-    }))?;
-
-    let status = env.run_json(["status", "--json"])?;
-    assert_eq!(status["builtin_output"]["connector"], "DP-1");
-    let configured_builtin = env.run_json(["set", "auto", "--json"])?;
-    assert_eq!(configured_builtin["selection"], "auto");
-    assert_eq!(configured_builtin["target"], "builtin");
-    assert_eq!(configured_builtin["target_type"], "virtual");
-    let topology = env.backend_topology()?;
-    assert!(topology.outputs["DP-1"].enabled);
 
     Ok(())
 }
@@ -568,33 +522,6 @@ impl TestEnvironment {
 
     fn state_file_path(&self) -> PathBuf {
         self.state_home.join("waytorandr").join("state.toml")
-    }
-
-    fn profiles_file_path(&self) -> PathBuf {
-        self.config_home.join("waytorandr").join("waytorandr.json")
-    }
-
-    fn write_profiles_settings(&self, settings: Value) -> Result<(), Box<dyn Error>> {
-        let path = self.profiles_file_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let mut content = if path.exists() {
-            serde_json::from_str::<Value>(&std::fs::read_to_string(&path)?)?
-        } else {
-            serde_json::json!({})
-        };
-        content["settings"] = settings;
-        if content.get("profiles").is_none() {
-            content["profiles"] = serde_json::json!([]);
-        }
-
-        std::fs::write(
-            path,
-            format!("{}\n", serde_json::to_string_pretty(&content)?),
-        )?;
-        Ok(())
     }
 
     fn run_json<const N: usize>(&self, args: [&str; N]) -> Result<Value, Box<dyn Error>> {
@@ -871,29 +798,6 @@ fn alternate_topology() -> Topology {
                 1920,
                 1080,
                 &[Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)],
-                0,
-                0,
-            ),
-        )]
-        .into_iter()
-        .collect(),
-    }
-}
-
-fn external_only_topology() -> Topology {
-    Topology {
-        outputs: [(
-            "DP-1".to_string(),
-            output(
-                "DP-1",
-                Some("Dell U2720Q"),
-                2560,
-                1440,
-                &[
-                    Mode::new(2560, 1440, 60),
-                    Mode::new(1920, 1080, 60),
-                    Mode::new(1280, 720, 60),
-                ],
                 0,
                 0,
             ),

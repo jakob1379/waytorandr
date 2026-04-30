@@ -6,7 +6,7 @@ use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
 use waytorandr_core::model::{OutputIdentity, Topology};
 use waytorandr_core::state::StateStore;
-use waytorandr_core::store::{DefaultTarget, ProfileStore, ProfilesSettings, StoredProfile};
+use waytorandr_core::store::{ProfileStore, ProfilesSettings, StoredProfile};
 use waytorandr_core::workflow;
 
 #[derive(Serialize)]
@@ -38,8 +38,6 @@ struct JsonStatusResponse {
     setup_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     builtin_output: Option<OutputIdentity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    new_setup_default: Option<DefaultTarget>,
     setup_fingerprint: String,
     outputs: Vec<JsonOutputEntry>,
     setups: Vec<JsonListSetup>,
@@ -82,7 +80,6 @@ struct StatusView {
     topology: Topology,
     setup_name: Option<String>,
     builtin_output: Option<OutputIdentity>,
-    new_setup_default: Option<DefaultTarget>,
     list: ListView,
     has_saved_profiles: bool,
 }
@@ -99,7 +96,6 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             fingerprint: view.topology.fingerprint(),
             setup_name: view.setup_name.clone(),
             builtin_output: view.builtin_output.clone(),
-            new_setup_default: view.new_setup_default.clone(),
             setup_fingerprint: view.topology.setup_fingerprint(),
             outputs: topology_outputs(&view.topology),
             setups: json_list_setups(&view.list.setups),
@@ -133,13 +129,6 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             "{}: {}",
             key("Builtin display override"),
             value(builtin_output.primary_key())
-        );
-    }
-    if let Some(default_target) = &view.new_setup_default {
-        println!(
-            "{}: {}",
-            key("Default for new setups"),
-            value(describe_default_target(default_target))
         );
     }
     print_topology("Detected outputs:", &view.topology);
@@ -190,7 +179,6 @@ fn load_status_view(show_all: bool) -> Result<StatusView> {
         topology,
         setup_name: current_setup_name,
         builtin_output: settings.builtin_output.clone(),
-        new_setup_default: settings.new_setup_default,
         list,
         has_saved_profiles,
     })
@@ -255,13 +243,6 @@ fn build_list_view(
     }
 
     ListView { show_all, setups }
-}
-
-fn describe_default_target(target: &DefaultTarget) -> String {
-    match target {
-        DefaultTarget::Profile { name } => format!("saved profile '{name}'"),
-        DefaultTarget::Virtual { preset } => format!("virtual '{preset}'"),
-    }
 }
 
 fn json_list_setups(setups: &[ListSetupView]) -> Vec<JsonListSetup> {

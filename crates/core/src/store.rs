@@ -1,9 +1,9 @@
 use crate::atomic::{atomic_write, with_exclusive_lock};
 use crate::error::{CoreError, CoreResult};
-use crate::model::{OutputIdentity, VirtualPreset};
+use crate::model::OutputIdentity;
 use crate::normalize::canonicalize_profile;
 use crate::profile::Profile;
-use crate::state::{State, StateStore};
+use crate::state::StateStore;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,15 +37,6 @@ pub struct ProfilesSettings {
     pub setup_defaults: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin_output: Option<OutputIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub new_setup_default: Option<DefaultTarget>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DefaultTarget {
-    Profile { name: String },
-    Virtual { preset: VirtualPreset },
 }
 
 impl ProfilesSettings {
@@ -67,19 +58,9 @@ impl ProfilesSettings {
         }
     }
 
-    fn clear_new_setup_default_if_profile_matches(&mut self, profile_name: &str) {
-        if matches!(
-            self.new_setup_default.as_ref(),
-            Some(DefaultTarget::Profile { name }) if name == profile_name
-        ) {
-            self.new_setup_default = None;
-        }
-    }
-
     fn clear_all_profile_references(&mut self, profile_name: &str) {
         self.setup_defaults
             .retain(|_, stored_name| stored_name != profile_name);
-        self.clear_new_setup_default_if_profile_matches(profile_name);
     }
 }
 
@@ -200,17 +181,6 @@ impl ProfileStore {
             stored
                 .settings
                 .set_setup_default_profile(setup_fingerprint, profile_name);
-            Ok(())
-        })
-    }
-
-    /// Sets the default target used for new setups.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read or written.
-    pub fn set_new_setup_default(&self, target: DefaultTarget) -> CoreResult<()> {
-        self.update_profiles_file(|stored| {
-            stored.settings.new_setup_default = Some(target);
             Ok(())
         })
     }
@@ -421,11 +391,6 @@ impl ProfileStore {
             stored
                 .settings
                 .clear_setup_default_if_matches(setup_fingerprint, name);
-            if !stored.profiles.iter().any(|profile| profile.name == name) {
-                stored
-                    .settings
-                    .clear_new_setup_default_if_profile_matches(name);
-            }
             Ok((true, true))
         })?;
         if removed {
@@ -518,16 +483,8 @@ impl ProfileStore {
         }
 
         self.update_profiles_file(|stored| {
-            if stored.settings.new_setup_default.is_none() {
-                if let Some(profile_name) = state.global_default_profile() {
-                    stored.settings.new_setup_default = Some(DefaultTarget::Profile {
-                        name: profile_name.to_string(),
-                    });
-                }
-            }
-
             for (setup_fingerprint, profile_name) in &state.default_profiles {
-                if setup_fingerprint == State::GLOBAL_DEFAULT_PROFILE_KEY {
+                if setup_fingerprint.starts_with("__") {
                     continue;
                 }
 

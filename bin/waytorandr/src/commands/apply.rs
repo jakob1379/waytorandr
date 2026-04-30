@@ -12,7 +12,7 @@ use waytorandr_core::model::{BackendKind, OutputIdentity, VirtualPreset};
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
-use waytorandr_core::store::{DefaultTarget, ProfileStore};
+use waytorandr_core::store::ProfileStore;
 use waytorandr_core::workflow;
 
 #[derive(Clone, Copy)]
@@ -52,21 +52,18 @@ pub(super) struct ActionOutcome {
 #[derive(Clone, Copy)]
 pub(super) enum DefaultScope {
     Setup,
-    NewSetups,
 }
 
 impl DefaultScope {
     pub(super) const fn as_json(self) -> &'static str {
         match self {
             Self::Setup => "setup",
-            Self::NewSetups => "new_setups",
         }
     }
 
     fn description(self, target: &str) -> String {
         match self {
             Self::Setup => format!("'{target}' as the default profile for this setup"),
-            Self::NewSetups => format!("'{target}' as the default for new setups"),
         }
     }
 }
@@ -248,7 +245,6 @@ fn build_apply_outcome(
 pub(super) fn execute_virtual_action(
     preset: VirtualPreset,
     dry_run: bool,
-    make_default_for_new_setups: bool,
     builtin_output: Option<&OutputIdentity>,
 ) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
@@ -263,8 +259,8 @@ pub(super) fn execute_virtual_action(
         return build_dry_run_outcome(
             preset.to_string(),
             ActionTargetType::Virtual,
-            make_default_for_new_setups,
-            make_default_for_new_setups.then_some(DefaultScope::NewSetups),
+            false,
+            None,
             workflow::validate_preset_workflow(
                 backend.as_ref(),
                 &state_store,
@@ -284,16 +280,13 @@ pub(super) fn execute_virtual_action(
     } = &execution
     {
         save_runtime_state(preset.as_str(), Some(backend_kind), applied_topology)?;
-        if make_default_for_new_setups {
-            set_new_setup_default(DefaultTarget::Virtual { preset })?;
-        }
     }
 
     build_apply_outcome(
         preset.to_string(),
         ActionTargetType::Virtual,
-        make_default_for_new_setups,
-        make_default_for_new_setups.then_some(DefaultScope::NewSetups),
+        false,
+        None,
         execution,
     )
 }
@@ -463,13 +456,6 @@ pub(super) fn set_default_profile_for_fingerprint(
     let store = ProfileStore::bootstrap()?;
     store
         .set_setup_default_profile(setup_fingerprint, profile_name)
-        .map_err(anyhow::Error::from)
-}
-
-pub(super) fn set_new_setup_default(target: DefaultTarget) -> Result<()> {
-    let store = ProfileStore::bootstrap()?;
-    store
-        .set_new_setup_default(target)
         .map_err(anyhow::Error::from)
 }
 

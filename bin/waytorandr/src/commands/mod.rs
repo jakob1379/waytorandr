@@ -44,7 +44,6 @@ pub(crate) fn run() -> Result<()> {
             write::SetOptions {
                 dry_run: args.dry_run,
                 make_default: args.make_default,
-                global_default: args.global_default,
                 save: args.save,
                 reverse: args.reverse,
                 largest: args.largest,

@@ -7,12 +7,12 @@ use tempfile::TempDir;
 use waytorandr_core::engine::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, TestResult};
 use waytorandr_core::error::CoreError;
 use waytorandr_core::model::{
-    BackendKind, Capabilities, OutputIdentity, OutputState, Position, Topology, VirtualPreset,
+    BackendKind, Capabilities, OutputIdentity, OutputState, Position, Topology,
 };
 use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::{Hook, Hooks, OutputMatcher, Profile};
 use waytorandr_core::state::{State, StateStore};
-use waytorandr_core::store::{DefaultTarget, ProfileStore, ProfilesSettings};
+use waytorandr_core::store::{ProfileStore, ProfilesSettings};
 use waytorandr_core::workflow;
 
 fn xdg_lock() -> &'static Mutex<()> {
@@ -230,18 +230,10 @@ fn profile_store_migrates_legacy_defaults_into_profiles_json() -> Result<(), Box
         let store = ProfileStore::bootstrap()?;
         let settings = store.settings()?;
         let persisted = std::fs::read_to_string(state_store.dir().join("state.toml"))?;
-        let profiles_json = std::fs::read_to_string(config_path(temp))?;
 
-        assert_eq!(
-            settings.new_setup_default,
-            Some(DefaultTarget::Profile {
-                name: "desk".to_string()
-            })
-        );
         assert_eq!(settings.setup_default_profile("conn:DP-1"), Some("office"));
         assert!(!persisted.contains("default_profile = \"desk\""));
         assert!(!persisted.contains("conn:DP-1"));
-        assert!(profiles_json.contains("new_setup_default"));
         Ok(())
     })?;
     Ok(())
@@ -289,20 +281,10 @@ fn remove_for_setup_clears_deleted_profiles_setup_default_only() -> Result<(), B
         store.save(&desk, &state_store)?;
         store.save(&travel, &state_store)?;
         store.set_setup_default_profile(&desk_setup, "desk")?;
-        store.set_new_setup_default(DefaultTarget::Profile {
-            name: "desk".to_string(),
-        })?;
-
         assert!(store.remove_for_setup("desk", &desk_setup, &state_store)?);
 
         let settings = store.settings()?;
         assert_eq!(settings.setup_default_profile(&desk_setup), None);
-        assert_eq!(
-            settings.new_setup_default,
-            Some(DefaultTarget::Profile {
-                name: "desk".to_string()
-            })
-        );
         Ok(())
     })?;
     Ok(())
@@ -318,15 +300,10 @@ fn remove_unique_clears_all_defaults_for_deleted_profile() -> Result<(), Box<dyn
 
         store.save(&desk, &state_store)?;
         store.set_setup_default_profile(&desk_setup, "desk")?;
-        store.set_new_setup_default(DefaultTarget::Profile {
-            name: "desk".to_string(),
-        })?;
-
         assert!(store.remove_unique("desk")?);
 
         let settings = store.settings()?;
         assert_eq!(settings.setup_default_profile(&desk_setup), None);
-        assert_eq!(settings.new_setup_default, None);
         Ok(())
     })?;
     Ok(())
@@ -352,11 +329,7 @@ fn profile_store_open_honors_legacy_json_fallback() -> Result<(), Box<dyn Error>
             serde_json::to_string_pretty(&serde_json::json!({
                 "profiles": [legacy_profile.clone()],
                 "settings": {
-                    "setup_defaults": setup_defaults,
-                    "new_setup_default": {
-                        "kind": "profile",
-                        "name": "desk"
-                    }
+                    "setup_defaults": setup_defaults
                 }
             }))?,
         )?;
@@ -368,12 +341,6 @@ fn profile_store_open_honors_legacy_json_fallback() -> Result<(), Box<dyn Error>
         assert_eq!(
             settings.setup_default_profile(&setup_fingerprint),
             Some("desk")
-        );
-        assert_eq!(
-            settings.new_setup_default,
-            Some(DefaultTarget::Profile {
-                name: "desk".to_string()
-            })
         );
         assert_eq!(store.list(&state_store)?.len(), 1);
         assert!(store
@@ -397,13 +364,7 @@ fn profile_store_save_via_open_preserves_legacy_json_contents() -> Result<(), Bo
         std::fs::write(
             &legacy_path,
             serde_json::to_string_pretty(&serde_json::json!({
-                "profiles": [legacy_profile.clone()],
-                "settings": {
-                    "new_setup_default": {
-                        "kind": "profile",
-                        "name": "desk"
-                    }
-                }
+                "profiles": [legacy_profile.clone()]
             }))?,
         )?;
 
@@ -425,7 +386,6 @@ fn profile_store_save_via_open_preserves_legacy_json_contents() -> Result<(), Bo
         assert_eq!(profile_names.len(), 2);
         assert!(profile_names.contains(&"desk"));
         assert!(profile_names.contains(&"office"));
-        assert_eq!(saved["settings"]["new_setup_default"]["name"], "desk");
         Ok(())
     })?;
     Ok(())
@@ -473,9 +433,6 @@ fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn 
         let settings = ProfilesSettings {
             setup_defaults: HashMap::new(),
             builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Profile {
-                name: "fallback".to_string(),
-            }),
         };
         let mut state = State::default();
 
@@ -514,104 +471,6 @@ fn runtime_prefers_setup_default_over_matching_profile() -> Result<(), Box<dyn E
             .ok_or_else(|| std::io::Error::other("setup default should be selected"))?;
 
         assert_eq!(selected.name, "external-only");
-        Ok(())
-    })?;
-    Ok(())
-}
-
-#[test]
-fn runtime_returns_virtual_default_for_new_setup() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|_| {
-        let topology = Topology {
-            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
-        };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Virtual {
-                preset: VirtualPreset::Vertical,
-            }),
-        };
-
-        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
-            .ok_or_else(|| std::io::Error::other("virtual default should be selected"))?;
-
-        assert!(matches!(
-            selected,
-            workflow::SelectedTarget::Virtual(VirtualPreset::Vertical)
-        ));
-        Ok(())
-    })?;
-    Ok(())
-}
-
-#[test]
-fn runtime_returns_builtin_default_when_internal_output_exists() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|_| {
-        let topology = Topology {
-            outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1"))]),
-        };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            }),
-        };
-
-        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
-            .ok_or_else(|| std::io::Error::other("builtin default should be selected"))?;
-
-        assert!(matches!(
-            selected,
-            workflow::SelectedTarget::Virtual(VirtualPreset::Builtin)
-        ));
-        Ok(())
-    })?;
-    Ok(())
-}
-
-#[test]
-fn runtime_skips_builtin_default_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|_| {
-        let topology = Topology {
-            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
-        };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            }),
-        };
-
-        assert!(workflow::select_target_for_topology(&topology, &[], &settings).is_none());
-        Ok(())
-    })?;
-    Ok(())
-}
-
-#[test]
-fn runtime_uses_builtin_override_when_detection_would_not() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|_| {
-        let topology = Topology {
-            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
-        };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: Some(OutputIdentity::new("DP-1")),
-            new_setup_default: Some(DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            }),
-        };
-
-        let selected = workflow::select_target_for_topology(&topology, &[], &settings)
-            .ok_or_else(|| std::io::Error::other("builtin override should be selected"))?;
-
-        assert!(matches!(
-            selected,
-            workflow::SelectedTarget::Virtual(VirtualPreset::Builtin)
-        ));
         Ok(())
     })?;
     Ok(())

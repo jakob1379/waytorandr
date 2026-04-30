@@ -5,10 +5,10 @@ use crate::error::{CoreError, CoreResult};
 use crate::matcher::Matcher;
 use crate::model::{BackendKind, Topology, VirtualPreset};
 use crate::normalize::normalize_topology_with_known_outputs;
-use crate::planner::{topology_has_internal_output, LayoutPlan, Planner};
+use crate::planner::{LayoutPlan, Planner};
 use crate::profile::{Hooks, OutputMatcher, Profile};
 use crate::state::{State, StateStore};
-use crate::store::{DefaultTarget, ProfilesSettings};
+use crate::store::ProfilesSettings;
 
 pub enum ExecutionCycle {
     DryRun {
@@ -129,43 +129,11 @@ impl ApplyExecution {
 }
 
 #[must_use]
-pub enum SelectedTarget {
-    Profile(Profile),
-    Virtual(VirtualPreset),
-}
-
-#[must_use]
-pub fn resolve_default_target_for_topology(
-    topology: &Topology,
-    profiles: &[Profile],
-    builtin_output: Option<&crate::model::OutputIdentity>,
-    target: &DefaultTarget,
-) -> Option<SelectedTarget> {
-    match target {
-        DefaultTarget::Profile { name } => {
-            let named_profiles: Vec<_> = profiles
-                .iter()
-                .filter(|profile| profile.name == *name)
-                .cloned()
-                .collect();
-            Matcher::match_profile_exact(topology, &named_profiles)
-                .map(|matched| SelectedTarget::Profile(matched.profile))
-        }
-        DefaultTarget::Virtual { preset } => match preset {
-            VirtualPreset::Builtin if !topology_has_internal_output(topology, builtin_output) => {
-                None
-            }
-            _ => Some(SelectedTarget::Virtual(*preset)),
-        },
-    }
-}
-
-#[must_use]
 pub fn select_target_for_topology(
     topology: &Topology,
     profiles: &[Profile],
     settings: &ProfilesSettings,
-) -> Option<SelectedTarget> {
+) -> Option<Profile> {
     let setup_fingerprint = topology.setup_fingerprint();
     if let Some(profile) =
         settings
@@ -176,21 +144,10 @@ pub fn select_target_for_topology(
                 })
             })
     {
-        return Some(SelectedTarget::Profile(profile.clone()));
+        return Some(profile.clone());
     }
 
-    if let Some(matched) = Matcher::match_profile_exact(topology, profiles) {
-        return Some(SelectedTarget::Profile(matched.profile));
-    }
-
-    settings.new_setup_default.as_ref().and_then(|target| {
-        resolve_default_target_for_topology(
-            topology,
-            profiles,
-            settings.builtin_output.as_ref(),
-            target,
-        )
-    })
+    Matcher::match_profile_exact(topology, profiles).map(|matched| matched.profile)
 }
 
 #[must_use]
@@ -199,10 +156,7 @@ pub fn select_profile_for_topology(
     profiles: &[Profile],
     settings: &ProfilesSettings,
 ) -> Option<Profile> {
-    match select_target_for_topology(topology, profiles, settings) {
-        Some(SelectedTarget::Profile(profile)) => Some(profile),
-        Some(SelectedTarget::Virtual(_)) | None => None,
-    }
+    select_target_for_topology(topology, profiles, settings)
 }
 
 #[must_use]
@@ -699,43 +653,16 @@ mod tests {
     }
 
     #[test]
-    fn select_profile_prefers_match_before_global_default() {
+    fn select_profile_uses_matching_profile_without_fallback() {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
         };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Profile {
-                name: "fallback".to_string(),
-            }),
-        };
+        let settings = ProfilesSettings::default();
         let profiles = vec![profile("desk", "DP-1"), profile("fallback", "HDMI-A-1")];
 
         let selected = select_profile_for_topology(&topology, &profiles, &settings).unwrap();
 
         assert_eq!(selected.name, "desk");
-    }
-
-    #[test]
-    fn select_target_returns_virtual_default_for_new_setup() {
-        let topology = Topology {
-            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
-        };
-        let settings = ProfilesSettings {
-            setup_defaults: HashMap::new(),
-            builtin_output: None,
-            new_setup_default: Some(DefaultTarget::Virtual {
-                preset: VirtualPreset::Vertical,
-            }),
-        };
-
-        let selected = select_target_for_topology(&topology, &[], &settings).unwrap();
-
-        assert!(matches!(
-            selected,
-            SelectedTarget::Virtual(VirtualPreset::Vertical)
-        ));
     }
 
     #[test]

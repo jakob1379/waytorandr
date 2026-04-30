@@ -30,15 +30,6 @@ pub struct State {
 }
 
 impl State {
-    pub const GLOBAL_DEFAULT_PROFILE_KEY: &'static str = "__global__";
-
-    #[must_use]
-    pub fn global_default_profile(&self) -> Option<&str> {
-        self.default_profiles
-            .get(Self::GLOBAL_DEFAULT_PROFILE_KEY)
-            .map(String::as_str)
-    }
-
     #[must_use]
     pub fn setup_default_profile(&self, setup_fingerprint: &str) -> Option<&str> {
         self.default_profiles
@@ -47,24 +38,12 @@ impl State {
     }
 
     #[must_use]
-    pub fn effective_default_profile_for_setup(&self, setup_fingerprint: &str) -> Option<&str> {
-        self.setup_default_profile(setup_fingerprint)
-            .or_else(|| self.global_default_profile())
-    }
-
-    #[must_use]
     pub fn remembered_topology_for_setup(&self, setup_fingerprint: &str) -> Option<&Topology> {
         self.remembered_setups.get(setup_fingerprint)
     }
 
     fn migrate_legacy_default_profile(&mut self) -> bool {
-        let Some(profile_name) = self.legacy_default_profile.take() else {
-            return false;
-        };
-        self.default_profiles
-            .entry(Self::GLOBAL_DEFAULT_PROFILE_KEY.to_string())
-            .or_insert(profile_name);
-        true
+        self.legacy_default_profile.take().is_some()
     }
 
     pub fn record_applied_profile(

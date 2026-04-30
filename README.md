@@ -14,7 +14,7 @@ It includes:
 - Save the current compositor layout as a named profile
 - Optionally assign a friendly name to each detected display setup
 - Reapply a saved profile or a built-in virtual layout
-- Set a preferred default profile for each display fingerprint and a default target for new setups
+- Set a preferred default profile for each display fingerprint
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
 - Offer dynamic shell completion for current-setup saved profile names and `set` targets
@@ -68,7 +68,6 @@ Inspect the current layout and save a profile:
 ./result/bin/waytorandr set work-dock --default
 ./result/bin/waytorandr set vertical --save
 ./result/bin/waytorandr set vertical --default
-./result/bin/waytorandr set external --global-default
 ```
 
 Preview a virtual layout without applying it:
@@ -92,7 +91,7 @@ waytorandr service   Manage the waytorandrd user service
 
 Built-in `set` targets:
 
-- `auto` - apply the setup default, best matching saved profile, or new-setup default
+- `auto` - apply the setup default or best matching saved profile
 - `off` - disable external outputs and keep built-in panels on when present
 - `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
@@ -110,8 +109,6 @@ explicitly with `waytorandr set --profile <name>`.
 `--default` is setup-local: it only updates the default for the current setup
 fingerprint. With virtual targets, `set --default` saves the resulting layout as
 profile `default` and makes that saved profile the default for the current setup.
-Use `set --global-default` when you want to change the fallback virtual target
-for new setups.
 
 Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
 for the full command reference and examples.
@@ -121,7 +118,7 @@ for the full command reference and examples.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
-> `waytorandr status --json` includes optional `setup_name`, `builtin_output`, and `new_setup_default` fields when they are configured.
+> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured.
 
 ## Daemon
 
@@ -129,35 +126,11 @@ for the full command reference and examples.
 hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. When the physical setup changes, it first
 tries the configured default profile for the current fingerprint, then the best
-matching saved profile, then a remembered layout for that setup, then
-the configured default target for new setups, and finally falls back to
-remembering the current topology. Remembered layouts that would leave all real
-outputs disabled are skipped instead of being reused. Transient all-disabled
-topologies are still evaluated so a matching profile or configured default can
-re-enable the right outputs, but blank layouts are not remembered as setup
-state.
-
-If you want the fallback target for new setups to mean "internal panel only",
-configure `builtin` in `waytorandr.json`. This is a config-only fallback target;
-it is not advertised as an explicit `waytorandr set` target.
-
-```json
-{
-  "settings": {
-    "builtin_output": {
-      "connector": "eDP-1"
-    },
-    "new_setup_default": {
-      "kind": "virtual",
-      "preset": "builtin"
-    }
-  }
-}
-```
-
-`builtin_output` is optional. When omitted, waytorandr falls back to its built-in
-display heuristics. When set, it overrides those heuristics and treats the matching
-output identity as the built-in display for `builtin` fallback decisions.
+matching saved profile, then a remembered layout for that setup, and finally
+falls back to remembering the current topology. Remembered layouts that would
+leave all real outputs disabled are skipped instead of being reused. Transient
+all-disabled topologies are still evaluated so a matching profile can re-enable
+the right outputs, but blank layouts are not remembered as setup state.
 
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup

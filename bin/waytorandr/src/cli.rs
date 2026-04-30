@@ -29,7 +29,7 @@ pub struct Cli {
 pub enum Commands {
     #[command(about = "Set a saved target, virtual configuration, or `auto` selection")]
     #[command(after_long_help = "Virtual configurations:
-  auto       Apply the setup default, best matching saved profile, or new-setup default
+  auto       Apply the setup default or best matching saved profile
   off        Disable external outputs and keep built-in panels on when present
   external   Prefer external outputs; if none are present, keep built-in panels enabled
   common     Clone all connected outputs at the largest common resolution (not native mirroring)
@@ -40,7 +40,6 @@ pub enum Commands {
 
 `waytorandr set auto` first applies the configured default for the current hardware setup.
 If no setup default is configured, it applies the best matching saved profile.
-If there is no match, it applies the configured default for new setups.
 
 Examples:
   waytorandr set auto
@@ -49,7 +48,6 @@ Examples:
   waytorandr set --profile auto
   waytorandr set vertical --save
   waytorandr set vertical --default
-  waytorandr set external --global-default
   waytorandr set common --dry-run
   waytorandr set largest --dry-run
   waytorandr set mirror --dry-run
@@ -58,7 +56,6 @@ Examples:
 `--default` only affects the current setup fingerprint.
 With virtual configurations, `--default` saves the resulting layout as profile `default`
 and makes that saved profile the default for the current setup.
-Use `--global-default` with a virtual configuration to set the fallback target for new setups.
 Use `--save` with a virtual configuration as a shortcut for saving the resulting layout
 as profile `default` and making it the default for the current setup.
 Use `--profile` when a saved profile name collides with `auto` or a virtual target.
@@ -175,12 +172,6 @@ pub struct SetArgs {
         help = "Make the resulting layout the default for the current setup fingerprint"
     )]
     pub(crate) make_default: bool,
-
-    #[arg(
-        long = "global-default",
-        help = "With virtual configurations: set the fallback target for new setups"
-    )]
-    pub(crate) global_default: bool,
 
     #[arg(
         short = 's',

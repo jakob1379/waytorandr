@@ -24,7 +24,6 @@ const AUTO_SET_TARGET: &str = "auto";
 pub(super) struct SetOptions {
     pub(super) dry_run: bool,
     pub(super) make_default: bool,
-    pub(super) global_default: bool,
     pub(super) save: bool,
     pub(super) reverse: bool,
     pub(super) largest: bool,
@@ -175,16 +174,11 @@ pub(super) fn cmd_set(
     let SetOptions {
         dry_run,
         make_default,
-        global_default,
         save,
         reverse,
         largest,
     } = options;
     let save_for_current_setup = make_default || save;
-
-    if global_default && (make_default || save) {
-        bail!("--global-default cannot be combined with --default or --save")
-    }
 
     let (name, force_saved_profile) = match (target, forced_profile) {
         (Some(name), None) => (name, false),
@@ -199,17 +193,15 @@ pub(super) fn cmd_set(
         if largest {
             bail!("--largest is deprecated; use `waytorandr set largest`")
         }
-        if save_for_current_setup || global_default {
-            bail!(
-                "--default, --global-default, and --save cannot be used with `waytorandr set auto`"
-            )
+        if save_for_current_setup {
+            bail!("--default and --save cannot be used with `waytorandr set auto`")
         }
         return cmd_change(dry_run, output_mode);
     }
 
     if !force_saved_profile {
         if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-            let mut outcome = execute_virtual_action(preset, dry_run, global_default, None)?;
+            let mut outcome = execute_virtual_action(preset, dry_run, None)?;
             if save_for_current_setup {
                 outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
                 outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
@@ -226,9 +218,6 @@ pub(super) fn cmd_set(
         }
     }
 
-    if global_default {
-        bail!("--global-default can only be used with virtual set targets")
-    }
     if save {
         bail!("--save can only be used with virtual set targets")
     }
@@ -250,16 +239,9 @@ pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let profiles = store.profiles(&state_store)?;
     let settings = store.settings()?;
     let target = workflow::select_target_for_topology(&topology, &profiles, &settings)
-        .ok_or_else(|| anyhow!("no matching profile and no default target configured"))?;
+        .ok_or_else(|| anyhow!("no matching profile configured"))?;
 
-    let outcome = match target {
-        workflow::SelectedTarget::Profile(profile) => {
-            execute_profile_action(&profile, dry_run, false)?
-        }
-        workflow::SelectedTarget::Virtual(preset) => {
-            execute_virtual_action(preset, dry_run, false, settings.builtin_output.as_ref())?
-        }
-    };
+    let outcome = execute_profile_action(&target, dry_run, false)?;
 
     emit_action_outcome("set", Some("auto"), &outcome, output_mode)
 }
@@ -363,7 +345,6 @@ mod tests {
             SetOptions {
                 dry_run: false,
                 make_default: false,
-                global_default: false,
                 save: false,
                 reverse: true,
                 largest: false,
@@ -386,7 +367,6 @@ mod tests {
             SetOptions {
                 dry_run: false,
                 make_default: true,
-                global_default: false,
                 save: false,
                 reverse: false,
                 largest: false,
@@ -397,7 +377,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "--default, --global-default, and --save cannot be used with `waytorandr set auto`"
+            "--default and --save cannot be used with `waytorandr set auto`"
         );
     }
 
@@ -409,7 +389,6 @@ mod tests {
             SetOptions {
                 dry_run: false,
                 make_default: false,
-                global_default: false,
                 save: false,
                 reverse: true,
                 largest: false,
@@ -432,7 +411,6 @@ mod tests {
             SetOptions {
                 dry_run: false,
                 make_default: false,
-                global_default: false,
                 save: false,
                 reverse: false,
                 largest: false,

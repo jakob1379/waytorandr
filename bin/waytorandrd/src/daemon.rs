@@ -4,8 +4,8 @@ use anyhow::{bail, Result};
 
 use waytorandr_core::engine::{Backend, ConfigFailureKind};
 use waytorandr_core::matcher::Matcher;
-use waytorandr_core::model::{BackendKind, Topology, VirtualPreset};
-use waytorandr_core::planner::{LayoutPlan, Planner};
+use waytorandr_core::model::{BackendKind, Topology};
+use waytorandr_core::planner::LayoutPlan;
 use waytorandr_core::profile::Profile;
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
@@ -115,7 +115,6 @@ fn maybe_apply_matching_profile(
     let setup_fingerprint = topology.setup_fingerprint();
     let state = state_store.load_state()?.unwrap_or_default();
     let settings = store.settings()?;
-    let all_profiles = store.profiles(state_store)?;
     let setup_profiles = store.profiles_for_setup(&setup_fingerprint, state_store)?;
 
     if let Some(default_name) = settings.setup_default_profile(&setup_fingerprint) {
@@ -157,50 +156,6 @@ fn maybe_apply_matching_profile(
         );
     }
 
-    if let Some(default_target) = settings.new_setup_default.as_ref() {
-        if let Some(target) = workflow::resolve_default_target_for_topology(
-            topology,
-            &all_profiles,
-            settings.builtin_output.as_ref(),
-            default_target,
-        ) {
-            tracing::info!(fingerprint = %setup_fingerprint, "using configured default for new setups");
-            let outcome = match target {
-                workflow::SelectedTarget::Profile(profile) => apply_profile(
-                    backend,
-                    state_store,
-                    &profile,
-                    topology,
-                    Some(&profile.name),
-                ),
-                workflow::SelectedTarget::Virtual(preset) => apply_preset(
-                    backend,
-                    state_store,
-                    preset,
-                    topology,
-                    settings.builtin_output.as_ref(),
-                ),
-            };
-
-            return match outcome {
-                Ok(result) => Ok(result),
-                Err(err) => {
-                    tracing::warn!(
-                        fingerprint = %setup_fingerprint,
-                        error = %err,
-                        "configured default for new setups could not be applied; will retry later"
-                    );
-                    Ok(DaemonOutcome::NoMatch)
-                }
-            };
-        }
-
-        tracing::warn!(
-            fingerprint = %setup_fingerprint,
-            "configured default for new setups did not resolve for current topology"
-        );
-    }
-
     remember_current_topology(state_store, backend.capabilities().backend, topology)?;
     tracing::info!(
         fingerprint = %setup_fingerprint,
@@ -208,64 +163,6 @@ fn maybe_apply_matching_profile(
     );
 
     Ok(DaemonOutcome::NoMatch)
-}
-
-fn apply_preset(
-    backend: &(impl Backend + ?Sized),
-    state_store: &StateStore,
-    preset: VirtualPreset,
-    topology: &Topology,
-    builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
-) -> Result<DaemonOutcome> {
-    let backend_kind = backend.capabilities().backend;
-    if let Some(message) = backend
-        .capabilities()
-        .virtual_preset_unavailable_message(preset)
-    {
-        bail!(message);
-    }
-
-    let plan = Planner::plan_from_preset(preset, topology, builtin_output, None)
-        .map_err(anyhow::Error::from)?;
-    if plan_matches_topology(&plan, topology) {
-        persist_runtime_state(state_store, None, backend_kind, topology)?;
-        tracing::info!(preset = %preset, "virtual preset already matches current topology");
-        return Ok(DaemonOutcome::Applied);
-    }
-
-    let execution = workflow::apply_preset_workflow(backend, state_store, preset, builtin_output)
-        .map_err(anyhow::Error::from)?;
-
-    if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
-        return Ok(DaemonOutcome::TopologyChanged);
-    }
-
-    match execution {
-        workflow::ApplyExecution::Applied {
-            applied_topology, ..
-        } => {
-            persist_runtime_state(state_store, None, backend_kind, &applied_topology)?;
-            tracing::info!(preset = %preset, "applied virtual preset");
-            Ok(DaemonOutcome::Applied)
-        }
-        workflow::ApplyExecution::ApplyFailed { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend failed to apply configuration")
-            );
-        }
-        workflow::ApplyExecution::Unsupported { .. }
-        | workflow::ApplyExecution::Rejected { .. } => {
-            bail!(
-                "{}",
-                execution
-                    .failure_message()
-                    .unwrap_or("backend rejected configuration")
-            );
-        }
-    }
 }
 
 fn apply_profile(
@@ -716,63 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn enforce_topology_policy_applies_default_after_disconnect_blank_topology(
-    ) -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
-            };
-            let apply_calls = Arc::new(Mutex::new(0));
-            let test_calls = Arc::new(Mutex::new(0));
-            let backend = StubBackend {
-                enumerated_topology: topology.clone(),
-                applied_topology: Some(Topology {
-                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
-                }),
-                test_success: true,
-                test_failure: None,
-                test_message: None,
-                apply_calls: apply_calls.clone(),
-                test_calls: test_calls.clone(),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            })?;
-
-            enforce_topology_policy(&backend, &store, &state_store)?;
-
-            let state = state_store
-                .load_state()?
-                .ok_or_else(|| std::io::Error::other("state should exist"))?;
-            assert_eq!(
-                *test_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
-            );
-            assert_eq!(
-                *apply_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
-            );
-            assert_eq!(state.last_profile, None);
-            assert_eq!(
-                state
-                    .remembered_setups
-                    .get(&topology.setup_fingerprint())
-                    .map(Topology::fingerprint),
-                Some("eDP-1:on".to_string())
-            );
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
     fn enforce_topology_policy_returns_error_after_repeated_topology_changes(
     ) -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
@@ -852,204 +692,6 @@ mod tests {
                 0
             );
             assert_eq!(state.last_profile.as_deref(), Some("desk"));
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn new_setup_uses_configured_virtual_default() -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
-            };
-            let backend = StubBackend {
-                enumerated_topology: topology.clone(),
-                applied_topology: None,
-                test_success: true,
-                test_failure: None,
-                test_message: None,
-                apply_calls: Arc::new(Mutex::new(0)),
-                test_calls: Arc::new(Mutex::new(0)),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Vertical,
-            })?;
-
-            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let state = state_store
-                .load_state()?
-                .ok_or_else(|| std::io::Error::other("state should exist"))?;
-
-            assert!(matches!(outcome, DaemonOutcome::Applied));
-            assert_eq!(state.last_profile, None);
-            assert_eq!(
-                state
-                    .remembered_setups
-                    .get(&topology.setup_fingerprint())
-                    .map(Topology::fingerprint),
-                Some(topology.fingerprint())
-            );
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn failed_new_setup_default_is_not_remembered() -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([
-                    ("eDP-1".to_string(), output("eDP-1", true)),
-                    ("DP-1".to_string(), output("DP-1", true)),
-                ]),
-            };
-            let apply_calls = Arc::new(Mutex::new(0));
-            let test_calls = Arc::new(Mutex::new(0));
-            let backend = StubBackend {
-                enumerated_topology: topology.clone(),
-                applied_topology: None,
-                test_success: false,
-                test_failure: None,
-                test_message: Some("rejected".to_string()),
-                apply_calls: apply_calls.clone(),
-                test_calls: test_calls.clone(),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            })?;
-
-            let first = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let second = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let state = state_store.load_state()?.unwrap_or_default();
-
-            assert!(matches!(first, DaemonOutcome::NoMatch));
-            assert!(matches!(second, DaemonOutcome::NoMatch));
-            assert!(!state
-                .remembered_setups
-                .contains_key(&topology.setup_fingerprint()));
-            assert_eq!(
-                *test_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                2
-            );
-            assert_eq!(
-                *apply_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                0
-            );
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn builtin_default_applies_on_internal_only_setups() -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
-            };
-            let apply_calls = Arc::new(Mutex::new(0));
-            let test_calls = Arc::new(Mutex::new(0));
-            let backend = StubBackend {
-                enumerated_topology: Topology {
-                    outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
-                },
-                applied_topology: None,
-                test_success: true,
-                test_failure: None,
-                test_message: None,
-                apply_calls: apply_calls.clone(),
-                test_calls: test_calls.clone(),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            })?;
-
-            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let state = state_store
-                .load_state()?
-                .ok_or_else(|| std::io::Error::other("state should exist"))?;
-
-            assert!(matches!(outcome, DaemonOutcome::Applied));
-            assert_eq!(
-                *test_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
-            );
-            assert_eq!(
-                *apply_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
-            );
-            assert_eq!(state.last_profile, None);
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn builtin_default_is_skipped_when_no_internal_output_exists() -> Result<(), Box<dyn Error>> {
-        with_test_state_dir(|| {
-            let state_store = StateStore::bootstrap()?;
-            let store = ProfileStore::bootstrap()?;
-            let topology = Topology {
-                outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
-            };
-            let apply_calls = Arc::new(Mutex::new(0));
-            let test_calls = Arc::new(Mutex::new(0));
-            let backend = StubBackend {
-                enumerated_topology: topology.clone(),
-                applied_topology: None,
-                test_success: true,
-                test_failure: None,
-                test_message: None,
-                apply_calls: apply_calls.clone(),
-                test_calls: test_calls.clone(),
-            };
-
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            })?;
-
-            let outcome = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
-            let state = state_store
-                .load_state()?
-                .ok_or_else(|| std::io::Error::other("state should exist"))?;
-
-            assert!(matches!(outcome, DaemonOutcome::NoMatch));
-            assert_eq!(
-                *test_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                0
-            );
-            assert_eq!(
-                *apply_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                0
-            );
-            assert_eq!(
-                state
-                    .remembered_setups
-                    .get(&topology.setup_fingerprint())
-                    .map(Topology::fingerprint),
-                Some(topology.fingerprint())
-            );
             Ok(())
         })?;
         Ok(())
@@ -1166,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_remembered_layout_falls_back_to_builtin_default() -> Result<(), Box<dyn Error>> {
+    fn unsafe_remembered_layout_is_not_applied() -> Result<(), Box<dyn Error>> {
         with_test_state_dir(|| {
             let state_store = StateStore::bootstrap()?;
             let store = ProfileStore::bootstrap()?;
@@ -1188,10 +830,6 @@ mod tests {
                 test_calls: test_calls.clone(),
             };
 
-            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
-                preset: VirtualPreset::Builtin,
-            })?;
-
             let mut state = state_store.load_state()?.unwrap_or_default();
             state
                 .remembered_setups
@@ -1203,25 +841,25 @@ mod tests {
                 .load_state()?
                 .ok_or_else(|| std::io::Error::other("state should exist"))?;
 
-            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
             assert_eq!(
                 *test_calls
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
+                0
             );
             assert_eq!(
                 *apply_calls
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
-                1
+                0
             );
             assert_eq!(
                 state
                     .remembered_setups
                     .get(&current.setup_fingerprint())
                     .map(Topology::fingerprint),
-                Some("eDP-1:on".to_string())
+                Some("eDP-1:off".to_string())
             );
             Ok(())
         })?;
