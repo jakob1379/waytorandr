@@ -117,9 +117,16 @@ fn cmd_install(json: bool) -> Result<()> {
 
 fn cmd_uninstall(json: bool) -> Result<()> {
     let path = unit_path()?;
+    cmd_uninstall_with(json, path, run_systemctl)
+}
+
+fn cmd_uninstall_with<F>(json: bool, path: PathBuf, run_systemctl: F) -> Result<()>
+where
+    F: Fn(&[&str]) -> Result<Output>,
+{
     let was_installed = path.exists();
     if was_installed {
-        let _ = run_systemctl(&["disable", "--now", UNIT_NAME]);
+        run_systemctl(&["disable", "--now", UNIT_NAME])?;
         fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
         run_systemctl(&["daemon-reload"])?;
     }
@@ -457,5 +464,21 @@ mod tests {
         assert!(err
             .to_string()
             .contains("--json is not supported with `waytorandr service run`"));
+    }
+
+    #[test]
+    fn uninstall_returns_error_when_disable_fails() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let unit_path = temp_dir.path().join(UNIT_NAME);
+        fs::write(&unit_path, "[Unit]\nDescription=test\n").expect("write unit");
+
+        let err = cmd_uninstall_with(false, unit_path.clone(), |args| {
+            assert_eq!(args, ["disable", "--now", UNIT_NAME]);
+            bail!("disable failed")
+        })
+        .expect_err("disable failure should be returned");
+
+        assert_eq!(err.to_string(), "disable failed");
+        assert!(unit_path.exists(), "unit file should remain on failure");
     }
 }

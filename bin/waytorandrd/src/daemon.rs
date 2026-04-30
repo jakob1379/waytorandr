@@ -133,7 +133,7 @@ fn maybe_apply_matching_profile(
         );
     }
 
-    if let Some(matched) = Matcher::match_profile(topology, &setup_profiles) {
+    if let Some(matched) = Matcher::match_profile_exact(topology, &setup_profiles) {
         tracing::info!(profile = %matched.profile.name, "selected matching profile for current topology");
         return apply_profile(
             backend,
@@ -188,13 +188,8 @@ fn maybe_apply_matching_profile(
                     tracing::warn!(
                         fingerprint = %setup_fingerprint,
                         error = %err,
-                        "configured default for new setups could not be applied; remembering current topology"
+                        "configured default for new setups could not be applied; will retry later"
                     );
-                    remember_current_topology(
-                        state_store,
-                        backend.capabilities().backend,
-                        topology,
-                    )?;
                     Ok(DaemonOutcome::NoMatch)
                 }
             };
@@ -344,19 +339,8 @@ fn persist_runtime_state(
     backend: BackendKind,
     topology: &Topology,
 ) -> Result<()> {
-    if let Some(profile_name) = profile_name {
-        workflow::persist_applied_runtime_state(
-            state_store,
-            profile_name,
-            Some(backend),
-            topology,
-        )?;
-    } else {
-        workflow::persist_observed_runtime_state(state_store, Some(backend), topology)?;
-    }
-    workflow::record_daemon_started_in_store(state_store, backend)?;
-
-    Ok(())
+    workflow::persist_daemon_runtime_state(state_store, profile_name, backend, topology)
+        .map_err(Into::into)
 }
 
 fn remember_current_topology(
@@ -908,6 +892,59 @@ mod tests {
                     .get(&topology.setup_fingerprint())
                     .map(Topology::fingerprint),
                 Some(topology.fingerprint())
+            );
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_new_setup_default_is_not_remembered() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let topology = Topology {
+                outputs: HashMap::from([
+                    ("eDP-1".to_string(), output("eDP-1", true)),
+                    ("DP-1".to_string(), output("DP-1", true)),
+                ]),
+            };
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: topology.clone(),
+                applied_topology: None,
+                test_success: false,
+                test_failure: None,
+                test_message: Some("rejected".to_string()),
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+
+            store.set_new_setup_default(waytorandr_core::store::DefaultTarget::Virtual {
+                preset: VirtualPreset::Builtin,
+            })?;
+
+            let first = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let second = maybe_apply_matching_profile(&backend, &store, &state_store, &topology)?;
+            let state = state_store.load_state()?.unwrap_or_default();
+
+            assert!(matches!(first, DaemonOutcome::NoMatch));
+            assert!(matches!(second, DaemonOutcome::NoMatch));
+            assert!(!state
+                .remembered_setups
+                .contains_key(&topology.setup_fingerprint()));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                2
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
             );
             Ok(())
         })?;

@@ -18,6 +18,7 @@ use waytorandr_core::store::ProfileStore;
 use waytorandr_core::workflow;
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
+const AUTO_SET_TARGET: &str = "auto";
 
 #[derive(Clone, Copy)]
 pub(super) struct SetOptions {
@@ -166,7 +167,8 @@ pub(super) fn cmd_save(
 }
 
 pub(super) fn cmd_set(
-    name: Option<&str>,
+    target: Option<&str>,
+    forced_profile: Option<&str>,
     options: SetOptions,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -184,35 +186,44 @@ pub(super) fn cmd_set(
         bail!("--global-default cannot be combined with --default or --save")
     }
 
-    if name.is_none() {
+    let (name, force_saved_profile) = match (target, forced_profile) {
+        (Some(name), None) => (name, false),
+        (None, Some(name)) => (name, true),
+        _ => bail!("set requires either a target or --profile"),
+    };
+
+    if !force_saved_profile && name == AUTO_SET_TARGET {
         if reverse {
-            bail!("--reverse requires a virtual 'horizontal' or 'vertical' set target")
+            bail!("--reverse cannot be used with `waytorandr set auto`")
         }
         if largest {
             bail!("--largest is deprecated; use `waytorandr set largest`")
         }
         if save_for_current_setup || global_default {
-            bail!("--default, --global-default, and --save require an explicit set target")
+            bail!(
+                "--default, --global-default, and --save cannot be used with `waytorandr set auto`"
+            )
         }
         return cmd_change(dry_run, output_mode);
     }
 
-    let name = name.expect("checked above");
-    if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-        let mut outcome = execute_virtual_action(preset, dry_run, global_default, None)?;
-        if save_for_current_setup {
-            outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
-            outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
-            if !dry_run {
-                let saved_layout = save_current_layout(DEFAULT_SAVED_PROFILE_NAME, None, true)?;
-                save_runtime_state(
-                    DEFAULT_SAVED_PROFILE_NAME,
-                    Some(saved_layout.backend_kind),
-                    &saved_layout.topology,
-                )?;
+    if !force_saved_profile {
+        if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
+            let mut outcome = execute_virtual_action(preset, dry_run, global_default, None)?;
+            if save_for_current_setup {
+                outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
+                outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
+                if !dry_run {
+                    let saved_layout = save_current_layout(DEFAULT_SAVED_PROFILE_NAME, None, true)?;
+                    save_runtime_state(
+                        DEFAULT_SAVED_PROFILE_NAME,
+                        Some(saved_layout.backend_kind),
+                        &saved_layout.topology,
+                    )?;
+                }
             }
+            return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
         }
-        return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
     }
 
     if global_default {
@@ -289,15 +300,22 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
     }
 
     let removed = store.remove_for_setup(name, &setup_fingerprint, &state_store)?;
+    let missing_profile_error = || anyhow!("profile '{name}' not found for the current setup");
 
     if output_mode.is_json() {
-        return write_json(&JsonRemoveResponse {
+        write_json(&JsonRemoveResponse {
             command: "remove",
             profile: name.to_string(),
             dry_run: false,
             removed: Some(removed),
             would_remove: None,
-        });
+        })?;
+
+        return if removed {
+            Ok(())
+        } else {
+            Err(missing_profile_error())
+        };
     }
 
     if removed {
@@ -306,14 +324,10 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
             success("Removed"),
             value(format!("profile '{name}'"))
         );
+        Ok(())
     } else {
-        println!(
-            "{} {}",
-            failure("Profile not found"),
-            value(format!("'{name}'"))
-        );
+        Err(missing_profile_error())
     }
-    Ok(())
 }
 
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
@@ -344,6 +358,7 @@ mod tests {
     #[test]
     fn cmd_set_requires_explicit_target_for_reverse_flag() {
         let err = cmd_set(
+            Some(AUTO_SET_TARGET),
             None,
             SetOptions {
                 dry_run: false,
@@ -359,13 +374,14 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "--reverse requires a virtual 'horizontal' or 'vertical' set target"
+            "--reverse cannot be used with `waytorandr set auto`"
         );
     }
 
     #[test]
     fn cmd_set_rejects_default_without_explicit_target() {
         let err = cmd_set(
+            Some(AUTO_SET_TARGET),
             None,
             SetOptions {
                 dry_run: false,
@@ -381,7 +397,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "--default, --global-default, and --save require an explicit set target"
+            "--default, --global-default, and --save cannot be used with `waytorandr set auto`"
         );
     }
 
@@ -389,6 +405,7 @@ mod tests {
     fn cmd_set_rejects_reverse_for_unknown_target() {
         let err = cmd_set(
             Some("desk"),
+            None,
             SetOptions {
                 dry_run: false,
                 make_default: false,
@@ -405,5 +422,25 @@ mod tests {
             err.to_string(),
             "--reverse can only be used with virtual 'horizontal' or 'vertical' set targets"
         );
+    }
+
+    #[test]
+    fn cmd_set_rejects_missing_target_and_profile() {
+        let err = cmd_set(
+            None,
+            None,
+            SetOptions {
+                dry_run: false,
+                make_default: false,
+                global_default: false,
+                save: false,
+                reverse: false,
+                largest: false,
+            },
+            OutputMode::Text,
+        )
+        .expect_err("missing target should be rejected");
+
+        assert_eq!(err.to_string(), "set requires either a target or --profile");
     }
 }

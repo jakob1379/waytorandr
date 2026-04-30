@@ -148,7 +148,7 @@ pub fn resolve_default_target_for_topology(
                 .filter(|profile| profile.name == *name)
                 .cloned()
                 .collect();
-            Matcher::match_profile(topology, &named_profiles)
+            Matcher::match_profile_exact(topology, &named_profiles)
                 .map(|matched| SelectedTarget::Profile(matched.profile))
         }
         DefaultTarget::Virtual { preset } => match preset {
@@ -179,7 +179,7 @@ pub fn select_target_for_topology(
         return Some(SelectedTarget::Profile(profile.clone()));
     }
 
-    if let Some(matched) = Matcher::match_profile(topology, profiles) {
+    if let Some(matched) = Matcher::match_profile_exact(topology, profiles) {
         return Some(SelectedTarget::Profile(matched.profile));
     }
 
@@ -216,7 +216,7 @@ pub fn current_profile_name(
         .as_deref()
         .and_then(|last_profile| profiles.iter().find(|profile| profile.name == last_profile))
         .and_then(|profile| {
-            if Matcher::match_profile(topology, std::slice::from_ref(profile)).is_some() {
+            if Matcher::match_profile_exact(topology, std::slice::from_ref(profile)).is_some() {
                 Some(profile.name.clone())
             } else {
                 None
@@ -254,7 +254,7 @@ pub fn profile_from_topology(name: &str, topology: &Topology) -> Profile {
 /// Returns `CoreError::ProfileMismatch` if the profile does not match the topology,
 /// or any planning error reported by the planner.
 pub fn plan_profile_for_topology(profile: &Profile, topology: &Topology) -> CoreResult<LayoutPlan> {
-    let matched = Matcher::match_profile(topology, std::slice::from_ref(profile))
+    let matched = Matcher::match_profile_exact(topology, std::slice::from_ref(profile))
         .ok_or(CoreError::ProfileMismatch)?;
     Planner::plan_from_profile(&matched.profile, &matched.matched_outputs, topology)
         .map_err(Into::into)
@@ -361,10 +361,9 @@ where
     B: Backend + ?Sized,
     F: FnMut() -> CoreResult<PlanSnapshot>,
 {
-    let validation_snapshot = plan_snapshot()?;
-    let apply_snapshot = plan_snapshot()?;
+    let plan_snapshot = plan_snapshot()?;
 
-    match apply_plan_cycle(backend, hooks, validation_snapshot, apply_snapshot)? {
+    match apply_plan_cycle(backend, hooks, plan_snapshot)? {
         ExecutionCycle::Applied {
             validation,
             apply_plan,
@@ -529,28 +528,27 @@ fn validate_plan_cycle<B: Backend + ?Sized>(
 fn apply_plan_cycle<B: Backend + ?Sized>(
     backend: &B,
     hooks: &Hooks,
-    validation_snapshot: PlanSnapshot,
-    apply_snapshot: PlanSnapshot,
+    plan_snapshot: PlanSnapshot,
 ) -> CoreResult<ExecutionCycle> {
-    let validation = validate_plan(backend, &validation_snapshot.plan)?;
+    let validation = validate_plan(backend, &plan_snapshot.plan)?;
 
-    if !validation.is_accepted() {
-        return Ok(invalid_validation_cycle(
-            validation_snapshot.plan,
+    if validation.status == ValidationStatus::Rejected {
+        return Ok(ExecutionCycle::Rejected {
+            validation_plan: plan_snapshot.plan,
             validation,
-        ));
+        });
     }
 
-    let apply_result = apply_plan(backend, hooks, &apply_snapshot.plan)?;
+    let apply_result = apply_plan(backend, hooks, &plan_snapshot.plan)?;
     let applied_topology = apply_result
         .applied_state
         .clone()
-        .unwrap_or(apply_snapshot.topology);
+        .unwrap_or(plan_snapshot.topology);
 
     Ok(ExecutionCycle::Applied {
-        validation_plan: validation_snapshot.plan,
+        validation_plan: plan_snapshot.plan.clone(),
         validation,
-        apply_plan: apply_snapshot.plan,
+        apply_plan: plan_snapshot.plan,
         apply_result,
         applied_topology,
     })
@@ -566,11 +564,10 @@ pub fn persist_applied_runtime_state(
     backend: Option<BackendKind>,
     topology: &Topology,
 ) -> CoreResult<()> {
-    let topology = state_store.observe_topology_and_persist_known_outputs(topology)?;
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.record_applied_profile(profile_name, backend, &topology);
-    state_store.save_state(&state)?;
-    Ok(())
+    state_store.update_observed_topology(topology, |state, topology| {
+        state.record_applied_profile(profile_name, backend, topology);
+        Ok(())
+    })
 }
 
 /// Persist runtime state after observing a topology.
@@ -582,11 +579,31 @@ pub fn persist_observed_runtime_state(
     backend: Option<BackendKind>,
     topology: &Topology,
 ) -> CoreResult<()> {
-    let topology = state_store.observe_topology_and_persist_known_outputs(topology)?;
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.record_observed_topology(backend, &topology);
-    state_store.save_state(&state)?;
-    Ok(())
+    state_store.update_observed_topology(topology, |state, topology| {
+        state.record_observed_topology(backend, topology);
+        Ok(())
+    })
+}
+
+/// Persist daemon runtime state after observing or applying a topology.
+///
+/// # Errors
+/// Returns an error if topology or state cannot be loaded or saved.
+pub fn persist_daemon_runtime_state(
+    state_store: &StateStore,
+    profile_name: Option<&str>,
+    backend: BackendKind,
+    topology: &Topology,
+) -> CoreResult<()> {
+    state_store.update_observed_topology(topology, |state, topology| {
+        if let Some(profile_name) = profile_name {
+            state.record_applied_profile(profile_name, Some(backend), topology);
+        } else {
+            state.record_observed_topology(Some(backend), topology);
+        }
+        state.record_daemon_started(backend);
+        Ok(())
+    })
 }
 
 /// Persist the default profile for a setup fingerprint.
@@ -598,10 +615,10 @@ pub fn set_default_profile_for_setup_in_store(
     setup_fingerprint: &str,
     profile_name: &str,
 ) -> CoreResult<()> {
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.set_default_profile_for_setup(setup_fingerprint, profile_name);
-    state_store.save_state(&state)?;
-    Ok(())
+    state_store.update_state(|state| {
+        state.set_default_profile_for_setup(setup_fingerprint, profile_name);
+        Ok(())
+    })
 }
 
 /// Persist the display name for a setup fingerprint.
@@ -613,10 +630,10 @@ pub fn set_setup_name_for_setup_in_store(
     setup_fingerprint: &str,
     setup_name: &str,
 ) -> CoreResult<()> {
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.set_setup_name_for_setup(setup_fingerprint, setup_name);
-    state_store.save_state(&state)?;
-    Ok(())
+    state_store.update_state(|state| {
+        state.set_setup_name_for_setup(setup_fingerprint, setup_name);
+        Ok(())
+    })
 }
 
 /// Persist the backend that started the daemon.
@@ -627,10 +644,10 @@ pub fn record_daemon_started_in_store(
     state_store: &StateStore,
     backend: BackendKind,
 ) -> CoreResult<()> {
-    let mut state = state_store.load_state()?.unwrap_or_default();
-    state.record_daemon_started(backend);
-    state_store.save_state(&state)?;
-    Ok(())
+    state_store.update_state(|state| {
+        state.record_daemon_started(backend);
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -803,6 +820,21 @@ mod tests {
     }
 
     #[test]
+    fn current_profile_name_rejects_profiles_when_topology_has_extra_real_outputs() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("DP-1".to_string(), output("DP-1")),
+                ("HDMI-A-1".to_string(), output("HDMI-A-1")),
+            ]),
+        };
+        let profiles = vec![profile("desk", "DP-1")];
+        let mut state = State::default();
+        state.last_profile = Some("desk".to_string());
+
+        assert_eq!(current_profile_name(&topology, &profiles, &state), None);
+    }
+
+    #[test]
     fn profile_from_topology_builds_matchers_from_real_outputs() {
         let mut virtual_output = output("HEADLESS-1");
         virtual_output.identity.is_virtual = true;
@@ -868,6 +900,21 @@ mod tests {
             plan.outputs["DP-1"].identity.connector.as_deref(),
             Some("DP-1")
         );
+    }
+
+    #[test]
+    fn plan_profile_for_topology_rejects_extra_real_outputs() {
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("DP-1".to_string(), output("DP-1")),
+                ("HDMI-A-1".to_string(), output("HDMI-A-1")),
+            ]),
+        };
+
+        assert!(matches!(
+            plan_profile_for_topology(&profile("desk", "DP-1"), &topology),
+            Err(CoreError::ProfileMismatch)
+        ));
     }
 
     #[derive(Clone)]
@@ -963,10 +1010,6 @@ mod tests {
                 topology.clone(),
                 LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
             ),
-            PlanSnapshot::new(
-                topology.clone(),
-                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            ),
         )
         .unwrap();
 
@@ -989,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_plan_cycle_stops_when_validation_is_unsupported() {
+    fn execute_plan_cycle_applies_when_validation_is_unsupported() {
         let backend = CycleBackend {
             test_result: TestResult::unsupported(None),
             test_calls: Arc::new(Mutex::new(0)),
@@ -1007,23 +1050,24 @@ mod tests {
                 topology.clone(),
                 LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
             ),
-            PlanSnapshot::new(
-                topology.clone(),
-                LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
-            ),
         )
         .unwrap();
 
         match cycle {
-            ExecutionCycle::Unsupported { validation, .. } => {
+            ExecutionCycle::Applied {
+                validation,
+                apply_result,
+                ..
+            } => {
                 assert_eq!(validation.status, ValidationStatus::Unsupported);
                 assert!(!validation.success);
+                assert!(apply_result.success);
             }
             ExecutionCycle::DryRun { .. }
             | ExecutionCycle::Rejected { .. }
-            | ExecutionCycle::Applied { .. } => panic!("expected unsupported cycle"),
+            | ExecutionCycle::Unsupported { .. } => panic!("expected applied cycle"),
         }
         assert_eq!(*backend.test_calls.lock().unwrap(), 1);
-        assert_eq!(*backend.apply_calls.lock().unwrap(), 0);
+        assert_eq!(*backend.apply_calls.lock().unwrap(), 1);
     }
 }

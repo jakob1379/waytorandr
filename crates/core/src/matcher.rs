@@ -24,9 +24,29 @@ impl Matcher {
 
     #[must_use]
     pub fn matching_profiles(topology: &Topology, profiles: &[Profile]) -> Vec<MatchResult> {
+        Self::matching_profiles_internal(topology, profiles, false)
+    }
+
+    #[must_use]
+    pub fn match_profile_exact(topology: &Topology, profiles: &[Profile]) -> Option<MatchResult> {
+        Self::matching_profiles_exact(topology, profiles)
+            .into_iter()
+            .next()
+    }
+
+    #[must_use]
+    pub fn matching_profiles_exact(topology: &Topology, profiles: &[Profile]) -> Vec<MatchResult> {
+        Self::matching_profiles_internal(topology, profiles, true)
+    }
+
+    fn matching_profiles_internal(
+        topology: &Topology,
+        profiles: &[Profile],
+        require_exact: bool,
+    ) -> Vec<MatchResult> {
         let mut candidates: Vec<MatchResult> = profiles
             .iter()
-            .filter_map(|p| Self::score_profile(topology, p))
+            .filter_map(|p| Self::score_profile(topology, p, require_exact))
             .collect();
 
         candidates.sort_by(|a, b| {
@@ -39,17 +59,30 @@ impl Matcher {
         candidates
     }
 
-    fn score_profile(topology: &Topology, profile: &Profile) -> Option<MatchResult> {
+    fn score_profile(
+        topology: &Topology,
+        profile: &Profile,
+        require_exact: bool,
+    ) -> Option<MatchResult> {
         let mut matched_topology_outputs: HashMap<String, OutputState> = HashMap::new();
+        let mut matched_outputs: HashMap<String, String> = HashMap::new();
         let mut unmatched_required: Vec<String> = Vec::new();
         let mut total_score = 0u32;
+        let mut used_layout_names: Vec<String> = Vec::new();
 
         for matcher in &profile.match_rules {
-            let matched =
-                Self::find_matching_output(&matcher.identity, topology, &matched_topology_outputs);
+            let matched = Self::find_matching_output(matcher, topology, &matched_topology_outputs);
             match matched {
                 Some((topo_name, output)) => {
+                    let layout_name = Self::find_matching_layout_entry(
+                        profile,
+                        &output.identity,
+                        matcher,
+                        &used_layout_names,
+                    )?;
                     matched_topology_outputs.insert(topo_name.clone(), output.clone());
+                    used_layout_names.push(layout_name.clone());
+                    matched_outputs.insert(topo_name.clone(), layout_name);
                     total_score += Self::identity_match_score(&matcher.identity, &output.identity);
                 }
                 None if matcher.required => {
@@ -63,32 +96,21 @@ impl Matcher {
             return None;
         }
 
-        let topology_names: std::collections::HashSet<String> =
-            topology.outputs.keys().cloned().collect();
-        let matched_names: std::collections::HashSet<String> =
-            matched_topology_outputs.keys().cloned().collect();
-        let extra_outputs: Vec<String> = topology_names
-            .difference(&matched_names)
-            .filter(|name| {
-                topology
-                    .outputs
-                    .get(*name)
-                    .is_some_and(|o| !o.identity.is_ignored && !o.identity.is_virtual)
+        let mut extra_outputs: Vec<String> = topology
+            .outputs
+            .iter()
+            .filter(|(name, output)| {
+                !matched_topology_outputs.contains_key(*name)
+                    && !output.identity.is_ignored
+                    && !output.identity.is_virtual
             })
-            .cloned()
+            .map(|(name, _)| name.clone())
             .collect();
+        extra_outputs.sort();
 
-        if profile.match_rules.is_empty() && !extra_outputs.is_empty() {
+        if (profile.match_rules.is_empty() || require_exact) && !extra_outputs.is_empty() {
             return None;
         }
-
-        let matched_outputs: HashMap<String, String> = matched_topology_outputs
-            .into_iter()
-            .map(|(topo_name, output)| {
-                Self::find_matching_layout_entry(profile, &output.identity)
-                    .map(|layout_name| (topo_name, layout_name))
-            })
-            .collect::<Option<HashMap<_, _>>>()?;
 
         Some(MatchResult {
             profile: profile.clone(),
@@ -100,41 +122,65 @@ impl Matcher {
     }
 
     fn find_matching_output(
-        identity: &OutputIdentity,
+        matcher: &crate::profile::OutputMatcher,
         topology: &Topology,
         already_matched: &HashMap<String, OutputState>,
     ) -> Option<(String, OutputState)> {
-        let mut best_match: Option<(String, OutputState, u8)> = None;
+        let mut candidates: Vec<(String, OutputState, bool, u8)> = topology
+            .outputs
+            .iter()
+            .filter(|(name, state)| {
+                !already_matched.contains_key(*name)
+                    && !state.identity.is_ignored
+                    && !state.identity.is_virtual
+                    && Self::identities_match(&matcher.identity, &state.identity)
+            })
+            .map(|(name, state)| {
+                (
+                    name.clone(),
+                    state.clone(),
+                    matcher
+                        .position_hint
+                        .is_some_and(|hint| hint == state.position),
+                    state.identity.match_strength(),
+                )
+            })
+            .collect();
 
-        for (name, state) in &topology.outputs {
-            if already_matched.contains_key(name) {
-                continue;
-            }
-            if state.identity.is_ignored || state.identity.is_virtual {
-                continue;
-            }
+        candidates.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then(a.0.cmp(&b.0)));
 
-            if Self::identities_match(identity, &state.identity) {
-                let score = state.identity.match_strength();
-                match &best_match {
-                    None => best_match = Some((name.clone(), state.clone(), score)),
-                    Some((_, _, best)) if score > *best => {
-                        best_match = Some((name.clone(), state.clone(), score));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        best_match.map(|(name, state, _)| (name, state))
+        candidates
+            .into_iter()
+            .next()
+            .map(|(name, state, _, _)| (name, state))
     }
 
-    fn find_matching_layout_entry(profile: &Profile, identity: &OutputIdentity) -> Option<String> {
-        profile
+    fn find_matching_layout_entry(
+        profile: &Profile,
+        identity: &OutputIdentity,
+        matcher: &crate::profile::OutputMatcher,
+        used_layout_names: &[String],
+    ) -> Option<String> {
+        let mut candidates: Vec<(String, bool)> = profile
             .layout
             .iter()
-            .find(|(_, config)| identities_match(&config.state.identity, identity))
-            .map(|(name, _)| name.clone())
+            .filter(|(name, config)| {
+                !used_layout_names.contains(name)
+                    && identities_match(&config.state.identity, identity)
+                    && identities_match(&matcher.identity, &config.state.identity)
+            })
+            .map(|(name, config)| {
+                (
+                    name.clone(),
+                    matcher
+                        .position_hint
+                        .is_some_and(|hint| hint == config.state.position),
+                )
+            })
+            .collect();
+
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        candidates.into_iter().next().map(|(name, _)| name)
     }
 
     #[must_use]
@@ -182,7 +228,7 @@ impl Matcher {
 mod tests {
     use super::*;
     use crate::model::{Mode, Position, Transform};
-    use crate::profile::{Hooks, OutputMatcher};
+    use crate::profile::{Hooks, OutputConfig, OutputMatcher};
 
     fn make_topology() -> Topology {
         let mut outputs = HashMap::new();
@@ -209,6 +255,22 @@ mod tests {
             state
         });
         Topology { outputs }
+    }
+
+    fn duplicate_topology() -> Topology {
+        let mut topology = Topology::default();
+
+        let mut left = make_topology().outputs.remove("DP-1").unwrap();
+        left.identity.connector = None;
+        left.position = Position::new(0, 0);
+        topology.outputs.insert("DP-1".to_string(), left);
+
+        let mut right = make_topology().outputs.remove("DP-1").unwrap();
+        right.identity.connector = None;
+        right.position = Position::new(3840, 0);
+        topology.outputs.insert("DP-2".to_string(), right);
+
+        topology
     }
 
     #[test]
@@ -314,5 +376,101 @@ mod tests {
         };
 
         assert!(Matcher::identities_match(&query, &candidate));
+    }
+
+    #[test]
+    fn duplicate_monitors_bind_one_to_one_with_position_hints() {
+        let topology = duplicate_topology();
+        let identity = OutputIdentity {
+            edid_hash: Some("abc123".to_string()),
+            make: Some("Dell".to_string()),
+            model: Some("U2720Q".to_string()),
+            serial: Some("SN001".to_string()),
+            description: Some("Dell U2720Q".to_string()),
+            ..OutputIdentity::default()
+        };
+        let profile = Profile {
+            name: "desk".to_string(),
+            priority: 0,
+            match_rules: vec![
+                OutputMatcher::new(identity.clone(), true, Some(Position::new(0, 0))),
+                OutputMatcher::new(identity.clone(), true, Some(Position::new(3840, 0))),
+            ],
+            layout: HashMap::from([
+                (
+                    "left".to_string(),
+                    OutputConfig {
+                        state: {
+                            let mut state = output_state(&identity, Position::new(0, 0));
+                            state.identity.connector = None;
+                            state
+                        },
+                        preset: None,
+                    },
+                ),
+                (
+                    "right".to_string(),
+                    OutputConfig {
+                        state: {
+                            let mut state = output_state(&identity, Position::new(3840, 0));
+                            state.identity.connector = None;
+                            state
+                        },
+                        preset: None,
+                    },
+                ),
+            ]),
+            hooks: Hooks::default(),
+        };
+
+        let result = Matcher::match_profile(&topology, &[profile]).unwrap();
+
+        assert_eq!(result.matched_outputs.len(), 2);
+        assert_eq!(
+            result.matched_outputs.get("DP-1").map(String::as_str),
+            Some("left")
+        );
+        assert_eq!(
+            result.matched_outputs.get("DP-2").map(String::as_str),
+            Some("right")
+        );
+    }
+
+    #[test]
+    fn exact_match_rejects_extra_real_outputs() {
+        let mut topology = make_topology();
+        topology.outputs.insert("HDMI-A-1".to_string(), {
+            let mut state = OutputState::new("HDMI-A-1");
+            state.enabled = true;
+            state
+        });
+        let profile = Profile {
+            name: "desk".to_string(),
+            priority: 0,
+            match_rules: vec![OutputMatcher::new(
+                OutputIdentity::new("DP-1"),
+                true,
+                Some(Position::new(0, 0)),
+            )],
+            layout: HashMap::from([(
+                "left".to_string(),
+                OutputConfig {
+                    state: topology.outputs["DP-1"].clone(),
+                    preset: None,
+                },
+            )]),
+            hooks: Hooks::default(),
+        };
+
+        assert!(Matcher::match_profile(&topology, std::slice::from_ref(&profile)).is_some());
+        assert!(Matcher::match_profile_exact(&topology, &[profile]).is_none());
+    }
+
+    fn output_state(identity: &OutputIdentity, position: Position) -> OutputState {
+        let mut state = OutputState::new(identity.connector.as_deref().unwrap_or("DP-1"));
+        state.identity = identity.clone();
+        state.enabled = true;
+        state.position = position;
+        state
     }
 }

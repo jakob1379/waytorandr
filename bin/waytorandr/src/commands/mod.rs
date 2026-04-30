@@ -40,6 +40,7 @@ pub(crate) fn run() -> Result<()> {
     match cli.command {
         Commands::Set(args) => write::cmd_set(
             args.target.as_deref(),
+            args.profile.as_deref(),
             write::SetOptions {
                 dry_run: args.dry_run,
                 make_default: args.make_default,

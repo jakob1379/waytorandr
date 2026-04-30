@@ -1,3 +1,4 @@
+use crate::atomic::{atomic_write, with_exclusive_lock};
 use crate::error::{CoreError, CoreResult};
 use crate::model::{BackendKind, OutputIdentity, Topology};
 use crate::normalize::normalize_topology_with_known_outputs;
@@ -150,13 +151,13 @@ impl StateStore {
     /// # Errors
     /// Returns an error if the state file cannot be written.
     pub fn save_state(&self, state: &State) -> CoreResult<()> {
+        with_exclusive_lock(&self.state_path(), || self.save_state_unlocked(state))
+    }
+
+    fn save_state_unlocked(&self, state: &State) -> CoreResult<()> {
         let path = self.dir.join("state.toml");
         let content = toml::to_string_pretty(state)?;
-        fs::write(&path, content).map_err(|source| CoreError::WriteFile {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(())
+        atomic_write(&path, content.as_bytes())
     }
 
     /// Loads the current state.
@@ -164,7 +165,11 @@ impl StateStore {
     /// # Errors
     /// Returns an error if the state file cannot be read or parsed.
     pub fn load_state(&self) -> CoreResult<Option<State>> {
-        let path = self.dir.join("state.toml");
+        self.load_state_unlocked()
+    }
+
+    fn load_state_unlocked(&self) -> CoreResult<Option<State>> {
+        let path = self.state_path();
         if path.exists() {
             let content = fs::read_to_string(&path).map_err(|source| CoreError::ReadFile {
                 path: path.clone(),
@@ -179,6 +184,44 @@ impl StateStore {
         }
     }
 
+    /// Updates state under the store lock.
+    ///
+    /// # Errors
+    /// Returns an error if state loading, mutation, locking, or saving fails.
+    pub fn update_state<T>(
+        &self,
+        update: impl FnOnce(&mut State) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        with_exclusive_lock(&self.state_path(), || {
+            let mut state = self.load_state_unlocked()?.unwrap_or_default();
+            let result = update(&mut state)?;
+            self.save_state_unlocked(&state)?;
+            Ok(result)
+        })
+    }
+
+    /// Updates state after normalizing and caching observed topology under one lock.
+    ///
+    /// # Errors
+    /// Returns an error if state loading, mutation, locking, or saving fails.
+    pub fn update_observed_topology<T>(
+        &self,
+        topology: &Topology,
+        update: impl FnOnce(&mut State, &Topology) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        self.update_state(|state| {
+            let normalized = normalize_topology_with_known_outputs(topology, &state.known_outputs);
+            for (name, output) in &normalized.outputs {
+                if state.known_outputs.get(name.as_str()) != Some(&output.identity) {
+                    state
+                        .known_outputs
+                        .insert(name.clone(), output.identity.clone());
+                }
+            }
+            update(state, &normalized)
+        })
+    }
+
     /// Observes a topology and updates cached outputs.
     ///
     /// # Errors
@@ -187,24 +230,11 @@ impl StateStore {
         &self,
         topology: &Topology,
     ) -> CoreResult<Topology> {
-        let mut state = self.load_state()?.unwrap_or_default();
-        let normalized = normalize_topology_with_known_outputs(topology, &state.known_outputs);
-        let mut changed = false;
+        self.update_observed_topology(topology, |_, normalized| Ok(normalized.clone()))
+    }
 
-        for (name, output) in &normalized.outputs {
-            if state.known_outputs.get(name.as_str()) != Some(&output.identity) {
-                state
-                    .known_outputs
-                    .insert(name.clone(), output.identity.clone());
-                changed = true;
-            }
-        }
-
-        if changed {
-            self.save_state(&state)?;
-        }
-
-        Ok(normalized)
+    fn state_path(&self) -> PathBuf {
+        self.dir.join("state.toml")
     }
 }
 

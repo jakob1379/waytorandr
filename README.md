@@ -17,7 +17,7 @@ It includes:
 - Set a preferred default profile for each display fingerprint and a default target for new setups
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
-- Offer dynamic shell completion for saved profile names and `set` targets
+- Offer dynamic shell completion for current-setup saved profile names and `set` targets
 
 ## Backend Support
 
@@ -28,6 +28,10 @@ It includes:
 - GNOME via Mutter DisplayConfig
 
 Actively exercised on Niri and KDE Plasma/KWin.
+
+Set `WAYTORANDR_BACKEND=wlroots`, `WAYTORANDR_BACKEND=kscreen`, or
+`WAYTORANDR_BACKEND=gnome` to force a backend in nested or mixed sessions where
+desktop environment variables point at the wrong display stack.
 
 > [!NOTE]
 > The CLI and daemon are for Wayland sessions. The bundled user service starts
@@ -59,6 +63,7 @@ Inspect the current layout and save a profile:
 ```bash
 ./result/bin/waytorandr status
 ./result/bin/waytorandr save work-dock --setup-name office
+./result/bin/waytorandr set auto
 ./result/bin/waytorandr set work-dock
 ./result/bin/waytorandr set work-dock --default
 ./result/bin/waytorandr set vertical --save
@@ -76,9 +81,9 @@ Preview a virtual layout without applying it:
 ## CLI
 
 ```text
-waytorandr set       Set a saved profile, virtual configuration, or default/matching profile
+waytorandr set       Set a saved target, virtual configuration, or `auto` selection
 waytorandr save      Save the current compositor layout as a profile
-waytorandr remove    Remove a saved profile
+waytorandr remove    Remove a saved profile for the current setup
 waytorandr cycle     Set the next saved profile
 waytorandr status    Show the current layout state and related saved profiles
 waytorandr version   Show the waytorandr version
@@ -87,6 +92,7 @@ waytorandr service   Manage the waytorandrd user service
 
 Built-in `set` targets:
 
+- `auto` - apply the setup default, best matching saved profile, or new-setup default
 - `off` - disable external outputs and keep built-in panels on when present
 - `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
@@ -94,6 +100,12 @@ Built-in `set` targets:
 - `mirror` - native mirroring at one shared mode
 - `horizontal`
 - `vertical`
+
+Bare `waytorandr set` is rejected; use `waytorandr set auto` for automatic
+selection.
+
+If a saved profile name collides with `auto` or a virtual set target, select it
+explicitly with `waytorandr set --profile <name>`.
 
 `--default` is setup-local: it only updates the default for the current setup
 fingerprint. With virtual targets, `set --default` saves the resulting layout as
@@ -108,7 +120,7 @@ for the full command reference and examples.
 > Use `--json` on supported commands when you want stable machine-readable output.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
 > `waytorandr service run` does not support `--json`.
-> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`.
+> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
 > `waytorandr status --json` includes optional `setup_name`, `builtin_output`, and `new_setup_default` fields when they are configured.
 
 ## Daemon

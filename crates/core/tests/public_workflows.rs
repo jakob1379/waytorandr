@@ -461,6 +461,8 @@ fn runtime_selects_applies_and_records_matching_profile() -> Result<(), Box<dyn 
         let state_store = StateStore::bootstrap()?;
         let backend = TestBackend {
             topology: topology.clone(),
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: true,
             test_result: TestResult::supported(None),
             apply_calls: Arc::new(Mutex::new(0)),
             apply_success: true,
@@ -634,6 +636,8 @@ fn setup_names_persist_per_setup_fingerprint() -> Result<(), Box<dyn Error>> {
 #[derive(Clone)]
 struct TestBackend {
     topology: Topology,
+    enumerate_calls: Arc<Mutex<usize>>,
+    can_test: bool,
     test_result: TestResult,
     apply_calls: Arc<Mutex<usize>>,
     apply_success: bool,
@@ -644,11 +648,15 @@ struct TestBackend {
 impl Backend for TestBackend {
     fn capabilities(&self) -> Capabilities {
         let mut capabilities = Capabilities::new(BackendKind::Test);
-        capabilities.can_test = true;
+        capabilities.can_test = self.can_test;
         capabilities
     }
 
     fn enumerate_outputs(&self) -> waytorandr_core::error::CoreResult<Topology> {
+        *self
+            .enumerate_calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         Ok(self.topology.clone())
     }
 
@@ -688,6 +696,8 @@ fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Er
         let state_store = StateStore::bootstrap()?;
         let backend = TestBackend {
             topology,
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: true,
             test_result: TestResult::supported(None),
             apply_calls: Arc::new(Mutex::new(0)),
             apply_success: true,
@@ -723,6 +733,13 @@ fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Er
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             1
         );
+        assert_eq!(
+            *backend
+                .enumerate_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
 
         let log = std::fs::read_to_string(log_path)?;
         assert!(log.contains("pre"));
@@ -741,6 +758,8 @@ fn validate_profile_workflow_returns_accepted_plan() -> Result<(), Box<dyn Error
         let state_store = StateStore::bootstrap()?;
         let backend = TestBackend {
             topology: topology.clone(),
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: true,
             test_result: TestResult::supported(None),
             apply_calls: Arc::new(Mutex::new(0)),
             apply_success: true,
@@ -779,6 +798,8 @@ fn apply_profile_workflow_returns_structured_apply_failures() -> Result<(), Box<
         let state_store = StateStore::bootstrap()?;
         let backend = TestBackend {
             topology,
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: true,
             test_result: TestResult::supported(None),
             apply_calls: Arc::new(Mutex::new(0)),
             apply_success: false,
@@ -801,6 +822,91 @@ fn apply_profile_workflow_returns_structured_apply_failures() -> Result<(), Box<
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             1
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn apply_profile_workflow_applies_when_validation_is_unsupported() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
+        let backend = TestBackend {
+            topology,
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: false,
+            test_result: TestResult::unsupported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
+        };
+
+        let execution =
+            workflow::apply_profile_workflow(&backend, &state_store, &profile("desk", "DP-1"))?;
+
+        assert!(matches!(
+            execution,
+            workflow::ApplyExecution::Applied { ref validation, ref apply_result, .. }
+                if validation.status == waytorandr_core::engine::ValidationStatus::Unsupported
+                    && apply_result.success
+        ));
+        assert_eq!(
+            *backend
+                .apply_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn layout_only_profile_save_is_canonical_and_idempotent() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let store = ProfileStore::bootstrap()?;
+        let state_store = StateStore::bootstrap()?;
+        let mut state = State::default();
+        state.known_outputs.insert("DP-1".to_string(), {
+            let mut identity = OutputIdentity::new("DP-1");
+            identity.make = Some("Dell".to_string());
+            identity.model = Some("U2720Q".to_string());
+            identity
+        });
+        state_store.save_state(&state)?;
+
+        let profile = Profile::new(
+            "desk",
+            0,
+            Vec::new(),
+            HashMap::from([("DP-1".to_string(), output("DP-1").into())]),
+        );
+
+        store.save(&profile, &state_store)?;
+        store.save(&profile, &state_store)?;
+
+        let listed = store.list(&state_store)?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].profile.match_rules.len(), 1);
+        assert_eq!(
+            listed[0].profile.match_rules[0].identity.make.as_deref(),
+            Some("Dell")
+        );
+
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(config_path(temp))?)?;
+        assert_eq!(persisted["profiles"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            persisted["profiles"][0]["match_rules"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
         );
         Ok(())
     })?;

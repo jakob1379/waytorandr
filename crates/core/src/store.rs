@@ -1,6 +1,7 @@
+use crate::atomic::{atomic_write, with_exclusive_lock};
 use crate::error::{CoreError, CoreResult};
 use crate::model::{OutputIdentity, VirtualPreset};
-use crate::normalize::normalize_profile_with_known_outputs;
+use crate::normalize::canonicalize_profile;
 use crate::profile::Profile;
 use crate::state::{State, StateStore};
 use std::collections::HashMap;
@@ -195,11 +196,12 @@ impl ProfileStore {
         setup_fingerprint: &str,
         profile_name: &str,
     ) -> CoreResult<()> {
-        let mut stored = self.load_profiles_file()?;
-        stored
-            .settings
-            .set_setup_default_profile(setup_fingerprint, profile_name);
-        self.save_profiles_file(&stored)
+        self.update_profiles_file(|stored| {
+            stored
+                .settings
+                .set_setup_default_profile(setup_fingerprint, profile_name);
+            Ok(())
+        })
     }
 
     /// Sets the default target used for new setups.
@@ -207,9 +209,10 @@ impl ProfileStore {
     /// # Errors
     /// Returns an error if profile storage cannot be read or written.
     pub fn set_new_setup_default(&self, target: DefaultTarget) -> CoreResult<()> {
-        let mut stored = self.load_profiles_file()?;
-        stored.settings.new_setup_default = Some(target);
-        self.save_profiles_file(&stored)
+        self.update_profiles_file(|stored| {
+            stored.settings.new_setup_default = Some(target);
+            Ok(())
+        })
     }
 
     /// Lists profiles with normalized state.
@@ -224,7 +227,7 @@ impl ProfileStore {
             .load_profiles()?
             .into_iter()
             .map(|profile| {
-                let profile = normalize_profile_with_known_outputs(&profile, known_outputs);
+                let profile = canonicalize_profile(&profile, known_outputs);
                 StoredProfile {
                     setup_fingerprint: profile.setup_fingerprint(),
                     profile,
@@ -373,17 +376,17 @@ impl ProfileStore {
         profile: &Profile,
         known_outputs: &HashMap<String, OutputIdentity>,
     ) -> CoreResult<()> {
-        let setup_fingerprint =
-            normalize_profile_with_known_outputs(profile, known_outputs).setup_fingerprint();
-        let mut stored = self.load_profiles_file()?;
-        stored.profiles.retain(|existing| {
-            !(existing.name == profile.name
-                && normalize_profile_with_known_outputs(existing, known_outputs)
-                    .setup_fingerprint()
-                    == setup_fingerprint)
-        });
-        stored.profiles.push(profile.clone());
-        self.save_profiles_file(&stored)?;
+        let profile = canonicalize_profile(profile, known_outputs);
+        let setup_fingerprint = profile.setup_fingerprint();
+        self.update_profiles_file(|stored| {
+            stored.profiles.retain(|existing| {
+                !(existing.name == profile.name
+                    && canonicalize_profile(existing, known_outputs).setup_fingerprint()
+                        == setup_fingerprint)
+            });
+            stored.profiles.push(profile.clone());
+            Ok(())
+        })?;
 
         tracing::info!(
             "Saved profile '{name}' to {path:?}",
@@ -403,29 +406,32 @@ impl ProfileStore {
         setup_fingerprint: &str,
         known_outputs: &HashMap<String, OutputIdentity>,
     ) -> CoreResult<bool> {
-        let mut stored = self.load_profiles_file()?;
-        let original_len = stored.profiles.len();
-        stored.profiles.retain(|profile| {
-            !(profile.name == name
-                && normalize_profile_with_known_outputs(profile, known_outputs).setup_fingerprint()
-                    == setup_fingerprint)
-        });
+        let removed = self.update_profiles_file_maybe(|stored| {
+            let original_len = stored.profiles.len();
+            stored.profiles.retain(|profile| {
+                !(profile.name == name
+                    && canonicalize_profile(profile, known_outputs).setup_fingerprint()
+                        == setup_fingerprint)
+            });
 
-        if stored.profiles.len() == original_len {
-            return Ok(false);
-        }
+            if stored.profiles.len() == original_len {
+                return Ok((false, false));
+            }
 
-        stored
-            .settings
-            .clear_setup_default_if_matches(setup_fingerprint, name);
-        if !stored.profiles.iter().any(|profile| profile.name == name) {
             stored
                 .settings
-                .clear_new_setup_default_if_profile_matches(name);
+                .clear_setup_default_if_matches(setup_fingerprint, name);
+            if !stored.profiles.iter().any(|profile| profile.name == name) {
+                stored
+                    .settings
+                    .clear_new_setup_default_if_profile_matches(name);
+            }
+            Ok((true, true))
+        })?;
+        if removed {
+            tracing::info!("Removed profile '{name}'");
         }
-        self.save_profiles_file(&stored)?;
-        tracing::info!("Removed profile '{name}'");
-        Ok(true)
+        Ok(removed)
     }
 
     /// Removes a uniquely named profile.
@@ -433,28 +439,31 @@ impl ProfileStore {
     /// # Errors
     /// Returns an error if the name is ambiguous or storage cannot be read or written.
     pub fn remove_unique(&self, name: &str) -> CoreResult<bool> {
-        let mut stored = self.load_profiles_file()?;
-        let matches = stored
-            .profiles
-            .iter()
-            .filter(|profile| profile.name == name)
-            .count();
+        let removed = self.update_profiles_file_maybe(|stored| {
+            let matches = stored
+                .profiles
+                .iter()
+                .filter(|profile| profile.name == name)
+                .count();
 
-        if matches > 1 {
-            return Err(CoreError::AmbiguousProfile(name.to_string()));
+            if matches > 1 {
+                return Err(CoreError::AmbiguousProfile(name.to_string()));
+            }
+
+            let original_len = stored.profiles.len();
+            stored.profiles.retain(|profile| profile.name != name);
+
+            if stored.profiles.len() == original_len {
+                return Ok((false, false));
+            }
+
+            stored.settings.clear_all_profile_references(name);
+            Ok((true, true))
+        })?;
+        if removed {
+            tracing::info!("Removed profile '{name}'");
         }
-
-        let original_len = stored.profiles.len();
-        stored.profiles.retain(|profile| profile.name != name);
-
-        if stored.profiles.len() == original_len {
-            return Ok(false);
-        }
-
-        stored.settings.clear_all_profile_references(name);
-        self.save_profiles_file(&stored)?;
-        tracing::info!("Removed profile '{name}'");
-        Ok(true)
+        Ok(removed)
     }
 
     #[must_use]
@@ -472,19 +481,21 @@ impl ProfileStore {
             return Ok(());
         }
 
-        let mut stored = self.load_profiles_file()?;
-        let mut migrated_paths = Vec::new();
+        let migrated_paths = self.update_profiles_file(|stored| {
+            let mut migrated_paths = Vec::new();
 
-        for (legacy_path, profile) in load_legacy_profiles_from_dir(&legacy_dir)? {
-            merge_legacy_profile(&mut stored.profiles, profile, &legacy_path, &self.path)?;
-            migrated_paths.push(legacy_path);
-        }
+            for (legacy_path, profile) in load_legacy_profiles_from_dir(&legacy_dir)? {
+                merge_legacy_profile(&mut stored.profiles, profile, &legacy_path, &self.path)?;
+                migrated_paths.push(legacy_path);
+            }
+
+            Ok(migrated_paths)
+        })?;
 
         if migrated_paths.is_empty() {
             return Ok(());
         }
 
-        self.save_profiles_file(&stored)?;
         for path in migrated_paths {
             fs::remove_file(&path).map_err(|source| CoreError::WriteFile {
                 path: path.clone(),
@@ -498,7 +509,7 @@ impl ProfileStore {
 
     fn migrate_legacy_defaults_from_state(&self) -> CoreResult<()> {
         let state_store = StateStore::bootstrap()?;
-        let Some(mut state) = state_store.load_state()? else {
+        let Some(state) = state_store.load_state()? else {
             return Ok(());
         };
 
@@ -506,41 +517,37 @@ impl ProfileStore {
             return Ok(());
         }
 
-        let mut stored = self.load_profiles_file()?;
-        let mut changed = false;
-
-        if stored.settings.new_setup_default.is_none() {
-            if let Some(profile_name) = state.global_default_profile() {
-                stored.settings.new_setup_default = Some(DefaultTarget::Profile {
-                    name: profile_name.to_string(),
-                });
-                changed = true;
-            }
-        }
-
-        for (setup_fingerprint, profile_name) in &state.default_profiles {
-            if setup_fingerprint == State::GLOBAL_DEFAULT_PROFILE_KEY {
-                continue;
+        self.update_profiles_file(|stored| {
+            if stored.settings.new_setup_default.is_none() {
+                if let Some(profile_name) = state.global_default_profile() {
+                    stored.settings.new_setup_default = Some(DefaultTarget::Profile {
+                        name: profile_name.to_string(),
+                    });
+                }
             }
 
-            if !stored
-                .settings
-                .setup_defaults
-                .contains_key(setup_fingerprint)
-            {
-                stored
+            for (setup_fingerprint, profile_name) in &state.default_profiles {
+                if setup_fingerprint == State::GLOBAL_DEFAULT_PROFILE_KEY {
+                    continue;
+                }
+
+                if !stored
                     .settings
-                    .set_setup_default_profile(setup_fingerprint, profile_name);
-                changed = true;
+                    .setup_defaults
+                    .contains_key(setup_fingerprint)
+                {
+                    stored
+                        .settings
+                        .set_setup_default_profile(setup_fingerprint, profile_name);
+                }
             }
-        }
+            Ok(())
+        })?;
 
-        if changed {
-            self.save_profiles_file(&stored)?;
-        }
-
-        state.default_profiles.clear();
-        state_store.save_state(&state)?;
+        state_store.update_state(|state| {
+            state.default_profiles.clear();
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -548,13 +555,30 @@ impl ProfileStore {
         load_profiles_file_from_path(&self.path)
     }
 
-    fn save_profiles_file(&self, profiles: &ProfilesFile) -> CoreResult<()> {
+    fn save_profiles_file_unlocked(&self, profiles: &ProfilesFile) -> CoreResult<()> {
         let content = serde_json::to_string_pretty(profiles).map_err(CoreError::SerializeJson)?;
-        fs::write(&self.path, format!("{content}\n")).map_err(|source| CoreError::WriteFile {
-            path: self.path.clone(),
-            source,
-        })?;
-        Ok(())
+        atomic_write(&self.path, format!("{content}\n").as_bytes())
+    }
+
+    fn update_profiles_file<T>(
+        &self,
+        update: impl FnOnce(&mut ProfilesFile) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        self.update_profiles_file_maybe(|stored| update(stored).map(|result| (result, true)))
+    }
+
+    fn update_profiles_file_maybe<T>(
+        &self,
+        update: impl FnOnce(&mut ProfilesFile) -> CoreResult<(T, bool)>,
+    ) -> CoreResult<T> {
+        with_exclusive_lock(&self.path, || {
+            let mut stored = self.load_profiles_file()?;
+            let (result, changed) = update(&mut stored)?;
+            if changed {
+                self.save_profiles_file_unlocked(&stored)?;
+            }
+            Ok(result)
+        })
     }
 }
 

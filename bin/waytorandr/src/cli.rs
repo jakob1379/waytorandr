@@ -27,8 +27,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Set a saved profile, virtual configuration, or default/matching profile")]
+    #[command(about = "Set a saved target, virtual configuration, or `auto` selection")]
     #[command(after_long_help = "Virtual configurations:
+  auto       Apply the setup default, best matching saved profile, or new-setup default
   off        Disable external outputs and keep built-in panels on when present
   external   Prefer external outputs; if none are present, keep built-in panels enabled
   common     Clone all connected outputs at the largest common resolution (not native mirroring)
@@ -37,14 +38,15 @@ pub enum Commands {
   horizontal Extend all connected outputs horizontally
   vertical   Extend all connected outputs vertically
 
-When [profile] is omitted, `set` first applies the configured default for the current hardware setup.
+`waytorandr set auto` first applies the configured default for the current hardware setup.
 If no setup default is configured, it applies the best matching saved profile.
 If there is no match, it applies the configured default for new setups.
 
 Examples:
-  waytorandr set
+  waytorandr set auto
   waytorandr set docked
   waytorandr set docked --default
+  waytorandr set --profile auto
   waytorandr set vertical --save
   waytorandr set vertical --default
   waytorandr set external --global-default
@@ -59,6 +61,7 @@ and makes that saved profile the default for the current setup.
 Use `--global-default` with a virtual configuration to set the fallback target for new setups.
 Use `--save` with a virtual configuration as a shortcut for saving the resulting layout
 as profile `default` and making it the default for the current setup.
+Use `--profile` when a saved profile name collides with `auto` or a virtual target.
 
 When a backend cannot support `mirror`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
     Set(SetArgs),
@@ -77,7 +80,7 @@ Use `--setup-name` to assign a friendly name to the current setup while keeping 
 Use `--default` together with `save` when you want this saved layout to become the default profile for the current setup fingerprint.")]
     Save(SaveArgs),
 
-    #[command(about = "Remove a saved profile")]
+    #[command(about = "Remove a saved profile for the current setup")]
     Remove(RemoveArgs),
 
     #[command(about = "Set the next saved profile")]
@@ -141,11 +144,23 @@ pub enum ServiceCommands {
 #[derive(Args)]
 pub struct SetArgs {
     #[arg(
-        value_name = "profile",
-        help = "Saved profile or virtual configuration; omit to set setup default, best match, or new-setup default",
+        value_name = "target",
+        required_unless_present = "profile",
+        conflicts_with = "profile",
+        help = "Saved target, virtual configuration, or `auto`",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,
+
+    #[arg(
+        long = "profile",
+        value_name = "profile",
+        required_unless_present = "target",
+        conflicts_with = "target",
+        help = "Force a saved profile by name when it collides with `auto` or a virtual target",
+        add = ArgValueCompleter::new(complete_saved_profiles)
+    )]
+    pub(crate) profile: Option<String>,
 
     #[arg(
         short = 'n',
@@ -226,7 +241,7 @@ pub struct SaveArgs {
 pub struct RemoveArgs {
     #[arg(
         value_name = "profile",
-        help = "Profile name to remove",
+        help = "Profile name to remove from the current setup",
         add = ArgValueCompleter::new(complete_saved_profiles)
     )]
     pub(crate) name: String,
@@ -301,50 +316,68 @@ mod tests {
     }
 
     #[test]
-    fn save_parses_setup_name_short_flag() {
-        let cli = Cli::parse_from(["waytorandr", "save", "desk", "-s", "office"]);
+    fn remove_help_mentions_current_setup_scope() {
+        let mut command = Cli::command();
+        let remove = command
+            .find_subcommand_mut("remove")
+            .expect("remove subcommand should exist");
 
-        match cli.command {
-            Commands::Save(args) => assert_eq!(args.setup_name.as_deref(), Some("office")),
-            _ => panic!("expected save command"),
-        }
+        assert_eq!(
+            remove.get_about().map(|value| value.to_string()),
+            Some("Remove a saved profile for the current setup".to_string())
+        );
+
+        let profile_arg = remove
+            .get_arguments()
+            .find(|arg| arg.get_id().as_str() == "name")
+            .expect("remove profile arg should exist");
+        assert_eq!(
+            profile_arg.get_help().map(|value| value.to_string()),
+            Some("Profile name to remove from the current setup".to_string())
+        );
     }
 
     #[test]
-    fn set_parses_save_short_flag() {
-        let cli = Cli::parse_from(["waytorandr", "set", "vertical", "-s"]);
+    fn set_requires_explicit_target() {
+        let error = match Cli::try_parse_from(["waytorandr", "set"]) {
+            Ok(_) => panic!("set without target should be rejected"),
+            Err(error) => error,
+        };
 
-        match cli.command {
-            Commands::Set(args) => assert!(args.save),
-            _ => panic!("expected set command"),
-        }
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]
-    fn version_flag_is_supported() {
-        let err = Cli::try_parse_from(["waytorandr", "--version"])
-            .err()
-            .expect("--version should trigger clap version output");
+    fn set_help_mentions_auto_target() {
+        let mut command = Cli::command();
+        let set = command
+            .find_subcommand_mut("set")
+            .expect("set subcommand should exist");
 
-        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
-        assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")));
-    }
+        assert_eq!(
+            set.get_about().map(|value| value.to_string()),
+            Some("Set a saved target, virtual configuration, or `auto` selection".to_string())
+        );
 
-    #[test]
-    fn service_run_help_hides_json_flag() {
-        let mut cli = Cli::command();
-        let service = cli
-            .find_subcommand_mut("service")
-            .expect("service subcommand");
-        let mut run = service
-            .find_subcommand_mut("run")
-            .expect("service run subcommand")
-            .clone();
-        let mut help = Vec::new();
-        run.write_long_help(&mut help).expect("write help");
-        let help = String::from_utf8(help).expect("utf8 help");
+        let target_arg = set
+            .get_arguments()
+            .find(|arg| arg.get_id().as_str() == "target")
+            .expect("set target arg should exist");
+        assert_eq!(
+            target_arg.get_help().map(|value| value.to_string()),
+            Some("Saved target, virtual configuration, or `auto`".to_string())
+        );
 
-        assert!(help.contains("does not support --json"));
-        assert!(!help.contains("Emit command output as JSON on stdout"));
+        let profile_arg = set
+            .get_arguments()
+            .find(|arg| arg.get_id().as_str() == "profile")
+            .expect("set profile arg should exist");
+        assert_eq!(
+            profile_arg.get_help().map(|value| value.to_string()),
+            Some(
+                "Force a saved profile by name when it collides with `auto` or a virtual target"
+                    .to_string()
+            )
+        );
     }
 }

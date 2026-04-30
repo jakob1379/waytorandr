@@ -32,7 +32,7 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
     };
     let mut attempts = Vec::new();
 
-    for label in backend_labels_for_env(&env) {
+    for label in backend_labels_for_process(&env)? {
         let result = match label {
             "gnome" => waytorandr_gnome::backend::GnomeBackend::connect()
                 .map(|backend| Box::new(backend) as Box<dyn Backend>),
@@ -74,6 +74,7 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
 const TEST_BACKEND_STATE_ENV: &str = "WAYTORANDR_TEST_BACKEND_STATE";
 const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
 const TEST_BACKEND_SUPPORTS_MIRROR_ENV: &str = "WAYTORANDR_TEST_BACKEND_SUPPORTS_MIRROR";
+const BACKEND_OVERRIDE_ENV: &str = "WAYTORANDR_BACKEND";
 
 #[cfg(debug_assertions)]
 fn connect_test_backend() -> Option<TestBackend> {
@@ -193,6 +194,28 @@ fn backend_labels_for_env(env: &SessionEnvironment) -> Vec<&'static str> {
     }
 }
 
+fn backend_labels_for_process(env: &SessionEnvironment) -> CoreResult<Vec<&'static str>> {
+    match std::env::var(BACKEND_OVERRIDE_ENV) {
+        Ok(value) => parse_backend_override(&value)
+            .map(|label| vec![label])
+            .ok_or_else(|| {
+                CoreError::BackendConnection(BackendConnectionError::UnknownBackendLabel {
+                    label: value,
+                })
+            }),
+        Err(_) => Ok(backend_labels_for_env(env)),
+    }
+}
+
+fn parse_backend_override(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "gnome" => Some("gnome"),
+        "kscreen" | "kde" => Some("kscreen"),
+        "wlroots" | "wlr" => Some("wlroots"),
+        _ => None,
+    }
+}
+
 fn backend_kind_for_label(label: &str) -> BackendKind {
     match label {
         "gnome" => BackendKind::Gnome,
@@ -280,5 +303,17 @@ mod tests {
             backend_labels_for_env(&env),
             vec!["wlroots", "kscreen", "gnome"]
         );
+    }
+
+    #[test]
+    fn backend_override_accepts_known_labels() {
+        assert_eq!(parse_backend_override("gnome"), Some("gnome"));
+        assert_eq!(parse_backend_override("KDE"), Some("kscreen"));
+        assert_eq!(parse_backend_override("wlr"), Some("wlroots"));
+    }
+
+    #[test]
+    fn backend_override_rejects_unknown_labels() {
+        assert_eq!(parse_backend_override("sway"), None);
     }
 }

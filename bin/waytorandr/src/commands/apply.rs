@@ -183,7 +183,8 @@ fn build_dry_run_outcome(
     execution: workflow::ValidationExecution,
 ) -> Result<ActionOutcome> {
     match execution {
-        workflow::ValidationExecution::Accepted { plan, validation } => {
+        workflow::ValidationExecution::Accepted { plan, validation }
+        | workflow::ValidationExecution::Unsupported { plan, validation } => {
             let default_target = default_set.then(|| target.clone());
             Ok(ActionOutcome {
                 target,
@@ -197,10 +198,11 @@ fn build_dry_run_outcome(
                 saved_profile: None,
             })
         }
-        other => bail!(
+        workflow::ValidationExecution::Rejected { validation, .. } => bail!(
             "{}",
-            other
-                .failure_message()
+            validation
+                .message
+                .as_deref()
                 .unwrap_or("backend rejected configuration")
         ),
     }
@@ -351,7 +353,7 @@ pub(super) fn emit_action_outcome(
     let validation_failure = outcome
         .validation
         .as_ref()
-        .filter(|test| !test.is_accepted())
+        .filter(|test| test.status == waytorandr_core::engine::ValidationStatus::Rejected)
         .map(|test| {
             test.message
                 .clone()
@@ -497,6 +499,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use waytorandr_core::engine::{ConfigFailureKind, TestResult};
+    use waytorandr_core::planner::LayoutPlan;
     use waytorandr_core::profile::Profile;
 
     #[test]
@@ -529,5 +532,26 @@ mod tests {
 
         assert!(!validation.success);
         assert_eq!(validation.status, "unsupported");
+    }
+
+    #[test]
+    fn dry_run_outcome_includes_plan_when_validation_is_unsupported() {
+        let outcome = build_dry_run_outcome(
+            "desk".to_string(),
+            ActionTargetType::Profile,
+            false,
+            None,
+            workflow::ValidationExecution::Unsupported {
+                plan: LayoutPlan::new(HashMap::new()),
+                validation: TestResult::unsupported(Some("no dry run".to_string())),
+            },
+        )
+        .expect("unsupported dry-run validation should still show the plan");
+
+        assert!(outcome.dry_run);
+        assert_eq!(
+            outcome.validation.expect("validation").status,
+            waytorandr_core::engine::ValidationStatus::Unsupported
+        );
     }
 }

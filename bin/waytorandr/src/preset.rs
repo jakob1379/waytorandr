@@ -2,6 +2,13 @@ use anyhow::{bail, Result};
 
 use waytorandr_core::model::VirtualPreset;
 
+pub fn is_builtin_set_target(name: &str) -> bool {
+    matches!(
+        name,
+        "auto" | "off" | "external" | "common" | "largest" | "mirror" | "horizontal" | "vertical"
+    )
+}
+
 pub fn resolve_virtual_preset(
     name: &str,
     reverse: bool,
@@ -59,6 +66,7 @@ pub fn virtual_completion_candidates(
     current: &str,
 ) -> Vec<clap_complete::engine::CompletionCandidate> {
     [
+        ("auto", "selection"),
         ("off", "virtual"),
         ("external", "virtual"),
         ("common", "virtual"),
@@ -101,6 +109,16 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["vertical"]);
+    }
+
+    #[test]
+    fn completion_candidates_include_auto() {
+        let names: Vec<_> = virtual_completion_candidates("au")
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(names, vec!["auto"]);
     }
 
     #[test]

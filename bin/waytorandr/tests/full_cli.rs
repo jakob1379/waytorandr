@@ -212,7 +212,7 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_default_and_active(env, Some("desk-alt"), Some("desk"))?;
     assert_eq!(env.run_json(["status", "--json"])?["profile"], "desk");
 
-    let auto_set = env.run_json(["set", "--json"])?;
+    let auto_set = env.run_json(["set", "auto", "--json"])?;
     assert_eq!(auto_set["command"], "set");
     assert_eq!(auto_set["selection"], "auto");
     assert_eq!(auto_set["target"], "desk-alt");
@@ -222,6 +222,13 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_eq!(status["setup_name"], "office");
     assert_eq!(status["show_all"], false);
     assert_eq!(status["setups"].as_array().map(Vec::len), Some(1));
+
+    let save_auto = env.run_json(["save", "auto", "--json"])?;
+    assert_eq!(save_auto["saved"], true);
+
+    let force_saved_auto = env.run_json(["set", "--profile", "auto", "--json"])?;
+    assert_eq!(force_saved_auto["target"], "auto");
+    assert_eq!(force_saved_auto["target_type"], "profile");
     Ok(())
 }
 
@@ -366,7 +373,7 @@ fn exercise_virtual_workflows(
     assert_eq!(status["new_setup_default"]["preset"], "external");
 
     env.write_backend_topology(&alternate_topology())?;
-    let auto_set = env.run_json(["set", "--json"])?;
+    let auto_set = env.run_json(["set", "auto", "--json"])?;
     assert_eq!(auto_set["selection"], "auto");
     assert_eq!(auto_set["target"], "external");
     assert_eq!(auto_set["target_type"], "virtual");
@@ -380,7 +387,7 @@ fn exercise_virtual_workflows(
     assert_eq!(status["new_setup_default"]["preset"], "builtin");
     assert!(status["builtin_output"].is_null());
 
-    let auto_builtin = env.run_json(["set", "--json"])?;
+    let auto_builtin = env.run_json(["set", "auto", "--json"])?;
     assert_eq!(auto_builtin["selection"], "auto");
     assert_eq!(auto_builtin["target"], "builtin");
     assert_eq!(auto_builtin["target_type"], "virtual");
@@ -395,7 +402,7 @@ fn exercise_virtual_workflows(
     assert!(!service_run_help.contains("builtin"));
 
     env.write_backend_topology(&external_only_topology())?;
-    let skipped_builtin = env.run_json_failure(["set", "--json"])?;
+    let skipped_builtin = env.run_json_failure(["set", "auto", "--json"])?;
     assert!(skipped_builtin
         .stderr
         .contains("no matching profile and no default target configured"));
@@ -407,7 +414,7 @@ fn exercise_virtual_workflows(
 
     let status = env.run_json(["status", "--json"])?;
     assert_eq!(status["builtin_output"]["connector"], "DP-1");
-    let configured_builtin = env.run_json(["set", "--json"])?;
+    let configured_builtin = env.run_json(["set", "auto", "--json"])?;
     assert_eq!(configured_builtin["selection"], "auto");
     assert_eq!(configured_builtin["target"], "builtin");
     assert_eq!(configured_builtin["target_type"], "virtual");
@@ -422,6 +429,10 @@ fn cli_help_renders_correctly() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
     env.write_backend_topology(&fixture_topology())?;
 
+    let bare_set = env.run_failure(["set"])?;
+    assert!(bare_set.stderr.contains("<target>") || bare_set.stderr.contains("<TARGET>"));
+    assert!(bare_set.stderr.contains("Usage") || bare_set.stderr.contains("USAGE"));
+
     let top_level_help = env.run_text(["--help"])?;
     assert!(top_level_help.contains("USAGE") || top_level_help.contains("Usage"));
     assert!(top_level_help.contains("waytorandr"));
@@ -430,9 +441,13 @@ fn cli_help_renders_correctly() -> Result<(), Box<dyn Error>> {
     assert!(save_help.contains("USAGE") || save_help.contains("Usage"));
     assert!(save_help.contains("save"));
 
+    let remove_help = env.run_text(["remove", "--help"])?;
+    assert!(remove_help.contains("current setup"));
+
     let set_help = env.run_text(["set", "--help"])?;
     assert!(set_help.contains("USAGE") || set_help.contains("Usage"));
     assert!(set_help.contains("set"));
+    assert!(set_help.contains("waytorandr set auto"));
     assert!(set_help
         .contains("Prefer external outputs; if none are present, keep built-in panels enabled"));
 
@@ -447,12 +462,28 @@ fn exercise_remove_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>
     let remove_dry_run = env.run_json(["remove", "desk-alt", "--dry-run", "--json"])?;
     assert_eq!(remove_dry_run["would_remove"], true);
     assert_eq!(remove_dry_run.get("removed"), None);
-    assert_saved_profiles(env, &["desk", "desk-alt"])?;
+    assert_saved_profiles(env, &["auto", "desk", "desk-alt"])?;
 
     let remove = env.run_json(["remove", "desk-alt", "--json"])?;
     assert_eq!(remove["removed"], true);
     assert_eq!(remove.get("would_remove"), None);
-    assert_saved_profiles(env, &["desk"])?;
+    assert_saved_profiles(env, &["auto", "desk"])?;
+
+    let remove_missing_text = env.run_failure(["remove", "desk-alt"])?;
+    assert!(remove_missing_text
+        .stderr
+        .contains("profile 'desk-alt' not found for the current setup"));
+
+    let remove_missing_json = env.run_json_failure(["remove", "desk-alt", "--json"])?;
+    assert!(remove_missing_json
+        .stderr
+        .contains("profile 'desk-alt' not found for the current setup"));
+    let remove_missing_json_stdout: Value = serde_json::from_str(&remove_missing_json.stdout)?;
+    assert_eq!(remove_missing_json_stdout["command"], "remove");
+    assert_eq!(remove_missing_json_stdout["removed"], false);
+    assert_eq!(remove_missing_json_stdout["profile"], "desk-alt");
+    assert_eq!(remove_missing_json_stdout["dry_run"], false);
+    assert!(remove_missing_json_stdout.get("would_remove").is_none());
 
     let status_text = env.run_text(["status", "--all"])?;
     assert!(status_text.contains("Profiles:"));
@@ -500,6 +531,7 @@ struct PersistedBackendState {
 }
 
 struct FailureOutput {
+    stdout: String,
     stderr: String,
 }
 
@@ -607,6 +639,29 @@ impl TestEnvironment {
         }
 
         Ok(FailureOutput {
+            stdout: String::from_utf8(output.stdout)?,
+            stderr: String::from_utf8(output.stderr)?,
+        })
+    }
+
+    fn run_failure<const N: usize>(
+        &self,
+        args: [&str; N],
+    ) -> Result<FailureOutput, Box<dyn Error>> {
+        println!("[{}] $ {} {}", self.backend_name, BIN_NAME, args.join(" "));
+        let output = self.run(args)?;
+        if output.status.success() {
+            return Err(format!(
+                "command {:?} unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+                args,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+            .into());
+        }
+
+        Ok(FailureOutput {
+            stdout: String::from_utf8(output.stdout)?,
             stderr: String::from_utf8(output.stderr)?,
         })
     }
