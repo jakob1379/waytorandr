@@ -132,6 +132,11 @@ leave all real outputs disabled are skipped instead of being reused. Transient
 all-disabled topologies are still evaluated so a matching profile can re-enable
 the right outputs, but blank layouts are not remembered as setup state.
 
+By default, the daemon logs at `info` level and still honors `RUST_LOG` when no
+explicit log-level option is passed. Use `waytorandrd --log-level debug` or the
+shortcut `waytorandrd --verbose` to enable debug logging for foreground runs or
+custom service units.
+
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup
 fingerprint internally; the alias is only for display and organization.

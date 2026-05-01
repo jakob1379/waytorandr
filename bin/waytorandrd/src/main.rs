@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::{Parser, ValueEnum};
 use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -11,11 +12,67 @@ mod daemon;
 
 const WATCHER_RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
+#[derive(Parser)]
+#[command(name = "waytorandrd")]
+#[command(about = "Daemon for automatically applying waytorandr display profiles")]
+#[command(version)]
+struct Cli {
+    #[arg(
+        long = "log-level",
+        value_enum,
+        value_name = "level",
+        conflicts_with = "verbose",
+        help = "Set daemon log level"
+    )]
+    log_level: Option<LogLevel>,
+
+    #[arg(
+        short = 'v',
+        long = "verbose",
+        conflicts_with = "log_level",
+        help = "Enable debug logging"
+    )]
+    verbose: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum LogLevel {
+    Info,
+    Debug,
+}
+
+impl Cli {
+    fn log_filter(&self) -> &'static str {
+        if self.verbose {
+            return "debug";
+        }
+
+        match self.log_level.unwrap_or(LogLevel::Info) {
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+        }
+    }
+
+    fn explicit_log_filter(&self) -> Option<&'static str> {
+        if self.verbose || self.log_level.is_some() {
+            Some(self.log_filter())
+        } else {
+            None
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            cli.explicit_log_filter()
+                .map(tracing_subscriber::EnvFilter::new)
+                .unwrap_or_else(|| {
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                }),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -89,6 +146,8 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use clap::Parser;
     use waytorandr_core::state::State;
 
     #[test]
@@ -101,5 +160,26 @@ mod tests {
             state.backend,
             Some(waytorandr_core::model::BackendKind::Wlroots)
         );
+    }
+
+    #[test]
+    fn daemon_cli_defaults_to_info_logging() {
+        let cli = Cli::parse_from(["waytorandrd"]);
+
+        assert_eq!(cli.log_filter(), "info");
+    }
+
+    #[test]
+    fn daemon_cli_accepts_debug_log_level() {
+        let cli = Cli::parse_from(["waytorandrd", "--log-level", "debug"]);
+
+        assert_eq!(cli.log_filter(), "debug");
+    }
+
+    #[test]
+    fn daemon_cli_verbose_enables_debug_logging() {
+        let cli = Cli::parse_from(["waytorandrd", "--verbose"]);
+
+        assert_eq!(cli.log_filter(), "debug");
     }
 }

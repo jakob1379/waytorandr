@@ -40,10 +40,12 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
   - `./result/bin/waytorandr --help`
   - `./result/bin/waytorandr save --help`
   - `./result/bin/waytorandr service run --help`
-  - `./result/bin/waytorandrd`
+  - `./result/bin/waytorandrd --help`
+  - `./result/bin/waytorandrd --log-level debug --help`
 
 ## Documentation Sync
 
 - Keep `README.md` aligned with the generated CLI help text for command descriptions, explicit `set auto` wording, current-setup `remove` wording, `--default` wording, and `--json` support.
 - Keep `README.md` aligned with setup-name/help wording on `save` and `status`.
+- Keep the daemon section aligned with `waytorandrd --help` when daemon options change.
 - When JSON output changes, update both README examples/notes and the CLI integration tests in `bin/waytorandr/tests/full_cli.rs`.

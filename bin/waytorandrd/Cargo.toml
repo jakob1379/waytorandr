@@ -19,5 +19,6 @@ path = "src/main.rs"
 waytorandr-backend-loader = { path = "../../crates/backend-loader" }
 waytorandr-core = { path = "../../crates/core" }
 anyhow.workspace = true
+clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

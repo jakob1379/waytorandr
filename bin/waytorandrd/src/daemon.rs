@@ -175,12 +175,27 @@ fn apply_profile(
     let backend_kind = backend.capabilities().backend;
     let plan =
         workflow::plan_profile_for_topology(profile, topology).map_err(anyhow::Error::from)?;
+    tracing::info!(
+        profile = %profile.name,
+        current_fingerprint = %topology.fingerprint(),
+        current_setup = %topology.setup_fingerprint(),
+        current_outputs = %topology_outputs_summary(topology),
+        planned_outputs = %plan_outputs_summary(&plan),
+        "evaluated daemon profile plan"
+    );
     if plan_matches_topology(&plan, topology) {
         persist_runtime_state(state_store, recorded_profile_name, backend_kind, topology)?;
         if let Some(profile_name) = recorded_profile_name {
-            tracing::info!(profile = %profile_name, "profile already matches current topology");
+            tracing::info!(
+                profile = %profile_name,
+                topology = %topology_outputs_summary(topology),
+                "profile already matches current topology"
+            );
         } else {
-            tracing::info!("remembered layout already matches current topology");
+            tracing::info!(
+                topology = %topology_outputs_summary(topology),
+                "remembered layout already matches current topology"
+            );
         }
         return Ok(DaemonOutcome::Applied);
     }
@@ -189,6 +204,10 @@ fn apply_profile(
         .map_err(anyhow::Error::from)?;
 
     if execution.failure_kind() == Some(ConfigFailureKind::TopologyChanged) {
+        tracing::warn!(
+            profile = %profile.name,
+            "backend reported topology changed while applying daemon profile"
+        );
         return Ok(DaemonOutcome::TopologyChanged);
     }
 
@@ -196,6 +215,24 @@ fn apply_profile(
         workflow::ApplyExecution::Applied {
             applied_topology, ..
         } => {
+            tracing::info!(
+                profile = %profile.name,
+                applied_fingerprint = %applied_topology.fingerprint(),
+                applied_setup = %applied_topology.setup_fingerprint(),
+                applied_outputs = %topology_outputs_summary(&applied_topology),
+                "backend reported daemon profile applied"
+            );
+            if !applied_topology.has_enabled_real_outputs() {
+                tracing::warn!(
+                    profile = %profile.name,
+                    current_outputs = %topology_outputs_summary(topology),
+                    planned_outputs = %plan_outputs_summary(&plan),
+                    applied_outputs = %topology_outputs_summary(&applied_topology),
+                    "backend reported a successful apply but the resulting topology has no enabled real outputs; retrying full daemon pass"
+                );
+                return Ok(DaemonOutcome::TopologyChanged);
+            }
+
             persist_runtime_state(
                 state_store,
                 recorded_profile_name,
@@ -204,9 +241,16 @@ fn apply_profile(
             )?;
 
             if let Some(profile_name) = recorded_profile_name {
-                tracing::info!(profile = %profile_name, "applied profile");
+                tracing::info!(
+                    profile = %profile_name,
+                    topology = %topology_outputs_summary(&applied_topology),
+                    "applied profile"
+                );
             } else {
-                tracing::info!("applied remembered layout");
+                tracing::info!(
+                    topology = %topology_outputs_summary(&applied_topology),
+                    "applied remembered layout"
+                );
             }
             Ok(DaemonOutcome::Applied)
         }
@@ -266,6 +310,56 @@ fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
             Some(desired) => desired.same_layout_as(current),
             None => !current.enabled,
         })
+}
+
+fn topology_outputs_summary(topology: &Topology) -> String {
+    let mut outputs: Vec<String> = topology
+        .outputs
+        .iter()
+        .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
+        .map(|(name, output)| {
+            let enabled = if output.enabled { "on" } else { "off" };
+            let mode = output.mode.map_or_else(
+                || "unknown".to_string(),
+                |mode| format!("{}x{}@{}", mode.width, mode.height, mode.refresh),
+            );
+            format!(
+                "{name}:{enabled}:{mode}@{},{}",
+                output.position.x, output.position.y
+            )
+        })
+        .collect();
+    outputs.sort();
+    if outputs.is_empty() {
+        "<none>".to_string()
+    } else {
+        outputs.join(",")
+    }
+}
+
+fn plan_outputs_summary(plan: &LayoutPlan) -> String {
+    let mut outputs: Vec<String> = plan
+        .outputs
+        .iter()
+        .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
+        .map(|(name, output)| {
+            let enabled = if output.enabled { "on" } else { "off" };
+            let mode = output.mode.map_or_else(
+                || "unknown".to_string(),
+                |mode| format!("{}x{}@{}", mode.width, mode.height, mode.refresh),
+            );
+            format!(
+                "{name}:{enabled}:{mode}@{},{}",
+                output.position.x, output.position.y
+            )
+        })
+        .collect();
+    outputs.sort();
+    if outputs.is_empty() {
+        "<none>".to_string()
+    } else {
+        outputs.join(",")
+    }
 }
 
 #[cfg(test)]
@@ -642,6 +736,57 @@ mod tests {
             assert!(err
                 .to_string()
                 .contains("giving up after repeated topology changes during daemon apply"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn apply_profile_retries_when_backend_reports_blank_applied_topology(
+    ) -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let apply_calls = Arc::new(Mutex::new(0));
+            let test_calls = Arc::new(Mutex::new(0));
+            let current = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let blank_after_apply = current.clone();
+            let backend = StubBackend {
+                enumerated_topology: current.clone(),
+                applied_topology: Some(blank_after_apply),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: test_calls.clone(),
+            };
+            let profile = profile("default", "eDP-1", true);
+
+            let outcome = apply_profile(
+                &backend,
+                &state_store,
+                &profile,
+                &current,
+                Some(&profile.name),
+            )?;
+            let state = state_store.load_state()?.unwrap_or_default();
+
+            assert!(matches!(outcome, DaemonOutcome::TopologyChanged));
+            assert_eq!(
+                *test_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert_eq!(state.last_profile, None);
+            assert!(state.remembered_setups.is_empty());
             Ok(())
         })?;
         Ok(())
