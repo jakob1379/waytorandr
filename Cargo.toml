@@ -33,7 +33,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 directories = "6.0"
-zbus = "5.14"
+zbus = "5.15"
 
 [profile.dev]
 debug = 1
