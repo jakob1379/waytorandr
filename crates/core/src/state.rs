@@ -1,15 +1,41 @@
-use crate::atomic::{atomic_write, with_exclusive_lock};
 use crate::error::{CoreError, CoreResult};
 use crate::model::{BackendKind, OutputIdentity, Topology};
-use crate::normalize::normalize_topology_with_known_outputs;
+use crate::persistence::{atomic_write, with_exclusive_lock};
+use crate::planning::normalize_topology_with_known_outputs;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
-
 pub struct StateStore {
     dir: PathBuf,
+}
+
+pub struct ReadOnlyStateStore {
+    dir: PathBuf,
+}
+
+pub trait StateReader {
+    /// Loads state without implying write access.
+    ///
+    /// # Errors
+    /// Returns an error if the state file cannot be read or parsed.
+    fn load_state(&self) -> CoreResult<Option<State>>;
+}
+
+fn load_state_from_path(path: &Path) -> CoreResult<Option<State>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let state = toml::from_str(&content).map_err(|source| CoreError::ParseToml {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(state))
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -18,7 +44,7 @@ pub struct State {
     pub last_profile: Option<String>,
     pub last_topology_fingerprint: Option<String>,
     #[serde(default)]
-    pub default_profiles: HashMap<String, String>,
+    pub(crate) default_profiles: HashMap<String, String>,
     #[serde(default, rename = "default_profile", skip_serializing)]
     legacy_default_profile: Option<String>,
     #[serde(default)]
@@ -32,13 +58,6 @@ pub struct State {
 }
 
 impl State {
-    #[must_use]
-    pub fn setup_default_profile(&self, setup_fingerprint: &str) -> Option<&str> {
-        self.default_profiles
-            .get(setup_fingerprint)
-            .map(String::as_str)
-    }
-
     #[must_use]
     pub fn remembered_topology_for_setup(&self, setup_fingerprint: &str) -> Option<&Topology> {
         self.remembered_setups.get(setup_fingerprint)
@@ -55,27 +74,21 @@ impl State {
         topology: &Topology,
     ) {
         self.last_profile = Some(profile_name.to_string());
-        self.last_topology_fingerprint = Some(topology.fingerprint());
-        if topology.has_enabled_real_outputs() {
-            self.remembered_setups
-                .insert(topology.setup_fingerprint(), topology.clone());
-        }
-        self.backend = backend;
+        self.record_topology_observation(backend, topology);
     }
 
     pub fn record_observed_topology(&mut self, backend: Option<BackendKind>, topology: &Topology) {
         self.last_profile = None;
+        self.record_topology_observation(backend, topology);
+    }
+
+    fn record_topology_observation(&mut self, backend: Option<BackendKind>, topology: &Topology) {
         self.last_topology_fingerprint = Some(topology.fingerprint());
         if topology.has_enabled_real_outputs() {
             self.remembered_setups
                 .insert(topology.setup_fingerprint(), topology.clone());
         }
         self.backend = backend;
-    }
-
-    pub fn set_default_profile_for_setup(&mut self, setup_fingerprint: &str, profile_name: &str) {
-        self.default_profiles
-            .insert(setup_fingerprint.to_string(), profile_name.to_string());
     }
 
     #[must_use]
@@ -92,20 +105,13 @@ impl State {
         self.daemon_enabled = true;
         self.backend = Some(backend);
     }
-
-    pub fn prune_blank_remembered_setups(&mut self) -> bool {
-        let original_len = self.remembered_setups.len();
-        self.remembered_setups
-            .retain(|_, topology| topology.has_enabled_real_outputs());
-        self.remembered_setups.len() != original_len
-    }
 }
 
 impl StateStore {
     /// Opens the state directory.
     ///
     /// # Errors
-    /// Returns an error if the base state directory cannot be determined.
+    /// Returns an error if the platform state directory cannot be determined.
     pub fn open() -> CoreResult<Self> {
         let state_dir = directories::BaseDirs::new()
             .ok_or(CoreError::MissingStateDirectory)?
@@ -119,15 +125,22 @@ impl StateStore {
     /// Creates the state directory if needed.
     ///
     /// # Errors
-    /// Returns an error if the directory cannot be created.
+    /// Returns an error if the state directory cannot be determined or created.
     pub fn bootstrap() -> CoreResult<Self> {
         let store = Self::open()?;
         fs::create_dir_all(&store.dir).map_err(|source| CoreError::CreateDir {
             path: store.dir.clone(),
             source,
         })?;
-        restrict_dir_permissions(&store.dir)?;
         Ok(store)
+    }
+
+    /// Opens the state directory for read-only access.
+    ///
+    /// # Errors
+    /// Returns an error if the platform state directory cannot be determined.
+    pub fn open_read_only() -> CoreResult<ReadOnlyStateStore> {
+        ReadOnlyStateStore::open()
     }
 
     #[must_use]
@@ -138,14 +151,17 @@ impl StateStore {
     /// Saves the current state.
     ///
     /// # Errors
-    /// Returns an error if the state file cannot be written.
+    /// Returns an error if the state cannot be serialized, locked, or written.
     pub fn save_state(&self, state: &State) -> CoreResult<()> {
         with_exclusive_lock(&self.state_path(), || self.save_state_unlocked(state))
     }
 
     fn save_state_unlocked(&self, state: &State) -> CoreResult<()> {
         let path = self.dir.join("state.toml");
-        let content = toml::to_string_pretty(state)?;
+        let content = toml::to_string_pretty(state).map_err(|source| CoreError::SerializeToml {
+            path: path.clone(),
+            source,
+        })?;
         atomic_write(&path, content.as_bytes())
     }
 
@@ -154,27 +170,31 @@ impl StateStore {
     /// # Errors
     /// Returns an error if the state file cannot be read or parsed.
     pub fn load_state(&self) -> CoreResult<Option<State>> {
-        with_exclusive_lock(&self.state_path(), || self.load_state_unlocked())
+        self.load_state_with_migrations()
     }
 
-    fn load_state_unlocked(&self) -> CoreResult<Option<State>> {
+    /// Loads the current state without applying write-oriented migrations.
+    ///
+    /// # Errors
+    /// Returns an error if the state file cannot be read or parsed.
+    pub fn load_state_read_only(&self) -> CoreResult<Option<State>> {
+        self.load_state_unlocked(false)
+    }
+
+    fn load_state_with_migrations(&self) -> CoreResult<Option<State>> {
+        self.load_state_unlocked(true)
+    }
+
+    fn load_state_unlocked(&self, migrate: bool) -> CoreResult<Option<State>> {
         let path = self.state_path();
-        if path.exists() {
-            reject_large_file(&path, MAX_STATE_FILE_BYTES)?;
-            let content = fs::read_to_string(&path).map_err(|source| CoreError::ReadFile {
-                path: path.clone(),
-                source,
-            })?;
-            let mut state: State =
-                toml::from_str(&content).map_err(|source| CoreError::ParseToml { path, source })?;
+        let Some(mut state) = load_state_from_path(&path)? else {
+            return Ok(None);
+        };
+
+        if migrate {
             state.migrate_legacy_default_profile();
-            if state.prune_blank_remembered_setups() {
-                self.save_state_unlocked(&state)?;
-            }
-            Ok(Some(state))
-        } else {
-            Ok(None)
         }
+        Ok(Some(state))
     }
 
     /// Updates state under the store lock.
@@ -186,7 +206,7 @@ impl StateStore {
         update: impl FnOnce(&mut State) -> CoreResult<T>,
     ) -> CoreResult<T> {
         with_exclusive_lock(&self.state_path(), || {
-            let mut state = self.load_state_unlocked()?.unwrap_or_default();
+            let mut state = self.load_state_with_migrations()?.unwrap_or_default();
             let result = update(&mut state)?;
             self.save_state_unlocked(&state)?;
             Ok(result)
@@ -204,9 +224,6 @@ impl StateStore {
     ) -> CoreResult<T> {
         self.update_state(|state| {
             let normalized = normalize_topology_with_known_outputs(topology, &state.known_outputs);
-            normalized
-                .validate_limits()
-                .map_err(CoreError::InvalidTopology)?;
             for (name, output) in &normalized.outputs {
                 if state.known_outputs.get(name.as_str()) != Some(&output.identity) {
                     state
@@ -234,39 +251,44 @@ impl StateStore {
     }
 }
 
-#[cfg(unix)]
-fn restrict_dir_permissions(path: &Path) -> CoreResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
-        CoreError::WriteFile {
-            path: path.to_path_buf(),
-            source,
-        }
-    })
-}
-
-#[cfg(not(unix))]
-fn restrict_dir_permissions(_path: &Path) -> CoreResult<()> {
-    Ok(())
-}
-
-fn reject_large_file(path: &Path, max_bytes: u64) -> CoreResult<()> {
-    let actual_bytes = fs::metadata(path)
-        .map_err(|source| CoreError::ReadFile {
-            path: path.to_path_buf(),
-            source,
-        })?
-        .len();
-    if actual_bytes > max_bytes {
-        return Err(CoreError::FileTooLarge {
-            path: path.to_path_buf(),
-            actual_bytes,
-            max_bytes,
-        });
+impl ReadOnlyStateStore {
+    /// Opens the state directory for read-only access.
+    ///
+    /// # Errors
+    /// Returns an error if the platform state directory cannot be determined.
+    pub fn open() -> CoreResult<Self> {
+        let store = StateStore::open()?;
+        Ok(Self { dir: store.dir })
     }
 
-    Ok(())
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Loads the current state without applying write-oriented migrations.
+    ///
+    /// # Errors
+    /// Returns an error if the state file cannot be read or parsed.
+    pub fn load_state(&self) -> CoreResult<Option<State>> {
+        load_state_from_path(&self.state_path())
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.dir.join("state.toml")
+    }
+}
+
+impl StateReader for StateStore {
+    fn load_state(&self) -> CoreResult<Option<State>> {
+        StateStore::load_state(self)
+    }
+}
+
+impl StateReader for ReadOnlyStateStore {
+    fn load_state(&self) -> CoreResult<Option<State>> {
+        ReadOnlyStateStore::load_state(self)
+    }
 }
 
 #[cfg(test)]

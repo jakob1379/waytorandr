@@ -1,22 +1,24 @@
-//! Backend selection and debug-only test backend wiring for waytorandr.
+//! Backend selection for waytorandr.
+
+// Cross-target dependency trees currently pull windows-sys through independent
+// upstream paths that cannot be unified from this crate.
+#![allow(clippy::multiple_crate_versions)]
 
 use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+#[cfg(all(debug_assertions, feature = "test-backend"))]
+mod test_backend;
 
-use waytorandr_core::engine::{ApplyResult, Backend, OutputWatcher, TestResult};
-use waytorandr_core::error::{
-    BackendConnectionAttempt, BackendConnectionError, CoreError, CoreResult,
-};
-use waytorandr_core::model::{BackendKind, Capabilities, Topology};
+use waytorandr_core::Backend;
+use waytorandr_core::BackendKind;
+use waytorandr_core::{BackendConnectionAttempt, BackendConnectionError, CoreError, CoreResult};
 
 /// Connects to the first available backend.
 ///
 /// # Errors
 /// Returns an error if no supported backend can be initialized.
 pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
-    #[cfg(debug_assertions)]
-    if let Some(backend) = connect_test_backend() {
+    #[cfg(all(debug_assertions, feature = "test-backend"))]
+    if let Some(backend) = test_backend::connect() {
         return Ok(Box::new(backend));
     }
 
@@ -32,20 +34,8 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
     };
     let mut attempts = Vec::new();
 
-    for label in backend_labels_for_process(&env)? {
-        let result = match label {
-            "gnome" => waytorandr_gnome::backend::GnomeBackend::connect()
-                .map(|backend| Box::new(backend) as Box<dyn Backend>),
-            "kscreen" => waytorandr_kscreen::backend::KScreenBackend::connect()
-                .map(|backend| Box::new(backend) as Box<dyn Backend>),
-            "wlroots" => waytorandr_wlroots::backend::WlrootsBackend::connect()
-                .map(|backend| Box::new(backend) as Box<dyn Backend>),
-            other => Err(CoreError::BackendConnection(
-                BackendConnectionError::UnknownBackendLabel {
-                    label: other.to_string(),
-                },
-            )),
-        };
+    for backend in backends_for_process(&env)? {
+        let result = connect_backend_kind(backend);
 
         match result {
             Ok(backend) => return Ok(backend),
@@ -55,8 +45,8 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
                 }),
             ) => return Err(err),
             Err(err) => attempts.push(BackendConnectionAttempt::new(
-                backend_kind_for_label(label),
-                err.to_string(),
+                backend.as_str(),
+                anyhow!(err),
             )),
         }
     }
@@ -71,158 +61,127 @@ pub fn connect_backend() -> CoreResult<Box<dyn Backend>> {
     ))
 }
 
-const TEST_BACKEND_STATE_ENV: &str = "WAYTORANDR_TEST_BACKEND_STATE";
-const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
-const TEST_BACKEND_SUPPORTS_MIRROR_ENV: &str = "WAYTORANDR_TEST_BACKEND_SUPPORTS_MIRROR";
 const BACKEND_OVERRIDE_ENV: &str = "WAYTORANDR_BACKEND";
 
-#[cfg(debug_assertions)]
-fn connect_test_backend() -> Option<TestBackend> {
-    let path = std::env::var_os(TEST_BACKEND_STATE_ENV)?;
-
-    let path = PathBuf::from(path);
-    let backend_name = std::env::var(TEST_BACKEND_NAME_ENV).unwrap_or_else(|_| "test".to_string());
-    let backend_kind = BackendKind::from_name(&backend_name).unwrap_or(BackendKind::Test);
-    let supports_mirror = std::env::var(TEST_BACKEND_SUPPORTS_MIRROR_ENV)
-        .ok()
-        .and_then(|value| parse_env_bool(&value))
-        .unwrap_or(backend_kind.is_native_mirror_backend());
-
-    Some(TestBackend {
-        path,
-        capabilities: test_backend_capabilities(backend_kind, supports_mirror),
-    })
+#[derive(Clone, Copy)]
+struct BackendDescriptor {
+    kind: BackendKind,
+    aliases: &'static [&'static str],
+    gnome_priority: u8,
+    kde_priority: u8,
+    fallback_priority: u8,
+    connect: fn() -> CoreResult<Box<dyn Backend>>,
 }
 
-#[cfg(debug_assertions)]
-fn parse_env_bool(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
-#[cfg(debug_assertions)]
-fn test_backend_capabilities(backend: BackendKind, supports_mirror: bool) -> Capabilities {
-    let mut capabilities = Capabilities::new(backend);
-    capabilities.can_test = true;
-    capabilities.supports_mirror = supports_mirror;
-    capabilities.supports_largest_mirror =
-        capabilities.supports_mirror && capabilities.backend != BackendKind::Gnome;
-    capabilities
-}
-
-#[cfg(debug_assertions)]
-#[derive(Debug)]
-struct TestBackend {
-    path: PathBuf,
-    capabilities: Capabilities,
-}
-
-#[cfg(debug_assertions)]
-#[derive(Debug, Serialize, Deserialize)]
-struct TestBackendState {
-    topology: Topology,
-}
-
-#[cfg(debug_assertions)]
-impl TestBackend {
-    fn load_state(&self) -> CoreResult<TestBackendState> {
-        let content =
-            std::fs::read_to_string(&self.path).map_err(|source| CoreError::ReadFile {
-                path: self.path.clone(),
-                source,
-            })?;
-        serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
-            path: self.path.clone(),
-            source,
-        })
+impl BackendDescriptor {
+    fn priority_for(self, env: &SessionEnvironment) -> u8 {
+        if env.is_kde_session() {
+            self.kde_priority
+        } else if env.is_gnome_session() {
+            self.gnome_priority
+        } else {
+            self.fallback_priority
+        }
     }
 
-    fn save_state(&self, state: &TestBackendState) -> CoreResult<()> {
-        let content = serde_json::to_string_pretty(state).map_err(CoreError::SerializeJson)?;
-        std::fs::write(&self.path, format!("{content}\n")).map_err(|source| CoreError::WriteFile {
-            path: self.path.clone(),
-            source,
-        })
+    fn accepts_override(self, value: &str) -> bool {
+        self.aliases.contains(&value)
     }
 }
 
-#[cfg(debug_assertions)]
-impl Backend for TestBackend {
-    fn capabilities(&self) -> Capabilities {
-        self.capabilities.clone()
-    }
+static PRODUCTION_BACKENDS: &[BackendDescriptor] = &[
+    #[cfg(feature = "gnome")]
+    BackendDescriptor {
+        kind: BackendKind::Gnome,
+        aliases: &["gnome"],
+        gnome_priority: 0,
+        kde_priority: 2,
+        fallback_priority: 2,
+        connect: connect_gnome_backend,
+    },
+    #[cfg(feature = "kscreen")]
+    BackendDescriptor {
+        kind: BackendKind::KScreen,
+        aliases: &["kscreen", "kde"],
+        gnome_priority: 2,
+        kde_priority: 0,
+        fallback_priority: 1,
+        connect: connect_kscreen_backend,
+    },
+    #[cfg(feature = "wlroots")]
+    BackendDescriptor {
+        kind: BackendKind::Wlroots,
+        aliases: &["wlroots", "wlr"],
+        gnome_priority: 1,
+        kde_priority: 1,
+        fallback_priority: 0,
+        connect: connect_wlroots_backend,
+    },
+];
 
-    fn enumerate_outputs(&self) -> CoreResult<Topology> {
-        Ok(self.load_state()?.topology)
-    }
+#[cfg(feature = "gnome")]
+fn connect_gnome_backend() -> CoreResult<Box<dyn Backend>> {
+    waytorandr_gnome::backend::GnomeBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
 
-    fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        Err(CoreError::Backend {
-            source: anyhow!("test backend does not support watch mode"),
-        })
-    }
+#[cfg(feature = "kscreen")]
+fn connect_kscreen_backend() -> CoreResult<Box<dyn Backend>> {
+    waytorandr_kscreen::backend::KScreenBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
 
-    fn test(&self, _plan: &waytorandr_core::planner::LayoutPlan) -> CoreResult<TestResult> {
-        Ok(TestResult::supported(None))
-    }
+#[cfg(feature = "wlroots")]
+fn connect_wlroots_backend() -> CoreResult<Box<dyn Backend>> {
+    waytorandr_wlroots::backend::WlrootsBackend::connect()
+        .map(|backend| Box::new(backend) as Box<dyn Backend>)
+}
 
-    fn apply(&self, plan: &waytorandr_core::planner::LayoutPlan) -> CoreResult<ApplyResult> {
-        let topology = Topology {
-            outputs: plan.outputs.clone(),
-        };
-        self.save_state(&TestBackendState {
-            topology: topology.clone(),
-        })?;
+fn backend_descriptor(backend: BackendKind) -> Option<&'static BackendDescriptor> {
+    PRODUCTION_BACKENDS
+        .iter()
+        .find(|descriptor| descriptor.kind == backend)
+}
 
-        let mut result = ApplyResult::default();
-        result.success = true;
-        result.applied_state = Some(topology);
-        Ok(result)
+fn connect_backend_kind(backend: BackendKind) -> CoreResult<Box<dyn Backend>> {
+    match backend_descriptor(backend) {
+        Some(descriptor) => (descriptor.connect)(),
+        None => Err(CoreError::BackendConnection(
+            BackendConnectionError::UnknownBackendLabel {
+                label: backend.as_str().to_string(),
+            },
+        )),
     }
 }
 
-fn backend_labels_for_env(env: &SessionEnvironment) -> Vec<&'static str> {
-    if env.is_kde_session() {
-        vec!["kscreen", "wlroots", "gnome"]
-    } else if env.is_gnome_session() {
-        vec!["gnome", "wlroots", "kscreen"]
-    } else {
-        vec!["wlroots", "kscreen", "gnome"]
-    }
+fn backends_for_env(env: &SessionEnvironment) -> Vec<BackendKind> {
+    let mut descriptors = PRODUCTION_BACKENDS.to_vec();
+    descriptors.sort_by_key(|descriptor| descriptor.priority_for(env));
+    descriptors
+        .into_iter()
+        .map(|descriptor| descriptor.kind)
+        .collect()
 }
 
-fn backend_labels_for_process(env: &SessionEnvironment) -> CoreResult<Vec<&'static str>> {
+fn backends_for_process(env: &SessionEnvironment) -> CoreResult<Vec<BackendKind>> {
     match std::env::var(BACKEND_OVERRIDE_ENV) {
         Ok(value) => parse_backend_override(&value)
-            .map(|label| vec![label])
+            .map(|backend| vec![backend])
             .ok_or_else(|| {
                 CoreError::BackendConnection(BackendConnectionError::UnknownBackendLabel {
                     label: value,
                 })
             }),
-        Err(_) => Ok(backend_labels_for_env(env)),
+        Err(_) => Ok(backends_for_env(env)),
     }
 }
 
-fn parse_backend_override(value: &str) -> Option<&'static str> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "gnome" => Some("gnome"),
-        "kscreen" | "kde" => Some("kscreen"),
-        "wlroots" | "wlr" => Some("wlroots"),
-        _ => None,
-    }
-}
-
-fn backend_kind_for_label(label: &str) -> BackendKind {
-    match label {
-        "gnome" => BackendKind::Gnome,
-        "kscreen" => BackendKind::KScreen,
-        "wlroots" => BackendKind::Wlroots,
-        _ => BackendKind::Unknown,
-    }
+fn parse_backend_override(value: &str) -> Option<BackendKind> {
+    let value = value.trim().to_ascii_lowercase();
+    PRODUCTION_BACKENDS
+        .iter()
+        .find(|descriptor| descriptor.accepts_override(&value))
+        .map(|descriptor| descriptor.kind)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -274,8 +233,12 @@ mod tests {
         };
 
         assert_eq!(
-            backend_labels_for_env(&env),
-            vec!["gnome", "wlroots", "kscreen"]
+            backends_for_env(&env),
+            vec![
+                BackendKind::Gnome,
+                BackendKind::Wlroots,
+                BackendKind::KScreen
+            ]
         );
     }
 
@@ -287,8 +250,12 @@ mod tests {
         };
 
         assert_eq!(
-            backend_labels_for_env(&env),
-            vec!["kscreen", "wlroots", "gnome"]
+            backends_for_env(&env),
+            vec![
+                BackendKind::KScreen,
+                BackendKind::Wlroots,
+                BackendKind::Gnome
+            ]
         );
     }
 
@@ -300,16 +267,20 @@ mod tests {
         };
 
         assert_eq!(
-            backend_labels_for_env(&env),
-            vec!["wlroots", "kscreen", "gnome"]
+            backends_for_env(&env),
+            vec![
+                BackendKind::Wlroots,
+                BackendKind::KScreen,
+                BackendKind::Gnome
+            ]
         );
     }
 
     #[test]
     fn backend_override_accepts_known_labels() {
-        assert_eq!(parse_backend_override("gnome"), Some("gnome"));
-        assert_eq!(parse_backend_override("KDE"), Some("kscreen"));
-        assert_eq!(parse_backend_override("wlr"), Some("wlroots"));
+        assert_eq!(parse_backend_override("gnome"), Some(BackendKind::Gnome));
+        assert_eq!(parse_backend_override("KDE"), Some(BackendKind::KScreen));
+        assert_eq!(parse_backend_override("wlr"), Some(BackendKind::Wlroots));
     }
 
     #[test]

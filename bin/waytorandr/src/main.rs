@@ -1,13 +1,17 @@
+// The CLI binary pulls transitive platform crates through independent upstream stacks.
+#![allow(clippy::multiple_crate_versions)]
+
 mod cli;
 mod commands;
 mod completion;
 mod preset;
+#[cfg(test)]
+mod test_support;
 
 use clap::CommandFactory;
 use clap_complete::env::CompleteEnv;
 use std::process::ExitCode;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use waytorandr_core::terminal::escape_terminal_text;
 
 fn main() -> ExitCode {
     CompleteEnv::with_factory(cli::Cli::command).complete();
@@ -23,7 +27,7 @@ fn main() -> ExitCode {
     match commands::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Error: {}", escape_terminal_text(format!("{err:#}")));
+            eprintln!("Error: {err:#}");
             ExitCode::FAILURE
         }
     }

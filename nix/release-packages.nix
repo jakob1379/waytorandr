@@ -115,8 +115,8 @@
         arch=('x86_64')
         url='${workspace.homepage}'
         license=('MIT')
-        depends=('gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'wlroots0.18')
-        makedepends=('rust' 'clang' 'lld' 'pkgconf' 'wayland-protocols')
+        depends=('gcc-libs' 'glibc' 'wayland')
+        makedepends=('rust' 'pkgconf')
         source=('${workspace.aurSource}')
         sha256sums=('SKIP')
 
@@ -143,15 +143,10 @@
         	arch = x86_64
         	license = MIT
         	makedepends = rust
-        	makedepends = clang
-        	makedepends = lld
         	makedepends = pkgconf
-        	makedepends = wayland-protocols
         	depends = gcc-libs
         	depends = glibc
-        	depends = libxkbcommon
         	depends = wayland
-        	depends = wlroots0.18
         	source = ${workspace.aurSource}
         	sha256sums = SKIP
 

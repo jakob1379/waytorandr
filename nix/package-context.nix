@@ -30,15 +30,10 @@
     wayland
   ];
 
-  packageNativeBuildInputs = with pkgs; [pkg-config clang lld];
+  # Nix's Rust link line uses -fuse-ld=lld for the package build.
+  packageNativeBuildInputs = with pkgs; [pkg-config lld];
 
-  packageBuildInputs = with pkgs;
-    [
-      wayland-protocols
-      wlroots
-      libxkbcommon.dev
-    ]
-    ++ runtimeLibraries;
+  packageBuildInputs = runtimeLibraries;
 
   devShellBuildInputs = with pkgs;
     [

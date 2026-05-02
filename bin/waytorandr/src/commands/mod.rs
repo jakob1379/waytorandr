@@ -3,7 +3,7 @@ use clap::Parser;
 
 use crate::cli::{Cli, Commands};
 
-mod apply;
+mod action;
 mod output;
 mod read;
 mod service;
@@ -46,7 +46,6 @@ pub(crate) fn run() -> Result<()> {
                 make_default: args.make_default,
                 save: args.save,
                 reverse: args.reverse,
-                largest: args.largest,
                 force: args.force,
             },
             output_mode,
@@ -62,7 +61,7 @@ pub(crate) fn run() -> Result<()> {
         Commands::Cycle(args) => write::cmd_cycle(args.dry_run, output_mode),
         Commands::Status(args) => read::cmd_status(args.all, output_mode),
         Commands::Version => read::cmd_version(output_mode),
-        Commands::Service(args) => service::run(args.command, cli.json),
+        Commands::Service(args) => service::run(args.command, output_mode),
     }
 }
 

@@ -16,6 +16,7 @@ self: {
 
   cfg = config.services.waytorandr;
   defaultPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.waytorandr;
+  workspace = import ../workspace.nix {inherit self;};
 in {
   options.services.waytorandr = {
     enable = mkEnableOption "waytorandr and its automatic waytorandrd daemon";
@@ -72,7 +73,7 @@ in {
     systemd.user.services.waytorandrd = {
       Unit = {
         Description = "Wayland display profile daemon";
-        Documentation = "https://github.com/jsg/waytorandr";
+        Documentation = workspace.homepage;
         ConditionEnvironment = "WAYLAND_DISPLAY";
         PartOf = [cfg.systemdTarget];
         Requires = [cfg.systemdTarget];

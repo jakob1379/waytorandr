@@ -11,11 +11,19 @@ readme = "../../README.md"
 keywords = ["wayland", "display", "profiles", "randr", "monitor"]
 categories = ["command-line-utilities", "config"]
 
+[features]
+default = ["all-backends"]
+all-backends = ["gnome", "kscreen", "wlroots"]
+gnome = ["dep:waytorandr-gnome"]
+kscreen = ["dep:waytorandr-kscreen"]
+wlroots = ["dep:waytorandr-wlroots"]
+test-backend = ["dep:serde", "dep:serde_json"]
+
 [dependencies]
 waytorandr-core = { path = "../core" }
-waytorandr-gnome = { path = "../gnome" }
-waytorandr-kscreen = { path = "../kscreen" }
-waytorandr-wlroots = { path = "../wlroots" }
+waytorandr-gnome = { path = "../gnome", optional = true }
+waytorandr-kscreen = { path = "../kscreen", optional = true }
+waytorandr-wlroots = { path = "../wlroots", optional = true }
 anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

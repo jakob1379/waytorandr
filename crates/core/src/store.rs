@@ -1,16 +1,18 @@
-use crate::atomic::{atomic_write, with_exclusive_lock};
-use crate::error::{CoreError, CoreResult};
+use crate::error::CoreResult;
 use crate::model::OutputIdentity;
-use crate::normalize::canonicalize_profile;
-use crate::profile::{validate_profile_name, Profile};
-use crate::state::StateStore;
+use crate::profile::Profile;
+use crate::state::{ReadOnlyStateStore, State, StateReader, StateStore};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-const MAX_PROFILES_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_LEGACY_PROFILE_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_LEGACY_PROFILE_COUNT: usize = 256;
+mod legacy;
+mod migration;
+mod persistence;
+mod query;
+mod read_only;
+mod write;
+
+use legacy::profiles_path;
 
 pub struct ProfileStore {
     path: PathBuf,
@@ -18,6 +20,11 @@ pub struct ProfileStore {
 
 pub struct ReadOnlyProfileStore {
     path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProfileQueryContext {
+    known_outputs: HashMap<String, OutputIdentity>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +42,7 @@ struct ProfilesFile {
     settings: ProfilesSettings,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProfilesSettings {
     #[serde(default)]
@@ -68,6 +76,45 @@ impl ProfilesSettings {
     }
 }
 
+impl ProfileQueryContext {
+    #[must_use]
+    pub fn from_state(state: &State) -> Self {
+        Self {
+            known_outputs: state.known_outputs.clone(),
+        }
+    }
+
+    /// Loads a profile query context from writable state storage.
+    ///
+    /// # Errors
+    /// Returns an error if state storage cannot be read or parsed.
+    pub fn load(state_store: &StateStore) -> CoreResult<Self> {
+        Self::load_from(state_store)
+    }
+
+    /// Loads a profile query context from read-only state storage.
+    ///
+    /// # Errors
+    /// Returns an error if state storage cannot be read or parsed.
+    pub fn load_read_only(state_store: &ReadOnlyStateStore) -> CoreResult<Self> {
+        Self::load_from(state_store)
+    }
+
+    /// Loads a profile query context from any read-capable state store.
+    ///
+    /// # Errors
+    /// Returns an error if state storage cannot be read or parsed.
+    pub fn load_from(state_store: &impl StateReader) -> CoreResult<Self> {
+        let state = state_store.load_state()?.unwrap_or_default();
+        Ok(Self::from_state(&state))
+    }
+
+    #[must_use]
+    pub fn known_outputs(&self) -> &HashMap<String, OutputIdentity> {
+        &self.known_outputs
+    }
+}
+
 impl ProfileStore {
     /// Opens the profile store.
     ///
@@ -83,21 +130,7 @@ impl ProfileStore {
     /// # Errors
     /// Returns an error if the store directory cannot be created or migrated.
     pub fn bootstrap() -> CoreResult<Self> {
-        let store = Self::open()?;
-        let dir = store
-            .path
-            .parent()
-            .ok_or(CoreError::MissingConfigDirectory)?
-            .to_path_buf();
-        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        restrict_dir_permissions(&dir)?;
-        store.migrate_legacy_profiles_json()?;
-        store.migrate_legacy_profiles()?;
-        store.migrate_legacy_defaults_from_state()?;
-        Ok(store)
+        migration::bootstrap_profile_store(Self::open()?)
     }
 
     /// Opens a read-only profile store.
@@ -110,785 +143,8 @@ impl ProfileStore {
         })
     }
 
-    /// Lists profiles with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read.
-    pub fn list(&self, state_store: &StateStore) -> CoreResult<Vec<StoredProfile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.list_with_known_outputs(&state.known_outputs)
-    }
-
-    /// Lists profiles for a setup with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read.
-    pub fn list_for_setup(
-        &self,
-        setup_fingerprint: &str,
-        state_store: &StateStore,
-    ) -> CoreResult<Vec<StoredProfile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.list_for_setup_with_known_outputs(setup_fingerprint, &state.known_outputs)
-    }
-
-    /// Returns all profiles with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read.
-    pub fn profiles(&self, state_store: &StateStore) -> CoreResult<Vec<Profile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.profiles_with_known_outputs(&state.known_outputs)
-    }
-
-    /// Returns profiles for a setup with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read.
-    pub fn profiles_for_setup(
-        &self,
-        setup_fingerprint: &str,
-        state_store: &StateStore,
-    ) -> CoreResult<Vec<Profile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.profiles_for_setup_with_known_outputs(setup_fingerprint, &state.known_outputs)
-    }
-
-    /// Finds a profile for a setup.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read.
-    pub fn get_for_setup(
-        &self,
-        name: &str,
-        setup_fingerprint: &str,
-        state_store: &StateStore,
-    ) -> CoreResult<Option<StoredProfile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.get_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)
-    }
-
-    /// Returns stored settings.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    pub fn settings(&self) -> CoreResult<ProfilesSettings> {
-        Ok(self.load_profiles_file()?.settings)
-    }
-
-    /// Sets the default saved profile for a setup fingerprint.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read or written.
-    pub fn set_setup_default_profile(
-        &self,
-        setup_fingerprint: &str,
-        profile_name: &str,
-    ) -> CoreResult<()> {
-        self.update_profiles_file(|stored| {
-            stored
-                .settings
-                .set_setup_default_profile(setup_fingerprint, profile_name);
-            Ok(())
-        })
-    }
-
-    /// Lists profiles with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    fn list_with_known_outputs(
-        &self,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Vec<StoredProfile>> {
-        let mut profiles: Vec<_> = self
-            .load_profiles()?
-            .into_iter()
-            .map(|profile| {
-                let profile = canonicalize_profile(&profile, known_outputs);
-                StoredProfile {
-                    setup_fingerprint: profile.setup_fingerprint(),
-                    profile,
-                }
-            })
-            .collect();
-
-        profiles.sort_by(|a, b| {
-            a.setup_fingerprint
-                .cmp(&b.setup_fingerprint)
-                .then(b.profile.priority.cmp(&a.profile.priority))
-                .then(a.profile.name.cmp(&b.profile.name))
-        });
-        Ok(profiles)
-    }
-
-    /// Lists profiles for a setup with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    fn list_for_setup_with_known_outputs(
-        &self,
-        setup_fingerprint: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Vec<StoredProfile>> {
-        Ok(self
-            .list_with_known_outputs(known_outputs)?
-            .into_iter()
-            .filter(|stored| stored.setup_fingerprint == setup_fingerprint)
-            .collect())
-    }
-
-    /// Returns all profiles with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    fn profiles_with_known_outputs(
-        &self,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Vec<Profile>> {
-        Ok(self
-            .list_with_known_outputs(known_outputs)?
-            .into_iter()
-            .map(|stored| stored.profile)
-            .collect())
-    }
-
-    /// Returns profiles for a setup with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    fn profiles_for_setup_with_known_outputs(
-        &self,
-        setup_fingerprint: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Vec<Profile>> {
-        Ok(self
-            .list_for_setup_with_known_outputs(setup_fingerprint, known_outputs)?
-            .into_iter()
-            .map(|stored| stored.profile)
-            .collect())
-    }
-
-    /// Finds a profile for a setup.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    fn get_for_setup_with_known_outputs(
-        &self,
-        name: &str,
-        setup_fingerprint: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Option<StoredProfile>> {
-        Ok(self
-            .list_with_known_outputs(known_outputs)?
-            .into_iter()
-            .find(|stored| {
-                stored.profile.name == name && stored.setup_fingerprint == setup_fingerprint
-            }))
-    }
-
-    /// Finds a uniquely named profile.
-    ///
-    /// # Errors
-    /// Returns an error if the name is ambiguous or storage cannot be read.
-    pub fn get_unique(
-        &self,
-        name: &str,
-        state_store: &StateStore,
-    ) -> CoreResult<Option<StoredProfile>> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.get_unique_with_known_outputs(name, &state.known_outputs)
-    }
-
-    /// Saves a profile with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read or written.
-    pub fn save(&self, profile: &Profile, state_store: &StateStore) -> CoreResult<()> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.save_with_known_outputs(profile, &state.known_outputs)
-    }
-
-    /// Removes a profile for a setup.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage or state storage cannot be read or written.
-    pub fn remove_for_setup(
-        &self,
-        name: &str,
-        setup_fingerprint: &str,
-        state_store: &StateStore,
-    ) -> CoreResult<bool> {
-        let state = state_store.load_state()?.unwrap_or_default();
-        self.remove_for_setup_with_known_outputs(name, setup_fingerprint, &state.known_outputs)
-    }
-
-    /// Finds a uniquely named profile.
-    ///
-    /// # Errors
-    /// Returns an error if the name is ambiguous or storage cannot be read.
-    fn get_unique_with_known_outputs(
-        &self,
-        name: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<Option<StoredProfile>> {
-        let candidates: Vec<_> = self
-            .list_with_known_outputs(known_outputs)?
-            .into_iter()
-            .filter(|stored| stored.profile.name == name)
-            .collect();
-
-        match candidates.len() {
-            0 => Ok(None),
-            1 => Ok(candidates.into_iter().next()),
-            _ => Err(CoreError::AmbiguousProfile(name.to_string())),
-        }
-    }
-
-    /// Saves a profile with normalized state.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read or written.
-    fn save_with_known_outputs(
-        &self,
-        profile: &Profile,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<()> {
-        validate_profile_name(&profile.name).map_err(|reason| CoreError::InvalidProfileName {
-            name: profile.name.clone(),
-            reason: reason.to_string(),
-        })?;
-        let profile = canonicalize_profile(profile, known_outputs);
-        let setup_fingerprint = profile.setup_fingerprint();
-        self.update_profiles_file(|stored| {
-            stored.profiles.retain(|existing| {
-                !(existing.name == profile.name
-                    && canonicalize_profile(existing, known_outputs).setup_fingerprint()
-                        == setup_fingerprint)
-            });
-            stored.profiles.push(profile.clone());
-            Ok(())
-        })?;
-
-        tracing::info!(
-            "Saved profile '{name}' to {path:?}",
-            name = profile.name,
-            path = self.path
-        );
-        Ok(())
-    }
-
-    /// Removes a profile for a setup.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read or written.
-    fn remove_for_setup_with_known_outputs(
-        &self,
-        name: &str,
-        setup_fingerprint: &str,
-        known_outputs: &HashMap<String, OutputIdentity>,
-    ) -> CoreResult<bool> {
-        let removed = self.update_profiles_file_maybe(|stored| {
-            let original_len = stored.profiles.len();
-            stored.profiles.retain(|profile| {
-                !(profile.name == name
-                    && canonicalize_profile(profile, known_outputs).setup_fingerprint()
-                        == setup_fingerprint)
-            });
-
-            if stored.profiles.len() == original_len {
-                return Ok((false, false));
-            }
-
-            stored
-                .settings
-                .clear_setup_default_if_matches(setup_fingerprint, name);
-            Ok((true, true))
-        })?;
-        if removed {
-            tracing::info!("Removed profile '{name}'");
-        }
-        Ok(removed)
-    }
-
-    /// Removes a uniquely named profile.
-    ///
-    /// # Errors
-    /// Returns an error if the name is ambiguous or storage cannot be read or written.
-    pub fn remove_unique(&self, name: &str) -> CoreResult<bool> {
-        let removed = self.update_profiles_file_maybe(|stored| {
-            let matches = stored
-                .profiles
-                .iter()
-                .filter(|profile| profile.name == name)
-                .count();
-
-            if matches > 1 {
-                return Err(CoreError::AmbiguousProfile(name.to_string()));
-            }
-
-            let original_len = stored.profiles.len();
-            stored.profiles.retain(|profile| profile.name != name);
-
-            if stored.profiles.len() == original_len {
-                return Ok((false, false));
-            }
-
-            stored.settings.clear_all_profile_references(name);
-            Ok((true, true))
-        })?;
-        if removed {
-            tracing::info!("Removed profile '{name}'");
-        }
-        Ok(removed)
-    }
-
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
-
-    fn load_profiles(&self) -> CoreResult<Vec<Profile>> {
-        Ok(self.load_profiles_file()?.profiles)
-    }
-
-    fn migrate_legacy_profiles(&self) -> CoreResult<()> {
-        let legacy_dir = legacy_profile_dir()?;
-        if !legacy_dir.exists() {
-            return Ok(());
-        }
-
-        let migrated_paths = self.update_profiles_file(|stored| {
-            let mut migrated_paths = Vec::new();
-
-            for (legacy_path, profile) in load_legacy_profiles_from_dir(&legacy_dir)? {
-                merge_legacy_profile(&mut stored.profiles, profile, &legacy_path, &self.path)?;
-                migrated_paths.push(legacy_path);
-            }
-
-            Ok(migrated_paths)
-        })?;
-
-        if migrated_paths.is_empty() {
-            return Ok(());
-        }
-
-        for path in migrated_paths {
-            fs::remove_file(&path).map_err(|source| CoreError::WriteFile {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        remove_empty_legacy_directories(&legacy_dir)?;
-
-        Ok(())
-    }
-
-    fn migrate_legacy_defaults_from_state(&self) -> CoreResult<()> {
-        let state_store = StateStore::bootstrap()?;
-        let Some(state) = state_store.load_state()? else {
-            return Ok(());
-        };
-
-        if state.default_profiles.is_empty() {
-            return Ok(());
-        }
-
-        self.update_profiles_file(|stored| {
-            for (setup_fingerprint, profile_name) in &state.default_profiles {
-                if setup_fingerprint.starts_with("__") {
-                    tracing::warn!(
-                        setup_fingerprint,
-                        "skipping legacy default profile migration for reserved setup fingerprint"
-                    );
-                    continue;
-                }
-
-                if !stored
-                    .settings
-                    .setup_defaults
-                    .contains_key(setup_fingerprint)
-                {
-                    stored
-                        .settings
-                        .set_setup_default_profile(setup_fingerprint, profile_name);
-                }
-            }
-            Ok(())
-        })?;
-
-        state_store.update_state(|state| {
-            state.default_profiles.clear();
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    fn load_profiles_file(&self) -> CoreResult<ProfilesFile> {
-        load_profiles_file_from_path(&self.path)
-    }
-
-    fn save_profiles_file_unlocked(&self, profiles: &ProfilesFile) -> CoreResult<()> {
-        let content = serde_json::to_string_pretty(profiles).map_err(CoreError::SerializeJson)?;
-        atomic_write(&self.path, format!("{content}\n").as_bytes())
-    }
-
-    fn update_profiles_file<T>(
-        &self,
-        update: impl FnOnce(&mut ProfilesFile) -> CoreResult<T>,
-    ) -> CoreResult<T> {
-        self.update_profiles_file_maybe(|stored| update(stored).map(|result| (result, true)))
-    }
-
-    fn update_profiles_file_maybe<T>(
-        &self,
-        update: impl FnOnce(&mut ProfilesFile) -> CoreResult<(T, bool)>,
-    ) -> CoreResult<T> {
-        with_exclusive_lock(&self.path, || {
-            let mut stored = self.load_profiles_file()?;
-            let (result, changed) = update(&mut stored)?;
-            if changed {
-                self.save_profiles_file_unlocked(&stored)?;
-            }
-            Ok(result)
-        })
-    }
-}
-
-impl ReadOnlyProfileStore {
-    /// Lists stored profile names.
-    ///
-    /// # Errors
-    /// Returns an error if profile storage cannot be read.
-    pub fn list_names(&self) -> CoreResult<Vec<String>> {
-        let mut names = std::collections::BTreeSet::new();
-        for profile in load_profiles_from_path(&self.path)? {
-            names.insert(profile.name);
-        }
-
-        Ok(names.into_iter().collect())
-    }
-}
-
-fn config_dir() -> CoreResult<PathBuf> {
-    Ok(directories::BaseDirs::new()
-        .ok_or(CoreError::MissingConfigDirectory)?
-        .config_dir()
-        .join("waytorandr"))
-}
-
-fn profiles_path() -> CoreResult<PathBuf> {
-    Ok(config_dir()?.join("waytorandr.json"))
-}
-
-fn legacy_profiles_json_path() -> CoreResult<PathBuf> {
-    Ok(config_dir()?.join("profiles.json"))
-}
-
-fn legacy_profile_dir() -> CoreResult<PathBuf> {
-    Ok(config_dir()?.join("profiles"))
-}
-
-fn load_profile_from_file(path: &Path) -> CoreResult<Profile> {
-    reject_large_file(path, MAX_LEGACY_PROFILE_FILE_BYTES)?;
-    let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let profile = toml::from_str(&content).map_err(|source| CoreError::ParseToml {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    Ok(profile)
-}
-
-fn load_profiles_from_path(path: &Path) -> CoreResult<Vec<Profile>> {
-    Ok(load_profiles_file_from_path(path)?.profiles)
-}
-
-fn load_profiles_file_from_path(path: &Path) -> CoreResult<ProfilesFile> {
-    if path.exists() {
-        load_profiles_json_file(path)
-    } else if let Ok(legacy_path) = legacy_profiles_json_path() {
-        if legacy_path.exists() {
-            load_profiles_json_file(&legacy_path)
-        } else {
-            Ok(ProfilesFile {
-                profiles: load_legacy_profiles()?,
-                ..ProfilesFile::default()
-            })
-        }
-    } else {
-        Ok(ProfilesFile {
-            profiles: load_legacy_profiles()?,
-            ..ProfilesFile::default()
-        })
-    }
-}
-
-fn load_profiles_json_file(path: &Path) -> CoreResult<ProfilesFile> {
-    warn_if_untrusted_store_file(path);
-    reject_large_file(path, MAX_PROFILES_FILE_BYTES)?;
-    let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let profiles: ProfilesFile =
-        serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    reject_hook_profiles_from_untrusted_store(path, &profiles)?;
-    Ok(profiles)
-}
-
-impl ProfileStore {
-    fn migrate_legacy_profiles_json(&self) -> CoreResult<()> {
-        let legacy_path = legacy_profiles_json_path()?;
-        if self.path.exists() || !legacy_path.exists() {
-            return Ok(());
-        }
-
-        match fs::rename(&legacy_path, &self.path) {
-            Ok(()) => Ok(()),
-            Err(source) => {
-                let legacy_missing = !legacy_path.exists();
-                let target_exists = self.path.exists();
-
-                if target_exists || legacy_missing {
-                    Ok(())
-                } else {
-                    Err(CoreError::WriteFile {
-                        path: self.path.clone(),
-                        source,
-                    })
-                }
-            }
-        }?;
-
-        Ok(())
-    }
-}
-
-fn load_legacy_profiles_from_dir(dir: &Path) -> CoreResult<Vec<(PathBuf, Profile)>> {
-    let mut profiles = Vec::new();
-
-    for entry in fs::read_dir(dir).map_err(|source| CoreError::ReadDir {
-        path: dir.to_path_buf(),
-        source,
-    })? {
-        let entry = entry.map_err(|source| CoreError::ReadDir {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            for nested in fs::read_dir(&path).map_err(|source| CoreError::ReadDir {
-                path: path.clone(),
-                source,
-            })? {
-                let nested = nested.map_err(|source| CoreError::ReadDir {
-                    path: path.clone(),
-                    source,
-                })?;
-                let nested_path = nested.path();
-                if nested_path
-                    .extension()
-                    .is_some_and(|extension| extension == "toml")
-                {
-                    ensure_legacy_profile_limit(dir, profiles.len() + 1)?;
-                    profiles.push((nested_path.clone(), load_profile_from_file(&nested_path)?));
-                }
-            }
-            continue;
-        }
-
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "toml")
-        {
-            ensure_legacy_profile_limit(dir, profiles.len() + 1)?;
-            profiles.push((path.clone(), load_profile_from_file(&path)?));
-        }
-    }
-
-    Ok(profiles)
-}
-
-#[cfg(unix)]
-fn restrict_dir_permissions(path: &Path) -> CoreResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
-        CoreError::WriteFile {
-            path: path.to_path_buf(),
-            source,
-        }
-    })
-}
-
-#[cfg(not(unix))]
-fn restrict_dir_permissions(_path: &Path) -> CoreResult<()> {
-    Ok(())
-}
-
-fn reject_large_file(path: &Path, max_bytes: u64) -> CoreResult<()> {
-    let actual_bytes = fs::metadata(path)
-        .map_err(|source| CoreError::ReadFile {
-            path: path.to_path_buf(),
-            source,
-        })?
-        .len();
-    if actual_bytes > max_bytes {
-        return Err(CoreError::FileTooLarge {
-            path: path.to_path_buf(),
-            actual_bytes,
-            max_bytes,
-        });
-    }
-
-    Ok(())
-}
-
-fn ensure_legacy_profile_limit(dir: &Path, actual: usize) -> CoreResult<()> {
-    if actual > MAX_LEGACY_PROFILE_COUNT {
-        return Err(CoreError::TooManyLegacyProfiles {
-            path: dir.to_path_buf(),
-            actual,
-            max: MAX_LEGACY_PROFILE_COUNT,
-        });
-    }
-
-    Ok(())
-}
-
-#[cfg(unix)]
-fn warn_if_untrusted_store_file(path: &Path) {
-    use std::os::unix::fs::MetadataExt;
-
-    let Ok(metadata) = fs::metadata(path) else {
-        return;
-    };
-    if metadata.mode() & 0o022 != 0 {
-        tracing::warn!(
-            path = ?path,
-            "profile store is group/world writable; profiles and hooks are trusted executable content"
-        );
-    }
-}
-
-#[cfg(not(unix))]
-fn warn_if_untrusted_store_file(_path: &Path) {}
-
-fn reject_hook_profiles_from_untrusted_store(
-    path: &Path,
-    profiles: &ProfilesFile,
-) -> CoreResult<()> {
-    let Some(reason) = untrusted_store_reason(path) else {
-        return Ok(());
-    };
-    if profiles.profiles.iter().any(Profile::has_hooks) {
-        return Err(CoreError::UntrustedProfileStore {
-            path: path.to_path_buf(),
-            reason,
-        });
-    }
-
-    Ok(())
-}
-
-#[cfg(unix)]
-fn untrusted_store_reason(path: &Path) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = fs::metadata(path).ok()?;
-    (metadata.mode() & 0o022 != 0).then(|| "profile store is group/world writable".to_string())
-}
-
-#[cfg(not(unix))]
-fn untrusted_store_reason(_path: &Path) -> Option<String> {
-    None
-}
-
-fn merge_legacy_profile(
-    stored_profiles: &mut Vec<Profile>,
-    profile: Profile,
-    legacy_path: &Path,
-    target_path: &Path,
-) -> CoreResult<()> {
-    let setup_fingerprint = profile.setup_fingerprint();
-    if let Some(existing) = stored_profiles.iter().find(|existing| {
-        existing.name == profile.name && existing.setup_fingerprint() == setup_fingerprint
-    }) {
-        let same_profile = existing.layout_fingerprint() == profile.layout_fingerprint();
-        if same_profile {
-            return Ok(());
-        }
-
-        return Err(CoreError::LegacyProfileConflict {
-            name: profile.name,
-            legacy_path: legacy_path.to_path_buf(),
-            setup_path: target_path.to_path_buf(),
-        });
-    }
-
-    stored_profiles.push(profile);
-    Ok(())
-}
-
-fn load_legacy_profiles() -> CoreResult<Vec<Profile>> {
-    let legacy_dir = legacy_profile_dir()?;
-    if legacy_dir.exists() {
-        Ok(load_legacy_profiles_from_dir(&legacy_dir)?
-            .into_iter()
-            .map(|(_, profile)| profile)
-            .collect())
-    } else {
-        Ok(Vec::new())
-    }
-}
-
-fn remove_empty_legacy_directories(dir: &Path) -> CoreResult<()> {
-    for entry in fs::read_dir(dir).map_err(|source| CoreError::ReadDir {
-        path: dir.to_path_buf(),
-        source,
-    })? {
-        let entry = entry.map_err(|source| CoreError::ReadDir {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            let is_empty = fs::read_dir(&path)
-                .map_err(|source| CoreError::ReadDir {
-                    path: path.clone(),
-                    source,
-                })?
-                .next()
-                .is_none();
-            if is_empty {
-                fs::remove_dir(&path).map_err(|source| CoreError::WriteFile {
-                    path: path.clone(),
-                    source,
-                })?;
-            }
-        }
-    }
-
-    let is_empty = fs::read_dir(dir)
-        .map_err(|source| CoreError::ReadDir {
-            path: dir.to_path_buf(),
-            source,
-        })?
-        .next()
-        .is_none();
-    if is_empty {
-        fs::remove_dir(dir).map_err(|source| CoreError::WriteFile {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-    }
-
-    Ok(())
 }

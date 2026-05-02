@@ -17,9 +17,11 @@
 - Format: `nix develop -c cargo fmt --all`
 - Lint: `nix develop -c cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
 - Test the full workspace: `nix develop -c cargo test --locked --workspace -q`
+- Test the subprocess CLI flow: `nix develop -c just test-cli`
 - Test only the CLI crate: `nix develop -c cargo test -q -p waytorandr`
 
-`just` is the source of truth for CI. `git-hooks.nix` is the source of truth
+`just` is the source of truth for CI, and `just check` includes the subprocess
+CLI integration suite. `git-hooks.nix` is the source of truth
 for local Git hook configuration, and entering the dev shell installs the
 generated hooks automatically. Local hooks cover cheap file hygiene,
 formatting, workflow validation, spell checking, and a lockfile consistency
@@ -29,7 +31,7 @@ check via `cargo metadata --locked`.
 
 The full CLI integration test is debug-only. It uses a fake backend path compiled behind `debug_assertions` so the production build does not expose the test backend override.
 
-- Run it through the repo script: `./scripts/test-cli-integration.sh`
+- Run it through the checked recipe: `nix develop -c just test-cli`
 - The script runs `cargo test -p waytorandr --test full_cli`, which builds and executes the debug `waytorandr` binary
 - The test covers the real CLI process flow against simulated `wlroots`, `kscreen`, and `gnome` backends
 
@@ -42,7 +44,7 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
   - `./result/bin/waytorandr set --help`
   - `./result/bin/waytorandr service run --help`
   - `./result/bin/waytorandrd --help`
-  - `./result/bin/waytorandrd --log-level debug --help`
+  - `./result/bin/waytorandrd --verbose --help`
 
 ## Documentation Sync
 

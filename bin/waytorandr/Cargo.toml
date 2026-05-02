@@ -11,12 +11,20 @@ readme = "../../README.md"
 keywords = ["wayland", "display", "profiles", "randr", "monitor"]
 categories = ["command-line-utilities", "config"]
 
+[features]
+default = ["all-backends"]
+all-backends = ["waytorandr-backend-loader/all-backends"]
+gnome = ["waytorandr-backend-loader/gnome"]
+kscreen = ["waytorandr-backend-loader/kscreen"]
+wlroots = ["waytorandr-backend-loader/wlroots"]
+test-backend = ["waytorandr-backend-loader/test-backend"]
+
 [[bin]]
 name = "waytorandr"
 path = "src/main.rs"
 
 [dependencies]
-waytorandr-backend-loader = { path = "../../crates/backend-loader" }
+waytorandr-backend-loader = { path = "../../crates/backend-loader", default-features = false }
 waytorandr-core = { path = "../../crates/core" }
 clap.workspace = true
 clap_complete.workspace = true
@@ -24,7 +32,6 @@ anyhow.workspace = true
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]

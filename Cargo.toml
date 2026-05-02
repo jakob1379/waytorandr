@@ -19,7 +19,7 @@ version = "0.3.14"
 edition = "2021"
 authors = ["waytorandr contributors"]
 license = "MIT"
-rust-version = "1.75"
+rust-version = "1.87"
 repository = "https://github.com/jakob1379/waytorandr"
 
 [workspace.dependencies]
@@ -33,7 +33,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 directories = "6.0"
-zbus = "5.15"
+zbus = { version = "5.15", default-features = false, features = ["async-io", "blocking-api"] }
 
 [profile.dev]
 debug = 1

@@ -1,77 +1,57 @@
 use anyhow::{anyhow, bail, Result};
 
-use super::apply::{
-    current_setup_fingerprint, emit_action_outcome, execute_builtin_fallback_action,
-    execute_profile_action, execute_trusted_profile_action, execute_virtual_action,
-    save_runtime_state, set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse,
-    JsonSaveResponse,
+use super::action::{
+    emit_action_outcome, emit_remove_outcome, emit_save_outcome, execute_profile_action,
+    execute_virtual_action, persist_virtual_action_outcome, set_default_profile_for_fingerprint,
+    DefaultScope, RemoveOutcome, SaveOutcome,
 };
-use super::output::{failure, print_plan_summary, success, value, warning, write_json};
-use super::shared::plan_outputs;
+use super::shared::load_current_topology;
 use super::OutputMode;
 use crate::preset::resolve_virtual_preset;
 use waytorandr_backend_loader::connect_backend;
-use waytorandr_core::model::{BackendKind, Topology};
-use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::profile::{validate_profile_name, Profile};
-use waytorandr_core::state::StateStore;
-use waytorandr_core::store::ProfileStore;
+use waytorandr_core::validate_profile_name;
 use waytorandr_core::workflow;
+use waytorandr_core::LayoutPlan;
+use waytorandr_core::Profile;
+use waytorandr_core::ProfileStore;
+use waytorandr_core::Topology;
+use waytorandr_core::{ProfileQueryContext, StateStore};
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
 const AUTO_SET_TARGET: &str = "auto";
 
+// SetOptions mirrors the independent set/cycle/save flags carried through workflows.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy)]
 pub(super) struct SetOptions {
     pub(super) dry_run: bool,
     pub(super) make_default: bool,
     pub(super) save: bool,
     pub(super) reverse: bool,
-    pub(super) largest: bool,
     pub(super) force: bool,
 }
 
-struct SavedCurrentLayout {
-    backend_kind: BackendKind,
-    topology: Topology,
-}
-
-fn save_current_layout(
+fn save_layout_for_topology(
+    store: &ProfileStore,
+    state_store: &StateStore,
     name: &str,
     setup_name: Option<&str>,
     make_default: bool,
-) -> Result<SavedCurrentLayout> {
+    topology: &Topology,
+) -> Result<()> {
     validate_cli_profile_name(name)?;
-    let store = ProfileStore::bootstrap()?;
-    let state_store = StateStore::bootstrap()?;
-    let backend = connect_backend()?;
-    let backend_kind = backend.capabilities().backend;
-    let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
     let setup_fingerprint = topology.setup_fingerprint();
+    let profile = workflow::profile_from_topology(name, topology);
 
-    if topology.outputs.is_empty() {
-        bail!("cannot save a profile from an empty topology")
-    }
-    if !topology.has_enabled_real_outputs() {
-        bail!("cannot save a profile with no enabled real outputs")
-    }
-
-    let profile = workflow::profile_from_topology(name, &topology);
-    let observed_topology =
-        workflow::observed_topology_from_backend(backend.as_ref(), &state_store)?;
-
-    store.save(&profile, &state_store)?;
+    store.save(&profile, state_store)?;
     if let Some(setup_name) = setup_name {
-        workflow::set_setup_name_for_setup_in_store(&state_store, &setup_fingerprint, setup_name)?;
+        workflow::set_setup_name_for_setup_in_store(state_store, &setup_fingerprint, setup_name)?;
     }
     if make_default {
-        set_default_profile_for_fingerprint(name, &setup_fingerprint)?;
+        set_default_profile_for_fingerprint(store, name, &setup_fingerprint)?;
     }
 
-    Ok(SavedCurrentLayout {
-        backend_kind,
-        topology: observed_topology,
-    })
+    Ok(())
 }
 
 pub(super) fn cmd_save(
@@ -89,9 +69,6 @@ pub(super) fn cmd_save(
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
     }
-    if !topology.has_enabled_real_outputs() {
-        bail!("cannot save a profile with no enabled real outputs")
-    }
 
     let profile = workflow::profile_from_topology(name, &topology);
 
@@ -103,76 +80,30 @@ pub(super) fn cmd_save(
                 .map(|(output_name, config)| (output_name.clone(), config.state.clone()))
                 .collect(),
         );
-        if output_mode.is_json() {
-            return write_json(&JsonSaveResponse {
-                command: "save",
-                profile: name.to_string(),
-                setup_name: setup_name.map(str::to_string),
-                dry_run: true,
-                saved: false,
-                plan: Some(plan_outputs(&plan)),
-                default_set: make_default,
-                default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
-            });
-        }
-
-        println!(
-            "{} {}:",
-            warning("Would save"),
-            value(format!("profile '{name}'"))
+        let outcome = SaveOutcome::dry_run(
+            name,
+            setup_name,
+            plan,
+            make_default.then_some(DefaultScope::Setup),
         );
-        print_plan_summary(&plan);
-        if let Some(setup_name) = setup_name {
-            println!(
-                "{} {}",
-                warning("Would also name this setup"),
-                value(format!("'{setup_name}'"))
-            );
-        }
-        if make_default {
-            println!(
-                "{} {}",
-                warning("Would also set"),
-                value(format!("'{name}' as the default profile for this setup"))
-            );
-        }
-        return Ok(());
+        return emit_save_outcome(&outcome, output_mode);
     }
 
-    let _saved_layout = save_current_layout(name, setup_name, make_default)?;
-    if output_mode.is_json() {
-        return write_json(&JsonSaveResponse {
-            command: "save",
-            profile: name.to_string(),
-            setup_name: setup_name.map(str::to_string),
-            dry_run: false,
-            saved: true,
-            plan: None,
-            default_set: make_default,
-            default_scope: make_default.then_some(DefaultScope::Setup.as_json()),
-        });
-    }
-
-    println!(
-        "{} {}",
-        success("Saved"),
-        value(format!("profile '{name}'"))
+    let store = ProfileStore::bootstrap()?;
+    save_layout_for_topology(
+        &store,
+        &state_store,
+        name,
+        setup_name,
+        make_default,
+        &topology,
+    )?;
+    let outcome = SaveOutcome::saved(
+        name,
+        setup_name,
+        make_default.then_some(DefaultScope::Setup),
     );
-    if let Some(setup_name) = setup_name {
-        println!(
-            "{} {}",
-            success("Named this setup"),
-            value(format!("'{setup_name}'"))
-        );
-    }
-    if make_default {
-        println!(
-            "{} {}",
-            success("Set"),
-            value(format!("'{name}' as the default profile for this setup"))
-        );
-    }
-    Ok(())
+    emit_save_outcome(&outcome, output_mode)
 }
 
 fn validate_cli_profile_name(name: &str) -> Result<()> {
@@ -190,7 +121,6 @@ pub(super) fn cmd_set(
         make_default,
         save,
         reverse,
-        largest,
         force,
     } = options;
     let save_for_current_setup = make_default || save;
@@ -202,34 +132,12 @@ pub(super) fn cmd_set(
     };
 
     if !force_saved_profile && name == AUTO_SET_TARGET {
-        if reverse {
-            bail!("--reverse cannot be used with `waytorandr set auto`")
-        }
-        if largest {
-            bail!("--largest is deprecated; use `waytorandr set largest`")
-        }
-        if save_for_current_setup {
-            bail!("--default and --save cannot be used with `waytorandr set auto`")
-        }
-        return cmd_change(dry_run, force, output_mode);
+        return handle_auto_set(reverse, save_for_current_setup, dry_run, force, output_mode);
     }
 
     if !force_saved_profile {
-        if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-            let mut outcome = execute_virtual_action(preset, dry_run, None, force)?;
-            if save_for_current_setup {
-                outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
-                outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
-                if !dry_run {
-                    let saved_layout = save_current_layout(DEFAULT_SAVED_PROFILE_NAME, None, true)?;
-                    save_runtime_state(
-                        DEFAULT_SAVED_PROFILE_NAME,
-                        Some(saved_layout.backend_kind),
-                        &saved_layout.topology,
-                    )?;
-                }
-            }
-            return emit_action_outcome("set", Some("explicit"), &outcome, output_mode);
+        if let Some(preset) = resolve_virtual_preset(name, reverse)? {
+            return handle_virtual_set(preset, save_for_current_setup, dry_run, force, output_mode);
         }
     }
 
@@ -237,33 +145,106 @@ pub(super) fn cmd_set(
         bail!("--save can only be used with virtual set targets")
     }
 
-    let store = ProfileStore::bootstrap()?;
+    handle_profile_set(name, dry_run, make_default, force, output_mode)
+}
+
+fn handle_auto_set(
+    reverse: bool,
+    save_for_current_setup: bool,
+    dry_run: bool,
+    force: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    if reverse {
+        bail!("--reverse cannot be used with `waytorandr set auto`")
+    }
+    if save_for_current_setup {
+        bail!("--default and --save cannot be used with `waytorandr set auto`")
+    }
+    apply_auto_profile_selection(dry_run, force, output_mode)
+}
+
+fn handle_virtual_set(
+    preset: waytorandr_core::VirtualPreset,
+    save_for_current_setup: bool,
+    dry_run: bool,
+    force: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
     let state_store = StateStore::bootstrap()?;
-    let setup_fingerprint = current_setup_fingerprint()?;
-    let profile = store
-        .get_for_setup(name, &setup_fingerprint, &state_store)?
-        .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
-    let outcome = execute_profile_action(&profile.profile, dry_run, make_default, force)?;
+    let backend = connect_backend()?;
+    let mut outcome =
+        execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
+    let recorded_profile_name = if save_for_current_setup {
+        DEFAULT_SAVED_PROFILE_NAME
+    } else {
+        preset.as_str()
+    };
+    let profile_store = if save_for_current_setup && !dry_run {
+        Some(ProfileStore::bootstrap()?)
+    } else {
+        None
+    };
+
+    persist_virtual_action_outcome(
+        &state_store,
+        profile_store.as_ref(),
+        &mut outcome,
+        recorded_profile_name,
+        save_for_current_setup.then_some(DEFAULT_SAVED_PROFILE_NAME),
+    )?;
+
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
 
-pub(super) fn cmd_change(dry_run: bool, force: bool, output_mode: OutputMode) -> Result<()> {
+fn handle_profile_set(
+    name: &str,
+    dry_run: bool,
+    make_default: bool,
+    force: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let settings = store.settings()?;
-    if let Some(outcome) =
-        execute_builtin_fallback_action(dry_run, settings.builtin_output.as_ref(), force)?
-    {
-        return emit_action_outcome("set", Some("auto"), &outcome, output_mode);
-    }
-
     let backend = connect_backend()?;
-    let topology = workflow::bounded_topology_from_backend(backend.as_ref())?;
-    let profiles = store.profiles(&state_store)?;
-    let target = workflow::select_trusted_target_for_topology(&topology, &profiles, &settings)
+    let setup_fingerprint =
+        load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
+    let query_context = ProfileQueryContext::load(&state_store)?;
+    let profile = store
+        .get_for_setup(name, &setup_fingerprint, &query_context)?
+        .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
+    let outcome = execute_profile_action(
+        backend.as_ref(),
+        &store,
+        &state_store,
+        &profile.profile,
+        dry_run,
+        make_default,
+        force,
+    )?;
+    emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
+}
+
+fn apply_auto_profile_selection(dry_run: bool, force: bool, output_mode: OutputMode) -> Result<()> {
+    let store = ProfileStore::bootstrap()?;
+    let state_store = StateStore::bootstrap()?;
+    let backend = connect_backend()?;
+    let topology = load_current_topology(backend.as_ref(), &state_store)?;
+    let query_context = ProfileQueryContext::load(&state_store)?;
+    let profiles = store.profiles(&query_context)?;
+    let settings = store.settings()?;
+    let profile = workflow::select_profile_for_topology(&topology, &profiles, &settings)
         .ok_or_else(|| anyhow!("no matching profile configured"))?;
 
-    let outcome = execute_trusted_profile_action(&target, dry_run, force)?;
+    let outcome = execute_profile_action(
+        backend.as_ref(),
+        &store,
+        &state_store,
+        &profile,
+        dry_run,
+        false,
+        force,
+    )?;
 
     emit_action_outcome("set", Some("auto"), &outcome, output_mode)
 }
@@ -271,63 +252,26 @@ pub(super) fn cmd_change(dry_run: bool, force: bool, output_mode: OutputMode) ->
 pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let setup_fingerprint = current_setup_fingerprint()?;
+    let backend = connect_backend()?;
+    let setup_fingerprint =
+        load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
+    let query_context = ProfileQueryContext::load(&state_store)?;
     let exists = store
-        .get_for_setup(name, &setup_fingerprint, &state_store)?
+        .get_for_setup(name, &setup_fingerprint, &query_context)?
         .is_some();
 
     if dry_run {
-        if output_mode.is_json() {
-            return write_json(&JsonRemoveResponse {
-                command: "remove",
-                profile: name.to_string(),
-                dry_run: true,
-                removed: None,
-                would_remove: Some(exists),
-            });
-        }
-
-        if exists {
-            println!(
-                "{} {}",
-                warning("Would remove"),
-                value(format!("profile '{name}'"))
-            );
-        } else {
-            println!(
-                "{} {}",
-                failure("Profile not found"),
-                value(format!("'{name}'"))
-            );
-        }
-        return Ok(());
+        let outcome = RemoveOutcome::dry_run(name, exists);
+        return emit_remove_outcome(&outcome, output_mode);
     }
 
     let removed = store.remove_for_setup(name, &setup_fingerprint, &state_store)?;
     let missing_profile_error = || anyhow!("profile '{name}' not found for the current setup");
+    let outcome = RemoveOutcome::removed(name, removed);
 
-    if output_mode.is_json() {
-        write_json(&JsonRemoveResponse {
-            command: "remove",
-            profile: name.to_string(),
-            dry_run: false,
-            removed: Some(removed),
-            would_remove: None,
-        })?;
-
-        return if removed {
-            Ok(())
-        } else {
-            Err(missing_profile_error())
-        };
-    }
+    emit_remove_outcome(&outcome, output_mode)?;
 
     if removed {
-        println!(
-            "{} {}",
-            success("Removed"),
-            value(format!("profile '{name}'"))
-        );
         Ok(())
     } else {
         Err(missing_profile_error())
@@ -337,9 +281,11 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
+    let backend = connect_backend()?;
     let state = state_store.load_state()?.unwrap_or_default();
-    let setup = current_setup_fingerprint()?;
-    let profiles: Vec<Profile> = store.profiles_for_setup(&setup, &state_store)?;
+    let query_context = ProfileQueryContext::from_state(&state);
+    let setup = load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
+    let profiles: Vec<Profile> = store.profiles_for_setup(&setup, &query_context)?;
     if profiles.is_empty() {
         bail!("no profiles available to cycle")
     }
@@ -351,7 +297,15 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
             .map_or(0, |idx| (idx + 1) % profiles.len())
     });
 
-    let outcome = execute_profile_action(&profiles[next_idx], dry_run, false, false)?;
+    let outcome = execute_profile_action(
+        backend.as_ref(),
+        &store,
+        &state_store,
+        &profiles[next_idx],
+        dry_run,
+        false,
+        false,
+    )?;
     emit_action_outcome("cycle", None, &outcome, output_mode)
 }
 
@@ -369,7 +323,6 @@ mod tests {
                 make_default: false,
                 save: false,
                 reverse: true,
-                largest: false,
                 force: false,
             },
             OutputMode::Text,
@@ -392,7 +345,6 @@ mod tests {
                 make_default: true,
                 save: false,
                 reverse: false,
-                largest: false,
                 force: false,
             },
             OutputMode::Text,
@@ -415,7 +367,6 @@ mod tests {
                 make_default: false,
                 save: false,
                 reverse: true,
-                largest: false,
                 force: false,
             },
             OutputMode::Text,
@@ -438,7 +389,6 @@ mod tests {
                 make_default: false,
                 save: false,
                 reverse: false,
-                largest: false,
                 force: false,
             },
             OutputMode::Text,

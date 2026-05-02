@@ -27,11 +27,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Set a saved target, virtual configuration, or `auto` selection")]
+    #[command(about = "Set a saved profile, virtual configuration, or `auto` selection")]
     #[command(after_long_help = "Virtual configurations:
   auto       Apply the setup default or best matching saved profile
   off        Disable external outputs and keep built-in panels on when present
   external   Prefer external outputs; if none are present, keep built-in panels enabled
+  builtin    Disable external outputs and enable built-in panels
   common     Clone all connected outputs at the largest common resolution (not native mirroring)
   largest    Clone all connected outputs at the same origin using each output's largest mode
   mirror     Mirror all connected outputs on backends with native mirroring support
@@ -148,12 +149,14 @@ pub struct ServiceRunArgs {
 }
 
 #[derive(Args)]
+// Clap argument structs mirror the CLI flag surface directly.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SetArgs {
     #[arg(
         value_name = "target",
         required_unless_present = "profile",
         conflicts_with = "profile",
-        help = "Saved target, virtual configuration, or `auto`",
+        help = "Saved profile, virtual configuration, or `auto`",
         add = ArgValueCompleter::new(complete_set_targets)
     )]
     pub(crate) target: Option<String>,
@@ -188,14 +191,6 @@ pub struct SetArgs {
         help = "With virtual configurations: save the resulting layout as profile `default` and make it the default for the current setup"
     )]
     pub(crate) save: bool,
-
-    #[arg(
-        short = 'l',
-        long = "largest",
-        hide = true,
-        help = "Deprecated compatibility alias for `waytorandr set largest`"
-    )]
-    pub(crate) largest: bool,
 
     #[arg(
         short = 'r',
@@ -362,7 +357,7 @@ mod tests {
 
         assert_eq!(
             set.get_about().map(|value| value.to_string()),
-            Some("Set a saved target, virtual configuration, or `auto` selection".to_string())
+            Some("Set a saved profile, virtual configuration, or `auto` selection".to_string())
         );
 
         let target_arg = set
@@ -371,7 +366,7 @@ mod tests {
             .expect("set target arg should exist");
         assert_eq!(
             target_arg.get_help().map(|value| value.to_string()),
-            Some("Saved target, virtual configuration, or `auto`".to_string())
+            Some("Saved profile, virtual configuration, or `auto`".to_string())
         );
 
         let profile_arg = set

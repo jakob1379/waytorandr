@@ -1,40 +1,31 @@
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use wayland_client::backend::ObjectId;
-use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
-use wayland_client::protocol::{wl_output, wl_registry};
-use wayland_client::{
-    event_created_child, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
-};
+use wayland_client::globals::{registry_queue_init, GlobalList};
+use wayland_client::protocol::wl_output;
+use wayland_client::{Connection, EventQueue, QueueHandle};
 use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_head_v1::ZwlrOutputConfigurationHeadV1;
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_v1::{
-    self, ZwlrOutputConfigurationV1,
-};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_head_v1::{
-    self, ZwlrOutputHeadV1,
-};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_manager_v1::{
-    self, ZwlrOutputManagerV1,
-};
-use wayland_protocols_wlr::output_management::v1::client::zwlr_output_mode_v1::{
-    self, ZwlrOutputModeV1,
-};
+use wayland_protocols_wlr::output_management::v1::client::zwlr_output_manager_v1::ZwlrOutputManagerV1;
 
-use waytorandr_core::engine::{
-    ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, TestResult,
+use waytorandr_core::LayoutPlan;
+use waytorandr_core::{
+    ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, ValidationResult,
 };
-use waytorandr_core::error::{BackendConnectionError, CoreError, CoreResult};
-use waytorandr_core::model::{
-    normalized_identity_value, BackendKind, Capabilities, Mode, OutputState, Position, Topology,
-    Transform,
-};
-use waytorandr_core::planner::LayoutPlan;
+use waytorandr_core::{BackendConnectionError, CoreError, CoreResult};
+use waytorandr_core::{BackendKind, Capabilities, Mode, OutputState, Topology, Transform};
+
+mod protocol;
+
+use protocol::{ConfigStatus, HeadInfo, State};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+enum SubmitError {
+    Transport(anyhow::Error),
+    Rejected(anyhow::Error),
+}
 
 pub struct WlrootsBackend {
     inner: Mutex<WaylandClient>,
@@ -43,48 +34,6 @@ pub struct WlrootsBackend {
 struct WaylandClient {
     event_queue: EventQueue<State>,
     state: State,
-}
-
-#[derive(Default)]
-struct State {
-    manager: Option<ZwlrOutputManagerV1>,
-    serial: Option<u32>,
-    heads: HashMap<ObjectId, HeadInfo>,
-    modes: HashMap<ObjectId, ModeInfo>,
-    config_status: Option<ConfigStatus>,
-}
-
-#[derive(Clone)]
-struct HeadInfo {
-    head: ZwlrOutputHeadV1,
-    name: Option<String>,
-    description: Option<String>,
-    make: Option<String>,
-    model: Option<String>,
-    serial: Option<String>,
-    enabled: bool,
-    position: Position,
-    transform: Transform,
-    scale: f64,
-    current_mode: Option<ObjectId>,
-    modes: Vec<ObjectId>,
-}
-
-#[derive(Clone)]
-struct ModeInfo {
-    mode: ZwlrOutputModeV1,
-    width: Option<u32>,
-    height: Option<u32>,
-    refresh: Option<u32>,
-    preferred: bool,
-    head_id: ObjectId,
-}
-
-#[derive(Clone, Copy)]
-enum ConfigStatus {
-    Succeeded,
-    Failed,
-    Cancelled,
 }
 
 impl WlrootsBackend {
@@ -97,7 +46,7 @@ impl WlrootsBackend {
             .context("failed to connect to Wayland display")
             .map_err(|source| {
                 CoreError::BackendConnection(BackendConnectionError::Initialize {
-                    backend: BackendKind::Wlroots,
+                    backend: BackendKind::Wlroots.as_str(),
                     source,
                 })
             })?;
@@ -105,7 +54,7 @@ impl WlrootsBackend {
             .context("failed to initialize Wayland registry")
             .map_err(|source| {
                 CoreError::BackendConnection(BackendConnectionError::Initialize {
-                    backend: BackendKind::Wlroots,
+                    backend: BackendKind::Wlroots.as_str(),
                     source,
                 })
             })?;
@@ -113,7 +62,7 @@ impl WlrootsBackend {
 
         let manager = bind_manager(&globals, &qh).map_err(|source| {
             CoreError::BackendConnection(BackendConnectionError::Initialize {
-                backend: BackendKind::Wlroots,
+                backend: BackendKind::Wlroots.as_str(),
                 source,
             })
         })?;
@@ -126,13 +75,13 @@ impl WlrootsBackend {
         };
         client.sync().map_err(|source| {
             CoreError::BackendConnection(BackendConnectionError::Initialize {
-                backend: BackendKind::Wlroots,
+                backend: BackendKind::Wlroots.as_str(),
                 source,
             })
         })?;
         client.sync().map_err(|source| {
             CoreError::BackendConnection(BackendConnectionError::Initialize {
-                backend: BackendKind::Wlroots,
+                backend: BackendKind::Wlroots.as_str(),
                 source,
             })
         })?;
@@ -149,7 +98,7 @@ impl WlrootsBackend {
         inner
             .sync()
             .map_err(|source| CoreError::Backend { source })?;
-        Ok(inner.export_topology())
+        Ok(inner.state.to_topology())
     }
 
     fn snapshot_topology() -> CoreResult<Topology> {
@@ -160,7 +109,7 @@ impl WlrootsBackend {
 impl Backend for WlrootsBackend {
     fn capabilities(&self) -> Capabilities {
         let mut capabilities = Capabilities::new(BackendKind::Wlroots);
-        capabilities.can_test = true;
+        capabilities.can_validate = true;
         capabilities
     }
 
@@ -179,13 +128,17 @@ impl Backend for WlrootsBackend {
         )))
     }
 
-    fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
+    fn validate(&self, plan: &LayoutPlan) -> CoreResult<ValidationResult> {
         let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
             source: anyhow!("backend lock poisoned"),
         })?;
-        let status = inner
-            .submit_with_retry(plan, true, 3)
-            .map_err(|source| CoreError::Backend { source })?;
+        let status = match inner.submit_with_retry(plan, true, 3) {
+            Ok(status) => status,
+            Err(SubmitError::Rejected(source)) => {
+                return Ok(validation_rejection_from_submit_error(&source));
+            }
+            Err(SubmitError::Transport(source)) => return Err(CoreError::Backend { source }),
+        };
         let message = Some(match status {
             ConfigStatus::Succeeded => {
                 format!("wlroots validated {} output changes", plan.outputs.len())
@@ -197,9 +150,9 @@ impl Backend for WlrootsBackend {
             }
         });
         Ok(match status {
-            ConfigStatus::Succeeded => TestResult::supported(message),
+            ConfigStatus::Succeeded => ValidationResult::supported(message),
             ConfigStatus::Failed | ConfigStatus::Cancelled => {
-                TestResult::rejected(config_failure(status), message)
+                ValidationResult::rejected(config_failure(status), message)
             }
         })
     }
@@ -209,23 +162,29 @@ impl Backend for WlrootsBackend {
             let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
                 source: anyhow!("backend lock poisoned"),
             })?;
-            inner
-                .submit_with_retry(plan, false, 3)
-                .map_err(|source| CoreError::Backend { source })?
+            match inner.submit_with_retry(plan, false, 3) {
+                Ok(status) => status,
+                Err(SubmitError::Rejected(source)) => {
+                    return Ok(apply_failure_from_submit_error(&source));
+                }
+                Err(SubmitError::Transport(source)) => return Err(CoreError::Backend { source }),
+            }
         };
-        let applied_state = Self::snapshot_topology()?;
-        let mut result = ApplyResult::default();
-        result.success = matches!(status, ConfigStatus::Succeeded);
-        result.failure = config_failure(status);
-        result.message = Some(match status {
+        let message = Some(match status {
             ConfigStatus::Succeeded => "applied successfully".to_string(),
             ConfigStatus::Failed => "compositor rejected the configuration".to_string(),
             ConfigStatus::Cancelled => {
                 "configuration cancelled because topology changed".to_string()
             }
         });
-        result.applied_state = Some(applied_state);
-        Ok(result)
+        if matches!(status, ConfigStatus::Succeeded) {
+            Ok(ApplyResult::applied(
+                message,
+                Some(Self::snapshot_topology()?),
+            ))
+        } else {
+            Ok(ApplyResult::failed(config_failure(status), message))
+        }
     }
 }
 
@@ -237,50 +196,20 @@ impl WaylandClient {
         Ok(())
     }
 
-    fn export_topology(&self) -> Topology {
-        let mut outputs = HashMap::new();
-        for head in self.state.heads.values() {
-            let Some(name) = head.name.clone() else {
-                continue;
-            };
-
-            let mode = preferred_mode_for_head(&self.state, head);
-
-            outputs.insert(name.clone(), {
-                let mut state = OutputState::new(name);
-                state.identity.edid_hash = None;
-                state.identity.make.clone_from(&head.make);
-                state.identity.model.clone_from(&head.model);
-                state.identity.serial.clone_from(&head.serial);
-                state.identity.description.clone_from(&head.description);
-                state.identity.is_virtual = head
-                    .description
-                    .as_deref()
-                    .is_some_and(is_virtual_description);
-                state.identity.is_ignored = false;
-                state.enabled = head_is_enabled(head.enabled);
-                state.mode = mode;
-                state.available_modes = available_modes_for_head(&self.state, head);
-                state.position = head.position;
-                state.scale = head.scale;
-                state.transform = head.transform;
-                state.mirror_target = None;
-                state.backend_data = None;
-                state
-            });
-        }
-        Topology { outputs }
-    }
-
-    fn submit(&mut self, plan: &LayoutPlan, test_only: bool) -> Result<ConfigStatus> {
-        let serial = self.state.serial.ok_or_else(|| {
-            anyhow!("wlroots compositor did not provide an output-management serial")
-        })?;
+    fn submit(&mut self, plan: &LayoutPlan, test_only: bool) -> Result<ConfigStatus, SubmitError> {
+        let serial = self
+            .state
+            .serial
+            .ok_or_else(|| {
+                anyhow!("wlroots compositor did not provide an output-management serial")
+            })
+            .map_err(SubmitError::Transport)?;
         let manager = self
             .state
             .manager
             .as_ref()
-            .ok_or_else(|| anyhow!("wlroots output manager is unavailable"))?
+            .ok_or_else(|| anyhow!("wlroots output manager is unavailable"))
+            .map_err(SubmitError::Transport)?
             .clone();
         let qh = self.event_queue.handle();
 
@@ -299,7 +228,11 @@ impl WaylandClient {
                 }
 
                 let conf_head = configuration.enable_head(&head.head, &qh, ());
-                apply_head_config(&self.state, desired, head, &conf_head)?;
+                apply_head_config(&self.state, desired, head, &conf_head).map_err(|source| {
+                    SubmitError::Rejected(
+                        source.context(format!("wlroots rejected output `{name}`")),
+                    )
+                })?;
             } else {
                 configuration.disable_head(&head.head);
             }
@@ -312,13 +245,15 @@ impl WaylandClient {
         }
 
         for _ in 0..5 {
-            self.sync()?;
+            self.sync().map_err(SubmitError::Transport)?;
             if let Some(status) = self.state.config_status.take() {
                 return Ok(status);
             }
         }
 
-        bail!("wlroots compositor did not answer configuration request")
+        Err(SubmitError::Transport(anyhow!(
+            "wlroots compositor did not answer configuration request"
+        )))
     }
 
     fn submit_with_retry(
@@ -326,28 +261,24 @@ impl WaylandClient {
         plan: &LayoutPlan,
         test_only: bool,
         attempts: usize,
-    ) -> Result<ConfigStatus> {
+    ) -> Result<ConfigStatus, SubmitError> {
         let attempts = attempts.max(1);
-        for attempt in 0..attempts {
-            self.sync()?;
+        let mut attempt = 1;
+        loop {
+            self.sync().map_err(SubmitError::Transport)?;
             let status = self.submit(plan, test_only)?;
-            if !should_retry_cancelled(status, attempt, attempts) {
+            if !matches!(status, ConfigStatus::Cancelled) || attempt == attempts {
                 return Ok(status);
             }
 
             tracing::warn!(
-                attempt = attempt + 1,
+                attempt,
                 total_attempts = attempts,
                 "wlroots configuration cancelled, retrying after refreshing compositor state"
             );
+            attempt += 1;
         }
-
-        unreachable!("submit_with_retry always returns from inside the retry loop")
     }
-}
-
-fn should_retry_cancelled(status: ConfigStatus, attempt: usize, attempts: usize) -> bool {
-    matches!(status, ConfigStatus::Cancelled) && attempt + 1 < attempts
 }
 
 fn bind_manager(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<ZwlrOutputManagerV1> {
@@ -358,50 +289,6 @@ fn bind_manager(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<ZwlrOut
         })
 }
 
-fn mode_from_info(info: &ModeInfo) -> Option<Mode> {
-    Some(Mode {
-        width: info.width?,
-        height: info.height?,
-        refresh: info.refresh.unwrap_or(0) / 1000,
-    })
-}
-
-fn preferred_mode_for_head(state: &State, head: &HeadInfo) -> Option<Mode> {
-    head.current_mode
-        .as_ref()
-        .and_then(|id| state.modes.get(id))
-        .and_then(mode_from_info)
-        .or_else(|| {
-            head.modes
-                .iter()
-                .filter_map(|id| state.modes.get(id))
-                .find(|mode| mode.preferred)
-                .and_then(mode_from_info)
-        })
-        .or_else(|| {
-            head.modes
-                .iter()
-                .filter_map(|id| state.modes.get(id))
-                .find_map(mode_from_info)
-        })
-}
-
-fn available_modes_for_head(state: &State, head: &HeadInfo) -> Vec<Mode> {
-    let mut modes: Vec<Mode> = head
-        .modes
-        .iter()
-        .filter_map(|id| state.modes.get(id))
-        .filter_map(mode_from_info)
-        .collect();
-    modes.sort_by_key(|mode| (mode.width * mode.height, mode.refresh));
-    modes.dedup();
-    modes
-}
-
-fn head_is_enabled(enabled: bool) -> bool {
-    enabled
-}
-
 fn config_failure(status: ConfigStatus) -> Option<ConfigFailureKind> {
     match status {
         ConfigStatus::Succeeded => None,
@@ -410,12 +297,30 @@ fn config_failure(status: ConfigStatus) -> Option<ConfigFailureKind> {
     }
 }
 
+fn validation_rejection_from_submit_error(source: &anyhow::Error) -> ValidationResult {
+    ValidationResult::rejected(
+        Some(ConfigFailureKind::Rejected),
+        Some(format!("wlroots rejected the configuration: {source:#}")),
+    )
+}
+
+fn apply_failure_from_submit_error(source: &anyhow::Error) -> ApplyResult {
+    ApplyResult::failed(
+        Some(ConfigFailureKind::Rejected),
+        Some(format!(
+            "wlroots failed to apply the configuration: {source:#}"
+        )),
+    )
+}
+
 fn apply_head_config(
     state: &State,
     desired: &OutputState,
     head: &HeadInfo,
     conf_head: &ZwlrOutputConfigurationHeadV1,
 ) -> Result<()> {
+    validate_requested_head_config(desired)?;
+
     if let Some(mode) = desired.mode {
         if let Some(existing_mode) =
             head.modes
@@ -429,12 +334,8 @@ fn apply_head_config(
         {
             conf_head.set_mode(&existing_mode.mode);
         } else {
-            conf_head.set_custom_mode(
-                i32::try_from(mode.width).context("wlroots mode width does not fit in i32")?,
-                i32::try_from(mode.height).context("wlroots mode height does not fit in i32")?,
-                i32::try_from(mode.refresh.saturating_mul(1000))
-                    .context("wlroots mode refresh does not fit in i32")?,
-            );
+            let (width, height, refresh) = custom_mode_values(mode)?;
+            conf_head.set_custom_mode(width, height, refresh);
         }
     }
 
@@ -442,15 +343,32 @@ fn apply_head_config(
     conf_head.set_scale(desired.scale);
     conf_head.set_transform(transform_to_wl(desired.transform));
 
-    if desired.mirror_target.is_some() {
-        bail!("wlroots mirroring is not implemented in this backend")
-    }
-
     if head.name.is_none() {
         bail!("attempted to configure unnamed output")
     }
 
     Ok(())
+}
+
+fn validate_requested_head_config(desired: &OutputState) -> Result<()> {
+    if let Some(mode) = desired.mode {
+        custom_mode_values(mode)?;
+    }
+
+    if desired.mirror_target.is_some() {
+        bail!("wlroots mirroring is not implemented in this backend")
+    }
+
+    Ok(())
+}
+
+fn custom_mode_values(mode: Mode) -> Result<(i32, i32, i32)> {
+    Ok((
+        i32::try_from(mode.width).context("wlroots mode width does not fit in i32")?,
+        i32::try_from(mode.height).context("wlroots mode height does not fit in i32")?,
+        i32::try_from(mode.refresh.saturating_mul(1000))
+            .context("wlroots mode refresh does not fit in i32")?,
+    ))
 }
 
 fn transform_to_wl(transform: Transform) -> wl_output::Transform {
@@ -466,226 +384,55 @@ fn transform_to_wl(transform: Transform) -> wl_output::Transform {
     }
 }
 
-fn transform_from_wl(transform: WEnum<wl_output::Transform>) -> Transform {
-    match transform {
-        WEnum::Value(wl_output::Transform::_90) => Transform::Rot90,
-        WEnum::Value(wl_output::Transform::_180) => Transform::Rot180,
-        WEnum::Value(wl_output::Transform::_270) => Transform::Rot270,
-        WEnum::Value(wl_output::Transform::Flipped) => Transform::Flipped,
-        WEnum::Value(wl_output::Transform::Flipped90) => Transform::Flipped90,
-        WEnum::Value(wl_output::Transform::Flipped180) => Transform::Flipped180,
-        WEnum::Value(wl_output::Transform::Flipped270) => Transform::Flipped270,
-        WEnum::Value(_) | WEnum::Unknown(_) => Transform::Normal,
-    }
-}
-
-fn is_virtual_description(description: &str) -> bool {
-    let lower = description.to_ascii_lowercase();
-    lower.contains("virtual") || lower.contains("headless") || lower.contains("x11")
-}
-
-fn update_identity_field(field: &mut Option<String>, value: &str) {
-    if let Some(value) = normalized_identity_value(Some(value)) {
-        *field = Some(value);
-    }
-}
-
-impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(
-        _state: &mut Self,
-        _registry: &wl_registry::WlRegistry,
-        _event: wl_registry::Event,
-        _: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<ZwlrOutputManagerV1, ()> for State {
-    fn event(
-        state: &mut Self,
-        _manager: &ZwlrOutputManagerV1,
-        event: zwlr_output_manager_v1::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        match event {
-            zwlr_output_manager_v1::Event::Done { serial } => state.serial = Some(serial),
-            zwlr_output_manager_v1::Event::Finished => state.manager = None,
-            _ => {}
-        }
-    }
-
-    event_created_child!(State, ZwlrOutputHeadV1, [
-        zwlr_output_manager_v1::EVT_HEAD_OPCODE => (ZwlrOutputHeadV1, ()),
-    ]);
-}
-
-impl Dispatch<ZwlrOutputHeadV1, ()> for State {
-    fn event(
-        state: &mut Self,
-        head: &ZwlrOutputHeadV1,
-        event: zwlr_output_head_v1::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        let entry = state.heads.entry(head.id()).or_insert_with(|| HeadInfo {
-            head: head.clone(),
-            name: None,
-            description: None,
-            make: None,
-            model: None,
-            serial: None,
-            enabled: false,
-            position: Position::default(),
-            transform: Transform::Normal,
-            scale: 1.0,
-            current_mode: None,
-            modes: Vec::new(),
-        });
-
-        match event {
-            zwlr_output_head_v1::Event::Name { name } => entry.name = Some(name),
-            zwlr_output_head_v1::Event::Description { description } => {
-                update_identity_field(&mut entry.description, &description);
-            }
-            zwlr_output_head_v1::Event::Make { make } => {
-                update_identity_field(&mut entry.make, &make);
-            }
-            zwlr_output_head_v1::Event::Model { model } => {
-                update_identity_field(&mut entry.model, &model);
-            }
-            zwlr_output_head_v1::Event::SerialNumber { serial_number } => {
-                update_identity_field(&mut entry.serial, &serial_number);
-            }
-            zwlr_output_head_v1::Event::Enabled { enabled } => entry.enabled = enabled != 0,
-            zwlr_output_head_v1::Event::Position { x, y } => entry.position = Position { x, y },
-            zwlr_output_head_v1::Event::Scale { scale } => entry.scale = scale,
-            zwlr_output_head_v1::Event::Transform { transform } => {
-                entry.transform = transform_from_wl(transform);
-            }
-            zwlr_output_head_v1::Event::Mode { mode } => {
-                let mode_id = mode.id();
-                if !entry.modes.contains(&mode_id) {
-                    entry.modes.push(mode_id.clone());
-                }
-                state.modes.entry(mode_id).or_insert_with(|| ModeInfo {
-                    mode,
-                    width: None,
-                    height: None,
-                    refresh: None,
-                    preferred: false,
-                    head_id: head.id(),
-                });
-            }
-            zwlr_output_head_v1::Event::CurrentMode { mode } => {
-                entry.current_mode = Some(mode.id());
-            }
-            zwlr_output_head_v1::Event::Finished => {
-                state.heads.remove(&head.id());
-                state.modes.retain(|_, mode| mode.head_id != head.id());
-            }
-            _ => {}
-        }
-    }
-
-    event_created_child!(State, ZwlrOutputModeV1, [
-        zwlr_output_head_v1::EVT_MODE_OPCODE => (ZwlrOutputModeV1, ()),
-        zwlr_output_head_v1::EVT_CURRENT_MODE_OPCODE => (ZwlrOutputModeV1, ()),
-    ]);
-}
-
-impl Dispatch<ZwlrOutputModeV1, ()> for State {
-    fn event(
-        state: &mut Self,
-        mode: &ZwlrOutputModeV1,
-        event: zwlr_output_mode_v1::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        let Some(entry) = state.modes.get_mut(&mode.id()) else {
-            return;
-        };
-
-        match event {
-            zwlr_output_mode_v1::Event::Size { width, height } => {
-                entry.width = u32::try_from(width).ok();
-                entry.height = u32::try_from(height).ok();
-            }
-            zwlr_output_mode_v1::Event::Refresh { refresh } => {
-                entry.refresh = u32::try_from(refresh).ok();
-            }
-            zwlr_output_mode_v1::Event::Preferred => entry.preferred = true,
-            zwlr_output_mode_v1::Event::Finished => {
-                let head_id = entry.head_id.clone();
-                state.modes.remove(&mode.id());
-                if let Some(head) = state.heads.get_mut(&head_id) {
-                    head.modes.retain(|id| id != &mode.id());
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-impl Dispatch<ZwlrOutputConfigurationV1, ()> for State {
-    fn event(
-        state: &mut Self,
-        config: &ZwlrOutputConfigurationV1,
-        event: zwlr_output_configuration_v1::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        state.config_status = Some(match event {
-            zwlr_output_configuration_v1::Event::Succeeded => ConfigStatus::Succeeded,
-            zwlr_output_configuration_v1::Event::Failed => ConfigStatus::Failed,
-            zwlr_output_configuration_v1::Event::Cancelled => ConfigStatus::Cancelled,
-            _ => return,
-        });
-        config.destroy();
-    }
-}
-
-impl Dispatch<ZwlrOutputConfigurationHeadV1, ()> for State {
-    fn event(
-        _state: &mut Self,
-        _head: &ZwlrOutputConfigurationHeadV1,
-        _event: wayland_protocols_wlr::output_management::v1::client::zwlr_output_configuration_head_v1::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{head_is_enabled, should_retry_cancelled, update_identity_field, ConfigStatus};
+    use super::{
+        apply_failure_from_submit_error, custom_mode_values, validate_requested_head_config,
+        validation_rejection_from_submit_error,
+    };
+    use waytorandr_core::{ConfigFailureKind, Mode, OutputState};
 
     #[test]
-    fn disabled_head_stays_disabled_even_if_mode_lingers() {
-        assert!(!head_is_enabled(false));
-        assert!(head_is_enabled(true));
+    fn mirror_target_is_structured_plan_rejection() -> anyhow::Result<()> {
+        let mut desired = OutputState::new("HDMI-A-1");
+        desired.mirror_target = Some("eDP-1".to_string());
+
+        let Err(source) = validate_requested_head_config(&desired) else {
+            anyhow::bail!("wlroots mirroring should be rejected before Wayland submission");
+        };
+        let validation = validation_rejection_from_submit_error(&source);
+
+        assert_eq!(validation.failure(), Some(ConfigFailureKind::Rejected));
+        assert_eq!(
+            validation.message.as_deref(),
+            Some(
+                "wlroots rejected the configuration: wlroots mirroring is not implemented in this backend"
+            )
+        );
+        Ok(())
     }
 
     #[test]
-    fn update_identity_field_keeps_existing_value_for_unknown_placeholder() {
-        let mut field = Some("Microstep".to_string());
-        update_identity_field(&mut field, "Unknown");
-        assert_eq!(field.as_deref(), Some("Microstep"));
-    }
+    fn invalid_custom_mode_is_structured_apply_failure() -> anyhow::Result<()> {
+        let Err(source) = custom_mode_values(Mode {
+            width: u32::MAX,
+            height: 1080,
+            refresh: 60,
+        }) else {
+            anyhow::bail!("oversized mode should be rejected before Wayland submission");
+        };
+        let result = apply_failure_from_submit_error(&source);
 
-    #[test]
-    fn cancelled_configuration_retries_until_last_attempt() {
-        assert!(should_retry_cancelled(ConfigStatus::Cancelled, 0, 3));
-        assert!(should_retry_cancelled(ConfigStatus::Cancelled, 1, 3));
-        assert!(!should_retry_cancelled(ConfigStatus::Cancelled, 2, 3));
-        assert!(!should_retry_cancelled(ConfigStatus::Failed, 0, 3));
-        assert!(!should_retry_cancelled(ConfigStatus::Succeeded, 0, 3));
+        assert_eq!(result.failure(), Some(ConfigFailureKind::Rejected));
+        let message = result
+            .message()
+            .ok_or_else(|| anyhow::anyhow!("failure has context"))?;
+        assert!(
+            message.starts_with(
+                "wlroots failed to apply the configuration: wlroots mode width does not fit in i32"
+            ),
+            "{message}"
+        );
+        Ok(())
     }
 }

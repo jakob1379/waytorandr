@@ -2,7 +2,9 @@ use clap_complete::engine::CompletionCandidate;
 use std::collections::BTreeSet;
 
 use crate::preset::{is_builtin_set_target, virtual_completion_candidates};
-use waytorandr_core::store::ProfileStore;
+use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::workflow;
+use waytorandr_core::{ProfileQueryContext, ProfileStore, ReadOnlyStateStore};
 
 pub(crate) fn complete_set_targets(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
     let Some(current) = current.to_str() else {
@@ -49,22 +51,62 @@ fn saved_profile_set_target_completion_candidates(current: &str) -> Vec<Completi
 }
 
 fn load_saved_profile_names() -> Vec<String> {
+    let Ok(setup_fingerprint) = current_setup_fingerprint() else {
+        return Vec::new();
+    };
+
     ProfileStore::open_read_only()
-        .and_then(|store| store.list_names())
+        .and_then(|store| {
+            let state_store = ReadOnlyStateStore::open()?;
+            let query_context = ProfileQueryContext::load_read_only(&state_store)?;
+            store.list_for_setup(&setup_fingerprint, &query_context)
+        })
         .unwrap_or_default()
+        .into_iter()
+        .map(|stored| stored.profile.name)
+        .collect()
+}
+
+fn current_setup_fingerprint() -> anyhow::Result<String> {
+    #[cfg(test)]
+    if let Some(fingerprint) = test_backend_setup_fingerprint()? {
+        return Ok(fingerprint);
+    }
+
+    let backend = connect_backend().map_err(anyhow::Error::from)?;
+    let state_store = ReadOnlyStateStore::open()?;
+    Ok(
+        workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?
+            .setup_fingerprint(),
+    )
+}
+
+#[cfg(test)]
+fn test_backend_setup_fingerprint() -> anyhow::Result<Option<String>> {
+    #[derive(serde::Deserialize)]
+    struct TestBackendState {
+        topology: waytorandr_core::Topology,
+    }
+
+    let Some(path) = std::env::var_os("WAYTORANDR_TEST_BACKEND_STATE") else {
+        return Ok(None);
+    };
+
+    let content = std::fs::read_to_string(path)?;
+    let state: TestBackendState = serde_json::from_str(&content)?;
+    Ok(Some(state.topology.setup_fingerprint()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
-    use waytorandr_core::model::{Mode, OutputIdentity, OutputState, Position, Topology};
-    use waytorandr_core::profile::{OutputMatcher, Profile};
-    use waytorandr_core::state::StateStore;
+    use waytorandr_core::ProfileStore;
+    use waytorandr_core::StateStore;
+    use waytorandr_core::{Mode, OutputIdentity, OutputState, Position, Topology};
+    use waytorandr_core::{OutputMatcher, Profile};
 
     const TEST_BACKEND_STATE_ENV: &str = "WAYTORANDR_TEST_BACKEND_STATE";
     const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
@@ -86,10 +128,12 @@ mod tests {
 
     #[test]
     fn set_target_completion_hides_colliding_saved_names() {
-        let _guard = test_lock().lock().expect("test lock");
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let env = CompletionTestEnv::new();
 
-        env.write_backend_topology(&topology(["eDP-1"]))
+        env.write_backend_topology(&completion_topology(["eDP-1"]))
             .expect("write topology");
         env.save_profile("auto", &["eDP-1"])
             .expect("save current profile");
@@ -110,41 +154,23 @@ mod tests {
     }
 
     #[test]
-    fn saved_profile_completion_lists_all_profiles_without_backend_scope() {
-        let _guard = test_lock().lock().expect("test lock");
-        let env = CompletionTestEnv::new();
-
-        env.write_backend_topology(&topology(["eDP-1"]))
-            .expect("write topology");
-        env.save_profile("desk", &["eDP-1"])
-            .expect("save current profile");
-        env.save_profile("travel", &["HDMI-A-1"])
-            .expect("save other profile");
-
-        let names: Vec<_> = complete_saved_profiles(OsStr::new(""))
-            .into_iter()
-            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
-            .collect();
-
-        assert_eq!(names, vec!["desk", "travel"]);
-    }
-
-    #[test]
     fn saved_profile_completion_supports_plain_names() {
-        let _guard = test_lock().lock().expect("test lock");
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let env = CompletionTestEnv::new();
 
-        env.write_backend_topology(&topology(["eDP-1"]))
+        env.write_backend_topology(&completion_topology(["eDP-1"]))
             .expect("write topology");
-        env.save_profile("auto", &["eDP-1"])
+        env.save_profile("ro-auto", &["eDP-1"])
             .expect("save current profile");
 
-        let names: Vec<_> = complete_saved_profiles(OsStr::new("a"))
+        let names: Vec<_> = complete_saved_profiles(OsStr::new("ro-"))
             .into_iter()
             .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
             .collect();
 
-        assert_eq!(names, vec!["auto"]);
+        assert_eq!(names, vec!["ro-auto"]);
     }
 
     #[test]
@@ -157,9 +183,21 @@ mod tests {
         assert!(names.iter().any(|name| name == "vertical"));
     }
 
-    fn test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    #[test]
+    fn saved_profile_completion_does_not_create_store_files_when_nothing_is_saved() {
+        let _guard = crate::test_support::env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let env = CompletionTestEnv::new();
+
+        env.write_backend_topology(&completion_topology(["eDP-1"]))
+            .expect("write topology");
+
+        assert!(complete_saved_profiles(OsStr::new("")).is_empty());
+        assert!(!env.config_store_dir().exists());
+        assert!(!env.state_store_dir().exists());
+        assert!(!env.profiles_file().exists());
+        assert!(!env.state_file().exists());
     }
 
     struct CompletionTestEnv {
@@ -195,8 +233,24 @@ mod tests {
         fn save_profile(&self, name: &str, connectors: &[&str]) -> anyhow::Result<()> {
             let store = ProfileStore::bootstrap()?;
             let state_store = StateStore::bootstrap()?;
-            store.save(&profile(name, connectors), &state_store)?;
+            store.save(&completion_profile(name, connectors), &state_store)?;
             Ok(())
+        }
+
+        fn config_store_dir(&self) -> PathBuf {
+            self._root.path().join("config").join("waytorandr")
+        }
+
+        fn state_store_dir(&self) -> PathBuf {
+            self._root.path().join("state").join("waytorandr")
+        }
+
+        fn profiles_file(&self) -> PathBuf {
+            self.config_store_dir().join("waytorandr.json")
+        }
+
+        fn state_file(&self) -> PathBuf {
+            self.state_store_dir().join("state.toml")
         }
     }
 
@@ -215,7 +269,7 @@ mod tests {
         }
     }
 
-    fn topology(connectors: [&str; 1]) -> Topology {
+    fn completion_topology(connectors: [&str; 1]) -> Topology {
         let mut topology = Topology::new();
         for connector in connectors {
             let mut output = OutputState::new(connector);
@@ -228,12 +282,24 @@ mod tests {
         topology
     }
 
-    fn profile(name: &str, connectors: &[&str]) -> Profile {
+    fn completion_profile(name: &str, connectors: &[&str]) -> Profile {
         let match_rules = connectors
             .iter()
             .map(|connector| OutputMatcher::new(OutputIdentity::new(*connector), true, None))
             .collect();
 
-        Profile::new(name, 0, match_rules, HashMap::new())
+        let layout = connectors
+            .iter()
+            .map(|connector| {
+                let mut state = OutputState::new(*connector);
+                state.identity = OutputIdentity::new(*connector);
+                state.enabled = true;
+                state.mode = Some(Mode::new(1920, 1080, 60));
+                state.position = Position::new(0, 0);
+                ((*connector).to_string(), state.into())
+            })
+            .collect();
+
+        Profile::new(name, 0, match_rules, layout)
     }
 }

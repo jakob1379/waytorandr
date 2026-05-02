@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::Serialize;
 
-use waytorandr_backend_loader::connect_backend;
-use waytorandr_core::model::{OutputState, Topology};
-use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::state::StateStore;
 use waytorandr_core::workflow;
+use waytorandr_core::Backend;
+use waytorandr_core::LayoutPlan;
+use waytorandr_core::StateReader;
+use waytorandr_core::{OutputState, Topology};
 
 #[derive(Serialize)]
 pub(super) struct JsonOutputEntry {
@@ -21,10 +21,12 @@ pub(super) fn topology_outputs(topology: &Topology) -> Vec<JsonOutputEntry> {
     sorted_outputs(topology.outputs.iter())
 }
 
-pub(super) fn load_current_topology(state_store: &StateStore) -> Result<Topology> {
-    let backend = connect_backend()?;
+pub(super) fn load_current_topology(
+    backend: &(impl Backend + ?Sized),
+    state_store: &impl StateReader,
+) -> Result<Topology> {
     Ok(workflow::normalized_topology_from_backend(
-        backend.as_ref(),
+        backend,
         state_store,
     )?)
 }

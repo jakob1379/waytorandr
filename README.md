@@ -85,7 +85,7 @@ Preview a virtual layout without applying it:
 ## CLI
 
 ```text
-waytorandr set       Set a saved target, virtual configuration, or `auto` selection
+waytorandr set       Set a saved profile, virtual configuration, or `auto` selection
 waytorandr save      Save the current compositor layout as a profile
 waytorandr remove    Remove a saved profile for the current setup
 waytorandr cycle     Set the next saved profile
@@ -99,6 +99,7 @@ Built-in `set` targets:
 - `auto` - recover blank internal-only topologies with the built-in fallback, then apply the setup default or best matching saved profile when the current outputs have strong live identity
 - `off` - disable external outputs and keep built-in panels on when present
 - `external` - prefer external outputs; if none are present, keep built-in panels enabled
+- `builtin` - disable external outputs and enable built-in panels
 - `common` - clone all connected outputs at the largest shared resolution
 - `largest` - clone all connected outputs at the same origin using each output's largest mode
 - `mirror` - native mirroring at one shared mode
@@ -148,10 +149,9 @@ Automatic profile apply is skipped when the current topology only has weak,
 connector-only output identity; cached monitor identity is not treated as live
 trust for `set auto` or daemon apply.
 
-By default, the daemon logs at `info` level and still honors `RUST_LOG` when no
-explicit log-level option is passed. Use `waytorandrd --log-level debug` or the
-shortcut `waytorandrd --verbose` to enable debug logging for foreground runs or
-custom service units.
+By default, the daemon logs at `info` level and still honors `RUST_LOG` when
+`--verbose` is not passed. Use `waytorandrd --verbose` to enable debug logging
+for foreground runs or custom service units.
 
 Profiles are trusted executable content when they define hooks. Hooks run as the
 current user with `Command::new` and argv, not through a shell unless the profile

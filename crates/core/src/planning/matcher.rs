@@ -7,9 +7,26 @@ use std::collections::HashMap;
 pub struct MatchResult {
     pub profile: Profile,
     pub score: u32,
-    pub matched_outputs: HashMap<String, String>,
+    pub matched_outputs: Vec<MatchedOutputBinding>,
     pub unmatched_required: Vec<String>,
     pub extra_outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MatchedOutputBinding {
+    pub topology_name: String,
+    pub layout_name: String,
+}
+
+impl MatchResult {
+    #[must_use]
+    pub fn matched_layout_for_topology(&self, topology_name: &str) -> Option<&str> {
+        self.matched_outputs
+            .iter()
+            .find(|binding| binding.topology_name == topology_name)
+            .map(|binding| binding.layout_name.as_str())
+    }
 }
 
 pub struct Matcher;
@@ -65,7 +82,7 @@ impl Matcher {
         require_exact: bool,
     ) -> Option<MatchResult> {
         let mut matched_topology_outputs: HashMap<String, OutputState> = HashMap::new();
-        let mut matched_outputs: HashMap<String, String> = HashMap::new();
+        let mut matched_outputs: Vec<MatchedOutputBinding> = Vec::new();
         let mut unmatched_required: Vec<String> = Vec::new();
         let mut total_score = 0u32;
         let mut used_layout_names: Vec<String> = Vec::new();
@@ -82,7 +99,10 @@ impl Matcher {
                     )?;
                     matched_topology_outputs.insert(topo_name.clone(), output.clone());
                     used_layout_names.push(layout_name.clone());
-                    matched_outputs.insert(topo_name.clone(), layout_name);
+                    matched_outputs.push(MatchedOutputBinding {
+                        topology_name: topo_name.clone(),
+                        layout_name,
+                    });
                     total_score += Self::identity_match_score(&matcher.identity, &output.identity);
                 }
                 None if matcher.required => {
@@ -189,25 +209,7 @@ impl Matcher {
     }
 
     fn identity_match_score(query: &OutputIdentity, _candidate: &OutputIdentity) -> u32 {
-        let mut score = 0u32;
-
-        if query.edid_hash.is_some() {
-            score += 100;
-        }
-        if query.make.is_some() {
-            score += 10;
-        }
-        if query.model.is_some() {
-            score += 10;
-        }
-        if query.serial.is_some() {
-            score += 20;
-        }
-        if query.connector.is_some() {
-            score += 5;
-        }
-
-        score
+        query.match_score()
     }
 
     fn identity_desc(identity: &OutputIdentity) -> String {
@@ -302,10 +304,7 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.profile.name, "test");
         assert!(result.unmatched_required.is_empty());
-        assert_eq!(
-            result.matched_outputs.get("DP-1").map(String::as_str),
-            Some("layout-1")
-        );
+        assert_eq!(result.matched_layout_for_topology("DP-1"), Some("layout-1"));
     }
 
     #[test]
@@ -379,6 +378,22 @@ mod tests {
     }
 
     #[test]
+    fn identity_match_score_ignores_placeholder_fields() {
+        let query = OutputIdentity {
+            make: Some("Unknown".to_string()),
+            model: Some("n/a".to_string()),
+            serial: Some("none".to_string()),
+            connector: Some("unknown".to_string()),
+            ..OutputIdentity::default()
+        };
+
+        assert_eq!(
+            Matcher::identity_match_score(&query, &OutputIdentity::new("DP-1")),
+            0
+        );
+    }
+
+    #[test]
     fn duplicate_monitors_bind_one_to_one_with_position_hints() {
         let topology = duplicate_topology();
         let identity = OutputIdentity {
@@ -426,14 +441,8 @@ mod tests {
         let result = Matcher::match_profile(&topology, &[profile]).unwrap();
 
         assert_eq!(result.matched_outputs.len(), 2);
-        assert_eq!(
-            result.matched_outputs.get("DP-1").map(String::as_str),
-            Some("left")
-        );
-        assert_eq!(
-            result.matched_outputs.get("DP-2").map(String::as_str),
-            Some("right")
-        );
+        assert_eq!(result.matched_layout_for_topology("DP-1"), Some("left"));
+        assert_eq!(result.matched_layout_for_topology("DP-2"), Some("right"));
     }
 
     #[test]

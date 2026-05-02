@@ -46,7 +46,7 @@ test:
 test-cli:
     ./scripts/test-cli-integration.sh
 
-check: fmt-check lint test build
+check: fmt-check lint test test-cli build
 
 build:
     nix build
