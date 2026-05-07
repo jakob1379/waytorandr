@@ -7,6 +7,7 @@ use waytorandr_core::engine::TestResult;
 use waytorandr_core::model::Mode;
 use waytorandr_core::model::Topology;
 use waytorandr_core::planner::LayoutPlan;
+use waytorandr_core::terminal::escape_terminal_text;
 
 const RESET: &str = "\x1b[0m";
 
@@ -56,7 +57,7 @@ pub(super) fn heading(text: impl AsRef<str>) -> String {
 }
 
 pub(super) fn key(text: impl AsRef<str>) -> String {
-    paint(text, "36")
+    paint(escape_terminal_text(text), "36")
 }
 
 pub(super) fn success(text: impl AsRef<str>) -> String {
@@ -98,12 +99,12 @@ pub(super) fn status_label(label: &str) -> String {
         "failed" | "rejected" | "error" | "no" | "disabled" | "not found" | "dead" => {
             failure(label)
         }
-        _ => label.to_string(),
+        _ => escape_terminal_text(label),
     }
 }
 
 pub(super) fn value(text: impl AsRef<str>) -> String {
-    paint(text, "1")
+    paint(escape_terminal_text(text), "1")
 }
 
 const fn validation_status_label(test: &TestResult) -> &'static str {
@@ -125,26 +126,30 @@ pub fn print_topology(title: &str, topology: &Topology) {
     outputs.sort_by(|a, b| a.0.cmp(b.0));
 
     for (name, state) in outputs {
+        let redact = redact_monitor_identifiers();
         println!(
             "  {}: {} at ({},{}) scale {} mode {}",
-            key(name),
+            key(redacted_output_name(name, redact)),
             enabled_label(state.enabled),
             state.position.x,
             state.position.y,
             state.scale,
             format_mode(state.mode)
         );
+        if redact {
+            continue;
+        }
         if let Some(description) = &state.identity.description {
-            println!("    description: {description}");
+            println!("    description: {}", value(description));
         }
         if let Some(make) = &state.identity.make {
-            println!("    make: {make}");
+            println!("    make: {}", value(make));
         }
         if let Some(model) = &state.identity.model {
-            println!("    model: {model}");
+            println!("    model: {}", value(model));
         }
         if let Some(serial) = &state.identity.serial {
-            println!("    serial: {serial}");
+            println!("    serial: {}", value(serial));
         }
     }
 }
@@ -153,9 +158,10 @@ pub fn print_plan_summary(plan: &LayoutPlan) {
     let mut outputs: Vec<_> = plan.outputs.iter().collect();
     outputs.sort_by(|a, b| a.0.cmp(b.0));
     for (name, state) in outputs {
+        let redact = redact_monitor_identifiers();
         println!(
             "  {} -> {} at ({},{}) scale {} mode {} transform {}{}",
-            key(name),
+            key(redacted_output_name(name, redact)),
             enabled_label(state.enabled),
             state.position.x,
             state.position.y,
@@ -165,8 +171,26 @@ pub fn print_plan_summary(plan: &LayoutPlan) {
             state
                 .mirror_target
                 .as_deref()
-                .map_or_else(String::new, |target| format!(" mirror {target}"),),
+                .map_or_else(String::new, |target| {
+                    format!(
+                        " mirror {}",
+                        escape_terminal_text(redacted_output_name(target, redact))
+                    )
+                }),
         );
+    }
+}
+
+fn redact_monitor_identifiers() -> bool {
+    std::env::var("WAYTORANDR_REDACT_MONITORS")
+        .is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false" | "False" | "FALSE"))
+}
+
+fn redacted_output_name<'a>(name: &'a str, redact: bool) -> std::borrow::Cow<'a, str> {
+    if redact {
+        std::borrow::Cow::Borrowed("<monitor>")
+    } else {
+        std::borrow::Cow::Borrowed(name)
     }
 }
 
@@ -174,13 +198,16 @@ pub fn print_validation_result(test: &Result<TestResult>) {
     match test {
         Ok(test) => {
             let label = validation_status_label(test);
-            let message = test
-                .message
-                .as_deref()
-                .map_or_else(String::new, |msg| format!(" ({msg})"));
+            let message = test.message.as_deref().map_or_else(String::new, |msg| {
+                format!(" ({})", escape_terminal_text(msg))
+            });
             println!("Backend validation: {}{message}", status_label(label));
         }
-        Err(err) => println!("Backend validation: {} ({err})", status_label("failed")),
+        Err(err) => println!(
+            "Backend validation: {} ({})",
+            status_label("failed"),
+            escape_terminal_text(err.to_string())
+        ),
     }
 }
 

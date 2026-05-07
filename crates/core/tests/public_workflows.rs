@@ -121,6 +121,98 @@ fn profile_store_roundtrips_saved_profiles_per_setup() -> Result<(), Box<dyn Err
 }
 
 #[test]
+fn state_store_prunes_stale_blank_remembered_setups() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let state_store = StateStore::bootstrap()?;
+        let blank = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), {
+                let mut output = OutputState::new("DP-1");
+                output.enabled = false;
+                output
+            })]),
+        };
+        let active = Topology {
+            outputs: HashMap::from([("HDMI-A-1".to_string(), output("HDMI-A-1"))]),
+        };
+        let mut state = State::default();
+        state.remembered_setups.insert("blank".to_string(), blank);
+        state.remembered_setups.insert("active".to_string(), active);
+        state_store.save_state(&state)?;
+
+        let loaded = state_store.load_state()?.unwrap_or_default();
+
+        assert!(!loaded.remembered_setups.contains_key("blank"));
+        assert!(loaded.remembered_setups.contains_key("active"));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn profile_store_rejects_invalid_profile_names() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let store = ProfileStore::bootstrap()?;
+        let state_store = StateStore::bootstrap()?;
+        let err = store
+            .save(&profile("bad/name", "DP-1"), &state_store)
+            .expect_err("invalid profile name should fail");
+
+        assert!(matches!(err, CoreError::InvalidProfileName { .. }));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn profile_store_rejects_oversized_profiles_json() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let path = config_path(temp);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(&path, vec![b' '; 4 * 1024 * 1024 + 1])?;
+        let store = ProfileStore::open()?;
+        let err = store
+            .settings()
+            .expect_err("oversized profile file should fail");
+
+        assert!(matches!(err, CoreError::FileTooLarge { .. }));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_store_rejects_hook_profiles_from_world_writable_store() -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    with_test_dirs(|temp| {
+        let path = config_path(temp);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let mut hook_profile = profile("desk", "DP-1");
+        let mut hooks = Hooks::default();
+        hooks.pre_apply = vec![Hook::new("true")];
+        hook_profile.hooks = hooks;
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profiles": [hook_profile],
+                "settings": {}
+            }))?,
+        )?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))?;
+
+        let store = ProfileStore::open()?;
+        let err = store
+            .settings()
+            .expect_err("hook profiles from writable store should fail");
+
+        assert!(matches!(err, CoreError::UntrustedProfileStore { .. }));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn profile_store_returns_canonical_match_ready_profiles() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let store = ProfileStore::bootstrap()?;
@@ -185,6 +277,45 @@ fn profile_store_migrates_legacy_profiles_to_json_file() -> Result<(), Box<dyn E
 }
 
 #[test]
+fn profile_store_reports_legacy_migration_conflicts() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|temp| {
+        let mut existing = profile("desk", "DP-1");
+        existing.layout.get_mut("DP-1").unwrap().state.position = Position::new(0, 0);
+        let mut legacy = profile("desk", "DP-1");
+        legacy.layout.get_mut("DP-1").unwrap().state.enabled = false;
+
+        let path = config_path(temp);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profiles": [existing],
+                "settings": {}
+            }))?,
+        )?;
+        let profiles_dir = temp
+            .path()
+            .join("config")
+            .join("waytorandr")
+            .join("profiles");
+        std::fs::create_dir_all(&profiles_dir)?;
+        std::fs::write(
+            profiles_dir.join("desk.toml"),
+            toml::to_string_pretty(&legacy)?,
+        )?;
+
+        let err = match ProfileStore::bootstrap() {
+            Ok(_) => return Err("migration conflict should fail".into()),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, CoreError::LegacyProfileConflict { .. }));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn state_store_normalizes_profile_using_cached_outputs() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let state_store = StateStore::bootstrap()?;
@@ -215,7 +346,7 @@ fn state_store_normalizes_profile_using_cached_outputs() -> Result<(), Box<dyn E
 
 #[test]
 fn profile_store_migrates_legacy_defaults_into_profiles_json() -> Result<(), Box<dyn Error>> {
-    with_test_dirs(|temp| {
+    with_test_dirs(|_temp| {
         let state_store = StateStore::bootstrap()?;
         let legacy_state = [
             "default_profile = \"desk\"",
@@ -546,6 +677,34 @@ impl Backend for TestBackend {
 }
 
 #[test]
+fn workflow_rejects_hostile_backend_topology_size() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: (0..=waytorandr_core::model::MAX_TOPOLOGY_OUTPUTS)
+                .map(|idx| (format!("DP-{idx}"), output(&format!("DP-{idx}"))))
+                .collect(),
+        };
+        let backend = TestBackend {
+            topology,
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: true,
+            test_result: TestResult::supported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
+        };
+        let state_store = StateStore::bootstrap()?;
+        let err = workflow::normalized_topology_from_backend(&backend, &state_store)
+            .expect_err("oversized topology should be rejected");
+
+        assert!(matches!(err, CoreError::InvalidTopology(_)));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn runtime_cycle_applies_plan_once_through_public_api() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|temp| {
         let log_path = temp.path().join("hooks.log");
@@ -688,7 +847,7 @@ fn apply_profile_workflow_returns_structured_apply_failures() -> Result<(), Box<
 }
 
 #[test]
-fn apply_profile_workflow_applies_when_validation_is_unsupported() -> Result<(), Box<dyn Error>> {
+fn apply_profile_workflow_blocks_unsupported_validation_by_default() -> Result<(), Box<dyn Error>> {
     with_test_dirs(|_| {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
@@ -707,6 +866,51 @@ fn apply_profile_workflow_applies_when_validation_is_unsupported() -> Result<(),
 
         let execution =
             workflow::apply_profile_workflow(&backend, &state_store, &profile("desk", "DP-1"))?;
+
+        assert!(matches!(
+            execution,
+            workflow::ApplyExecution::Unsupported { ref validation, .. }
+                if validation.status == waytorandr_core::engine::ValidationStatus::Unsupported
+        ));
+        assert_eq!(
+            *backend
+                .apply_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            0
+        );
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
+fn apply_profile_workflow_can_force_unsupported_validation() -> Result<(), Box<dyn Error>> {
+    with_test_dirs(|_| {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output("DP-1"))]),
+        };
+        let state_store = StateStore::bootstrap()?;
+        let backend = TestBackend {
+            topology,
+            enumerate_calls: Arc::new(Mutex::new(0)),
+            can_test: false,
+            test_result: TestResult::unsupported(None),
+            apply_calls: Arc::new(Mutex::new(0)),
+            apply_success: true,
+            apply_failure: None,
+            apply_message: None,
+        };
+
+        let execution = workflow::apply_profile_workflow_with_policy(
+            &backend,
+            &state_store,
+            &profile("desk", "DP-1"),
+            workflow::ApplyPolicy {
+                allow_unsupported_validation: true,
+                ..workflow::ApplyPolicy::default()
+            },
+        )?;
 
         assert!(matches!(
             execution,

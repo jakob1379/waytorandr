@@ -46,6 +46,13 @@ impl LayoutPlan {
         self.preset_used = Some(preset_used);
         self
     }
+
+    #[must_use]
+    pub fn has_enabled_real_outputs(&self) -> bool {
+        self.outputs.values().any(|output| {
+            output.enabled && !output.identity.is_ignored && !output.identity.is_virtual
+        })
+    }
 }
 
 impl Planner {
@@ -482,7 +489,7 @@ fn mirror_mode(topology: &Topology, outputs: &[(String, OutputState)]) -> Result
         .ok_or_else(|| PlanError::InvalidConfiguration("No common mode found".to_string()))
 }
 
-fn is_internal_output(state: &OutputState, builtin_output: Option<&OutputIdentity>) -> bool {
+pub fn is_internal_output(state: &OutputState, builtin_output: Option<&OutputIdentity>) -> bool {
     if let Some(builtin_output) = builtin_output {
         return identities_match(builtin_output, &state.identity);
     }
@@ -505,6 +512,38 @@ fn is_internal_output(state: &OutputState, builtin_output: Option<&OutputIdentit
         || connector.starts_with("dsi")
         || description.contains("built-in")
         || description.contains("internal display")
+}
+
+#[must_use]
+pub fn topology_has_external_output(
+    topology: &Topology,
+    builtin_output: Option<&OutputIdentity>,
+) -> bool {
+    topology.outputs.values().any(|state| {
+        !state.identity.is_ignored
+            && !state.identity.is_virtual
+            && !is_internal_output(state, builtin_output)
+    })
+}
+
+#[must_use]
+pub fn topology_is_blank_internal_only(
+    topology: &Topology,
+    builtin_output: Option<&OutputIdentity>,
+) -> bool {
+    let mut has_internal = false;
+    for state in topology
+        .outputs
+        .values()
+        .filter(|state| !state.identity.is_ignored && !state.identity.is_virtual)
+    {
+        if !is_internal_output(state, builtin_output) {
+            return false;
+        }
+        has_internal = true;
+    }
+
+    has_internal && !topology.has_enabled_real_outputs()
 }
 
 #[must_use]
@@ -570,6 +609,50 @@ mod tests {
         state.mirror_target = None;
         state.backend_data = None;
         state
+    }
+
+    #[test]
+    fn blank_internal_only_detects_disabled_edp() {
+        let mut internal = output("eDP-1", 1920, 1080);
+        internal.enabled = false;
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), internal)]),
+        };
+
+        assert!(topology_is_blank_internal_only(&topology, None));
+    }
+
+    #[test]
+    fn blank_internal_only_rejects_enabled_internal() {
+        let topology = Topology {
+            outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", 1920, 1080))]),
+        };
+
+        assert!(!topology_is_blank_internal_only(&topology, None));
+    }
+
+    #[test]
+    fn blank_internal_only_rejects_external_outputs() {
+        let mut external = output("DP-1", 1920, 1080);
+        external.enabled = false;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), external)]),
+        };
+
+        assert!(!topology_is_blank_internal_only(&topology, None));
+        assert!(topology_has_external_output(&topology, None));
+    }
+
+    #[test]
+    fn blank_internal_only_honors_configured_builtin_output() {
+        let mut output = output("DP-1", 1920, 1080);
+        output.enabled = false;
+        let builtin = output.identity.clone();
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output)]),
+        };
+
+        assert!(topology_is_blank_internal_only(&topology, Some(&builtin)));
     }
 
     #[test]

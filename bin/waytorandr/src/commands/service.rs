@@ -5,9 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 
-use super::output::{
-    failure, heading, key, status_label, success, value, warning, write_json, yes_no,
-};
+use super::output::{heading, key, status_label, success, value, warning, write_json, yes_no};
 use crate::cli::ServiceCommands;
 
 const UNIT_NAME: &str = "waytorandrd.service";
@@ -70,7 +68,7 @@ pub(super) fn run(command: ServiceCommands, json: bool) -> Result<()> {
         ServiceCommands::Stop => cmd_systemctl("stop", json),
         ServiceCommands::Restart => cmd_systemctl("restart", json),
         ServiceCommands::Status => cmd_status(json),
-        ServiceCommands::Run => cmd_run(json),
+        ServiceCommands::Run(args) => cmd_run(json, args.no_hooks),
     }
 }
 
@@ -106,7 +104,11 @@ fn cmd_install(json: bool) -> Result<()> {
         success("Installed"),
         value(format!("user service '{UNIT_NAME}'"))
     );
-    println!("{} {}", key("Unit file"), unit_path.display());
+    println!(
+        "{} {}",
+        key("Unit file"),
+        value(unit_path.display().to_string())
+    );
     println!(
         "{} {}",
         success("Enabled for"),
@@ -199,13 +201,17 @@ fn cmd_status(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_run(json: bool) -> Result<()> {
+fn cmd_run(json: bool, no_hooks: bool) -> Result<()> {
     if json {
         bail!("--json is not supported with `waytorandr service run`");
     }
 
     let daemon_path = daemon_binary_path()?;
-    let status = Command::new(&daemon_path)
+    let mut command = Command::new(&daemon_path);
+    if no_hooks {
+        command.arg("--no-hooks");
+    }
+    let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -253,7 +259,10 @@ fn render_unit(daemon_path: &Path) -> String {
 
 fn quote_systemd_value(value: &std::ffi::OsStr) -> String {
     let value = value.to_string_lossy();
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%");
     format!("\"{escaped}\"")
 }
 
@@ -354,7 +363,7 @@ fn parse_systemctl_show(text: &str) -> ServiceStatus {
 }
 
 fn print_status_summary(status: &ServiceStatus) {
-    println!("{}: {}", key("Service"), status.unit);
+    println!("{}: {}", key("Service"), value(status.unit));
     println!("{}: {}", key("Installed"), yes_no(status.installed));
     if let Some(state) = &status.unit_file_state {
         println!("{}: {}", key("Enabled"), status_label(state));
@@ -372,7 +381,7 @@ fn print_status_summary(status: &ServiceStatus) {
         }
     }
     if let Some(path) = &status.fragment_path {
-        println!("{}: {path}", key("Unit file"));
+        println!("{}: {}", key("Unit file"), value(path));
     }
 }
 
@@ -385,9 +394,9 @@ fn capitalize(value: &str) -> String {
 
 fn service_sub_state(active_state: &str, sub_state: &str) -> String {
     match (active_state, sub_state) {
-        ("active", "running" | "listening" | "exited") => success(sub_state),
-        ("inactive", "dead") => warning(sub_state),
-        (_, "failed") | ("failed", _) => failure(sub_state),
+        ("active", "running" | "listening" | "exited") => status_label(sub_state),
+        ("inactive", "dead") => status_label(sub_state),
+        (_, "failed") | ("failed", _) => status_label(sub_state),
         _ => warning(sub_state),
     }
 }
@@ -412,6 +421,13 @@ mod tests {
         assert!(unit.contains("ConditionEnvironment=WAYLAND_DISPLAY"));
         assert!(unit.contains("ExecStart=\"/tmp/waytorandrd\""));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn render_unit_escapes_systemd_execstart_value() {
+        let unit = render_unit(Path::new("/tmp/way tor/way%to\\randr\"d"));
+
+        assert!(unit.contains("ExecStart=\"/tmp/way tor/way%%to\\\\randr\\\"d\""));
     }
 
     #[test]
@@ -459,7 +475,7 @@ mod tests {
 
     #[test]
     fn run_rejects_json_output() {
-        let err = cmd_run(true).expect_err("json should be rejected for service run");
+        let err = cmd_run(true, false).expect_err("json should be rejected for service run");
 
         assert!(err
             .to_string()

@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
+
 pub struct StateStore {
     dir: PathBuf,
 }
@@ -90,6 +92,13 @@ impl State {
         self.daemon_enabled = true;
         self.backend = Some(backend);
     }
+
+    pub fn prune_blank_remembered_setups(&mut self) -> bool {
+        let original_len = self.remembered_setups.len();
+        self.remembered_setups
+            .retain(|_, topology| topology.has_enabled_real_outputs());
+        self.remembered_setups.len() != original_len
+    }
 }
 
 impl StateStore {
@@ -117,6 +126,7 @@ impl StateStore {
             path: store.dir.clone(),
             source,
         })?;
+        restrict_dir_permissions(&store.dir)?;
         Ok(store)
     }
 
@@ -144,12 +154,13 @@ impl StateStore {
     /// # Errors
     /// Returns an error if the state file cannot be read or parsed.
     pub fn load_state(&self) -> CoreResult<Option<State>> {
-        self.load_state_unlocked()
+        with_exclusive_lock(&self.state_path(), || self.load_state_unlocked())
     }
 
     fn load_state_unlocked(&self) -> CoreResult<Option<State>> {
         let path = self.state_path();
         if path.exists() {
+            reject_large_file(&path, MAX_STATE_FILE_BYTES)?;
             let content = fs::read_to_string(&path).map_err(|source| CoreError::ReadFile {
                 path: path.clone(),
                 source,
@@ -157,6 +168,9 @@ impl StateStore {
             let mut state: State =
                 toml::from_str(&content).map_err(|source| CoreError::ParseToml { path, source })?;
             state.migrate_legacy_default_profile();
+            if state.prune_blank_remembered_setups() {
+                self.save_state_unlocked(&state)?;
+            }
             Ok(Some(state))
         } else {
             Ok(None)
@@ -190,6 +204,9 @@ impl StateStore {
     ) -> CoreResult<T> {
         self.update_state(|state| {
             let normalized = normalize_topology_with_known_outputs(topology, &state.known_outputs);
+            normalized
+                .validate_limits()
+                .map_err(CoreError::InvalidTopology)?;
             for (name, output) in &normalized.outputs {
                 if state.known_outputs.get(name.as_str()) != Some(&output.identity) {
                     state
@@ -215,6 +232,41 @@ impl StateStore {
     fn state_path(&self) -> PathBuf {
         self.dir.join("state.toml")
     }
+}
+
+#[cfg(unix)]
+fn restrict_dir_permissions(path: &Path) -> CoreResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
+        CoreError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
+}
+
+#[cfg(not(unix))]
+fn restrict_dir_permissions(_path: &Path) -> CoreResult<()> {
+    Ok(())
+}
+
+fn reject_large_file(path: &Path, max_bytes: u64) -> CoreResult<()> {
+    let actual_bytes = fs::metadata(path)
+        .map_err(|source| CoreError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if actual_bytes > max_bytes {
+        return Err(CoreError::FileTooLarge {
+            path: path.to_path_buf(),
+            actual_bytes,
+            max_bytes,
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

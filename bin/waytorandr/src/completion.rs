@@ -2,10 +2,7 @@ use clap_complete::engine::CompletionCandidate;
 use std::collections::BTreeSet;
 
 use crate::preset::{is_builtin_set_target, virtual_completion_candidates};
-use waytorandr_backend_loader::connect_backend;
-use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
-use waytorandr_core::workflow;
 
 pub(crate) fn complete_set_targets(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
     let Some(current) = current.to_str() else {
@@ -52,27 +49,9 @@ fn saved_profile_set_target_completion_candidates(current: &str) -> Vec<Completi
 }
 
 fn load_saved_profile_names() -> Vec<String> {
-    let Ok(setup_fingerprint) = current_setup_fingerprint() else {
-        return Vec::new();
-    };
-    ProfileStore::open()
-        .and_then(|store| {
-            let state_store = StateStore::open()?;
-            store.list_for_setup(&setup_fingerprint, &state_store)
-        })
+    ProfileStore::open_read_only()
+        .and_then(|store| store.list_names())
         .unwrap_or_default()
-        .into_iter()
-        .map(|stored| stored.profile.name)
-        .collect()
-}
-
-fn current_setup_fingerprint() -> anyhow::Result<String> {
-    let backend = connect_backend()?;
-    let state_store = StateStore::open()?;
-    Ok(
-        workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?
-            .setup_fingerprint(),
-    )
 }
 
 #[cfg(test)]
@@ -85,6 +64,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
     use waytorandr_core::model::{Mode, OutputIdentity, OutputState, Position, Topology};
     use waytorandr_core::profile::{OutputMatcher, Profile};
+    use waytorandr_core::state::StateStore;
 
     const TEST_BACKEND_STATE_ENV: &str = "WAYTORANDR_TEST_BACKEND_STATE";
     const TEST_BACKEND_NAME_ENV: &str = "WAYTORANDR_TEST_BACKEND_NAME";
@@ -130,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_profile_completion_only_includes_current_setup_profiles() {
+    fn saved_profile_completion_lists_all_profiles_without_backend_scope() {
         let _guard = test_lock().lock().expect("test lock");
         let env = CompletionTestEnv::new();
 
@@ -146,7 +126,7 @@ mod tests {
             .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
             .collect();
 
-        assert_eq!(names, vec!["desk"]);
+        assert_eq!(names, vec!["desk", "travel"]);
     }
 
     #[test]

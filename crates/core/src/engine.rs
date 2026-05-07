@@ -1,10 +1,23 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
 use crate::model::{Capabilities, Topology};
 use crate::planner::LayoutPlan;
 use crate::profile::{Hook, Hooks};
+use crate::terminal::escape_terminal_text;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookPolicy {
+    Enabled,
+    Disabled,
+}
+
+impl Default for HookPolicy {
+    fn default() -> Self {
+        Self::Enabled
+    }
+}
 
 pub trait Backend {
     #[must_use]
@@ -89,6 +102,9 @@ impl<B: Backend> OutputWatcher for PollingOutputWatcher<B> {
     fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
         thread::sleep(self.interval);
         let topology = self.backend.enumerate_outputs()?;
+        topology
+            .validate_limits()
+            .map_err(CoreError::InvalidTopology)?;
         let setup_fingerprint = topology.setup_fingerprint();
         if self.last_setup_fingerprint.as_ref() == Some(&setup_fingerprint) {
             return Ok(None);
@@ -211,12 +227,22 @@ impl<B: Backend> Engine<B> {
     ///
     /// # Errors
     /// Returns an error if the backend apply step fails.
-    pub(crate) fn apply_plan(&self, plan: &LayoutPlan, hooks: &Hooks) -> CoreResult<ApplyResult> {
+    pub(crate) fn apply_plan(
+        &self,
+        plan: &LayoutPlan,
+        hooks: &Hooks,
+        hook_policy: HookPolicy,
+    ) -> CoreResult<ApplyResult> {
         let count = plan.outputs.len();
         tracing::info!("Applying plan for {count} outputs");
 
+        if hook_policy == HookPolicy::Disabled {
+            tracing::debug!("Skipping hooks because hook execution is disabled");
+            return self.backend.apply(plan);
+        }
+
         for hook in &hooks.pre_apply {
-            let command = &hook.command;
+            let command = escape_terminal_text(&hook.command);
             tracing::debug!("Running pre-apply hook: {command}");
         }
 
@@ -272,13 +298,14 @@ impl<B: Backend> Engine<B> {
         use std::time::{Duration, Instant};
 
         let start = Instant::now();
-        let timeout = Duration::from_secs(hook.timeout_secs);
+        let timeout = Duration::from_secs(hook.effective_timeout_secs());
 
         let mut cmd = Command::new(&hook.command);
         cmd.args(&hook.args);
         cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+        prepare_hook_command(&mut cmd);
 
         match cmd.spawn() {
             Ok(mut child) => loop {
@@ -297,12 +324,13 @@ impl<B: Backend> Engine<B> {
                     }
                     Ok(None) => {
                         if start.elapsed() > timeout {
-                            let timeout_message = match child.kill() {
+                            let timeout_message = match kill_hook_child(&mut child) {
                                 Ok(()) => "Hook timed out".to_string(),
                                 Err(err) => {
                                     format!("Hook timed out and could not be killed: {err}")
                                 }
                             };
+                            let _ = child.wait();
                             return HookResult {
                                 success: false,
                                 exit_code: None,
@@ -343,12 +371,64 @@ impl<B: Backend> Engine<B> {
 
 fn format_hook_failure(result: &HookResult) -> String {
     let phase = result.phase.as_deref().unwrap_or("hook");
-    let command = result.command.as_deref().unwrap_or("<unknown>");
+    let command = escape_terminal_text(result.command.as_deref().unwrap_or("<unknown>"));
     if result.stderr.is_empty() {
         format!("{phase} hook '{command}' failed")
     } else {
         let stderr = &result.stderr;
         format!("{phase} hook '{command}' failed: {stderr}")
+    }
+}
+
+fn prepare_hook_command(command: &mut std::process::Command) {
+    prepare_hook_command_platform(command);
+}
+
+#[cfg(unix)]
+fn prepare_hook_command_platform(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(|| {
+            if unix_process::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn prepare_hook_command_platform(_command: &mut std::process::Command) {}
+
+fn kill_hook_child(child: &mut std::process::Child) -> std::io::Result<()> {
+    kill_hook_child_platform(child)
+}
+
+#[cfg(unix)]
+fn kill_hook_child_platform(child: &mut std::process::Child) -> std::io::Result<()> {
+    let pid = i32::try_from(child.id()).unwrap_or(i32::MAX);
+    let killed_group = unsafe { unix_process::kill(-pid, unix_process::SIGKILL) };
+    if killed_group == -1 {
+        let group_error = std::io::Error::last_os_error();
+        child.kill()?;
+        return Err(group_error);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn kill_hook_child_platform(child: &mut std::process::Child) -> std::io::Result<()> {
+    child.kill()
+}
+
+#[cfg(unix)]
+mod unix_process {
+    pub const SIGKILL: i32 = 9;
+
+    extern "C" {
+        pub fn setsid() -> i32;
+        pub fn kill(pid: i32, sig: i32) -> i32;
     }
 }
 
@@ -445,7 +525,9 @@ mod tests {
             state
         })]));
 
-        let result = engine.apply_plan(&plan, &hooks).unwrap();
+        let result = engine
+            .apply_plan(&plan, &hooks, HookPolicy::Enabled)
+            .unwrap();
 
         assert!(result.success);
         assert_eq!(*backend.apply_calls.lock().unwrap(), 1);
@@ -472,7 +554,9 @@ mod tests {
             state
         })]));
 
-        let result = engine.apply_plan(&plan, &hooks).unwrap();
+        let result = engine
+            .apply_plan(&plan, &hooks, HookPolicy::Enabled)
+            .unwrap();
 
         assert!(!result.success);
         assert_eq!(result.failure, Some(ConfigFailureKind::Rejected));
@@ -481,6 +565,60 @@ mod tests {
             .as_deref()
             .is_some_and(|message| message.contains("pre-apply hook")));
         assert_eq!(*backend.apply_calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn apply_plan_skips_hooks_when_policy_disables_them() {
+        let backend = TestBackend {
+            apply_calls: Arc::new(Mutex::new(0)),
+        };
+        let engine = Engine::new(backend.clone());
+        let hooks = Hooks {
+            pre_apply: vec![Hook::new("definitely-not-a-real-hook-command")],
+            ..Hooks::default()
+        };
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.enabled = true;
+            state
+        })]));
+
+        let result = engine
+            .apply_plan(&plan, &hooks, HookPolicy::Disabled)
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(*backend.apply_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn noisy_hook_output_does_not_block_on_pipes() {
+        let backend = TestBackend {
+            apply_calls: Arc::new(Mutex::new(0)),
+        };
+        let engine = Engine::new(backend.clone());
+        let mut hook = Hook::new("sh");
+        hook.args = vec![
+            "-c".to_string(),
+            "dd if=/dev/zero bs=1024 count=512 2>/dev/null".to_string(),
+        ];
+        hook.timeout_secs = 5;
+        let hooks = Hooks {
+            pre_apply: vec![hook],
+            ..Hooks::default()
+        };
+        let plan = LayoutPlan::new(HashMap::from([("DP-1".to_string(), {
+            let mut state = OutputState::new("DP-1");
+            state.enabled = true;
+            state
+        })]));
+
+        let result = engine
+            .apply_plan(&plan, &hooks, HookPolicy::Enabled)
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(*backend.apply_calls.lock().unwrap(), 1);
     }
 
     #[test]

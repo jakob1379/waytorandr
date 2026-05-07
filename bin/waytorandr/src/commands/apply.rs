@@ -7,13 +7,23 @@ use super::output::{
 use super::shared::{load_current_topology, plan_outputs, JsonOutputEntry};
 use super::OutputMode;
 use waytorandr_backend_loader::connect_backend;
-use waytorandr_core::engine::{ConfigFailureKind, TestResult};
-use waytorandr_core::model::{BackendKind, OutputIdentity, VirtualPreset};
-use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::profile::Profile;
+use waytorandr_core::engine::{
+    Backend, ConfigFailureKind, HookPolicy, TestResult, ValidationStatus,
+};
+use waytorandr_core::error::CoreError;
+use waytorandr_core::model::{BackendKind, OutputIdentity, Topology, VirtualPreset};
+use waytorandr_core::planner::{topology_is_blank_internal_only, LayoutPlan, Planner};
+use waytorandr_core::profile::{Hooks, Profile};
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
 use waytorandr_core::workflow;
+
+fn apply_policy(force: bool) -> workflow::ApplyPolicy {
+    workflow::ApplyPolicy {
+        allow_unsupported_validation: force,
+        ..workflow::ApplyPolicy::default()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum ActionTargetType {
@@ -213,14 +223,16 @@ fn build_apply_outcome(
     execution: workflow::ApplyExecution,
 ) -> Result<ActionOutcome> {
     match execution {
-        workflow::ApplyExecution::Applied { plan, .. } => {
+        workflow::ApplyExecution::Applied {
+            plan, validation, ..
+        } => {
             let default_target = default_set.then(|| target.clone());
             Ok(ActionOutcome {
                 target,
                 target_type,
                 dry_run: false,
                 plan,
-                validation: None,
+                validation: Some(validation),
                 default_set,
                 default_scope,
                 default_target,
@@ -246,6 +258,7 @@ pub(super) fn execute_virtual_action(
     preset: VirtualPreset,
     dry_run: bool,
     builtin_output: Option<&OutputIdentity>,
+    force: bool,
 ) -> Result<ActionOutcome> {
     let backend = connect_backend()?;
     let capabilities = backend.capabilities();
@@ -271,9 +284,14 @@ pub(super) fn execute_virtual_action(
         );
     }
 
-    let execution =
-        workflow::apply_preset_workflow(backend.as_ref(), &state_store, preset, builtin_output)
-            .map_err(anyhow::Error::from)?;
+    let execution = workflow::apply_preset_workflow_with_policy(
+        backend.as_ref(),
+        &state_store,
+        preset,
+        builtin_output,
+        apply_policy(force),
+    )
+    .map_err(anyhow::Error::from)?;
 
     if let workflow::ApplyExecution::Applied {
         applied_topology, ..
@@ -291,10 +309,133 @@ pub(super) fn execute_virtual_action(
     )
 }
 
+pub(super) fn execute_builtin_fallback_action(
+    dry_run: bool,
+    builtin_output: Option<&OutputIdentity>,
+    force: bool,
+) -> Result<Option<ActionOutcome>> {
+    let backend = connect_backend()?;
+    let capabilities = backend.capabilities();
+    let Some((_topology, plan)) =
+        plan_builtin_fallback_from_current(backend.as_ref(), builtin_output)?
+    else {
+        return Ok(None);
+    };
+    let validation = workflow::validate_plan(backend.as_ref(), &plan)?;
+    if validation.status == ValidationStatus::Rejected {
+        bail!(
+            "{}",
+            validation
+                .message
+                .as_deref()
+                .unwrap_or("backend rejected built-in fallback")
+        );
+    }
+
+    if dry_run {
+        return Ok(Some(ActionOutcome {
+            target: VirtualPreset::Builtin.to_string(),
+            target_type: ActionTargetType::Virtual,
+            dry_run: true,
+            plan,
+            validation: Some(validation),
+            default_set: false,
+            default_scope: None,
+            default_target: None,
+            saved_profile: None,
+        }));
+    }
+
+    if validation.status == ValidationStatus::Unsupported && !force {
+        bail!(
+            "{}",
+            validation
+                .message
+                .as_deref()
+                .unwrap_or("backend validation is unsupported")
+        );
+    }
+
+    let Some((latest_topology, latest_plan)) =
+        plan_builtin_fallback_from_current(backend.as_ref(), builtin_output)?
+    else {
+        return Ok(None);
+    };
+    let latest_validation = workflow::validate_plan(backend.as_ref(), &latest_plan)?;
+    if latest_validation.status == ValidationStatus::Rejected {
+        bail!(
+            "{}",
+            latest_validation
+                .message
+                .as_deref()
+                .unwrap_or("backend rejected built-in fallback")
+        );
+    }
+    if latest_validation.status == ValidationStatus::Unsupported && !force {
+        bail!(
+            "{}",
+            latest_validation
+                .message
+                .as_deref()
+                .unwrap_or("backend validation is unsupported")
+        );
+    }
+
+    let hooks = Hooks::default();
+    let apply_result =
+        workflow::apply_plan(backend.as_ref(), &hooks, HookPolicy::Disabled, &latest_plan)?;
+    if !apply_result.success {
+        bail!(
+            "{}",
+            apply_result
+                .message
+                .as_deref()
+                .unwrap_or("backend failed to apply built-in fallback")
+        );
+    }
+    let applied_topology = workflow::bounded_topology_from_backend(backend.as_ref())?;
+    if applied_topology.setup_fingerprint() != latest_topology.setup_fingerprint()
+        || !applied_topology.has_enabled_real_outputs()
+    {
+        bail!("topology changed during built-in fallback apply");
+    }
+    save_runtime_state(
+        VirtualPreset::Builtin.as_str(),
+        Some(capabilities.backend),
+        &applied_topology,
+    )?;
+
+    Ok(Some(ActionOutcome {
+        target: VirtualPreset::Builtin.to_string(),
+        target_type: ActionTargetType::Virtual,
+        dry_run: false,
+        plan: latest_plan,
+        validation: Some(latest_validation),
+        default_set: false,
+        default_scope: None,
+        default_target: None,
+        saved_profile: None,
+    }))
+}
+
+fn plan_builtin_fallback_from_current(
+    backend: &(impl waytorandr_core::engine::Backend + ?Sized),
+    builtin_output: Option<&OutputIdentity>,
+) -> Result<Option<(waytorandr_core::model::Topology, LayoutPlan)>> {
+    let topology = workflow::bounded_topology_from_backend(backend)?;
+    if !topology_is_blank_internal_only(&topology, builtin_output) {
+        return Ok(None);
+    }
+
+    let plan = Planner::plan_from_preset(VirtualPreset::Builtin, &topology, builtin_output, None)?;
+    Ok(Some((topology, plan)))
+}
+
 pub(super) fn execute_profile_action(
     profile: &Profile,
     dry_run: bool,
     make_default: bool,
+    force: bool,
 ) -> Result<ActionOutcome> {
     validate_profile(profile)?;
     let backend = connect_backend()?;
@@ -312,8 +453,14 @@ pub(super) fn execute_profile_action(
         );
     }
 
-    let execution = workflow::apply_profile_workflow(backend.as_ref(), &state_store, profile)
-        .map_err(anyhow::Error::from)?;
+    warn_profile_hooks(profile);
+    let execution = workflow::apply_profile_workflow_with_policy(
+        backend.as_ref(),
+        &state_store,
+        profile,
+        apply_policy(force),
+    )
+    .map_err(anyhow::Error::from)?;
 
     if let workflow::ApplyExecution::Applied {
         applied_topology, ..
@@ -335,6 +482,152 @@ pub(super) fn execute_profile_action(
         make_default.then_some(DefaultScope::Setup),
         execution,
     )
+}
+
+pub(super) fn execute_trusted_profile_action(
+    profile: &Profile,
+    dry_run: bool,
+    force: bool,
+) -> Result<ActionOutcome> {
+    validate_profile(profile)?;
+    let backend = connect_backend()?;
+    let backend_kind = backend.capabilities().backend;
+    let Some((_topology, plan)) = plan_trusted_profile_from_current(backend.as_ref(), profile)?
+    else {
+        bail!("no matching profile configured");
+    };
+    if !plan.has_enabled_real_outputs() {
+        bail!("refusing to apply a layout with no enabled real outputs");
+    }
+
+    let validation = workflow::validate_plan(backend.as_ref(), &plan)?;
+    if validation.status == ValidationStatus::Rejected {
+        bail!(
+            "{}",
+            validation
+                .message
+                .as_deref()
+                .unwrap_or("backend rejected profile")
+        );
+    }
+
+    if dry_run {
+        return Ok(ActionOutcome {
+            target: profile.name.clone(),
+            target_type: ActionTargetType::Profile,
+            dry_run: true,
+            plan,
+            validation: Some(validation),
+            default_set: false,
+            default_scope: None,
+            default_target: None,
+            saved_profile: None,
+        });
+    }
+
+    if validation.status == ValidationStatus::Unsupported && !force {
+        bail!(
+            "{}",
+            validation
+                .message
+                .as_deref()
+                .unwrap_or("backend validation is unsupported")
+        );
+    }
+
+    let Some((latest_topology, latest_plan)) =
+        plan_trusted_profile_from_current(backend.as_ref(), profile)?
+    else {
+        bail!("no matching profile configured");
+    };
+    if !latest_plan.has_enabled_real_outputs() {
+        bail!("refusing to apply a layout with no enabled real outputs");
+    }
+    let latest_validation = workflow::validate_plan(backend.as_ref(), &latest_plan)?;
+    if latest_validation.status == ValidationStatus::Rejected {
+        bail!(
+            "{}",
+            latest_validation
+                .message
+                .as_deref()
+                .unwrap_or("backend rejected profile")
+        );
+    }
+    if latest_validation.status == ValidationStatus::Unsupported && !force {
+        bail!(
+            "{}",
+            latest_validation
+                .message
+                .as_deref()
+                .unwrap_or("backend validation is unsupported")
+        );
+    }
+
+    warn_profile_hooks(profile);
+    let apply_result = workflow::apply_plan(
+        backend.as_ref(),
+        &profile.hooks,
+        HookPolicy::Enabled,
+        &latest_plan,
+    )?;
+    if !apply_result.success {
+        bail!(
+            "{}",
+            apply_result
+                .message
+                .as_deref()
+                .unwrap_or("backend failed to apply profile")
+        );
+    }
+
+    let applied_topology = workflow::bounded_topology_from_backend(backend.as_ref())?;
+    if applied_topology.setup_fingerprint() != latest_topology.setup_fingerprint()
+        || !applied_topology.has_enabled_real_outputs()
+    {
+        bail!("topology changed during profile apply");
+    }
+    save_runtime_state(&profile.name, Some(backend_kind), &applied_topology)?;
+
+    Ok(ActionOutcome {
+        target: profile.name.clone(),
+        target_type: ActionTargetType::Profile,
+        dry_run: false,
+        plan: latest_plan,
+        validation: Some(latest_validation),
+        default_set: false,
+        default_scope: None,
+        default_target: None,
+        saved_profile: None,
+    })
+}
+
+fn warn_profile_hooks(profile: &Profile) {
+    if profile.has_hooks() {
+        eprintln!(
+            "{} {}",
+            warning("Warning:"),
+            value(format!(
+                "profile '{}' contains hooks and will execute commands as the current user",
+                profile.name
+            ))
+        );
+    }
+}
+
+fn plan_trusted_profile_from_current(
+    backend: &(impl Backend + ?Sized),
+    profile: &Profile,
+) -> Result<Option<(Topology, LayoutPlan)>> {
+    let topology = workflow::bounded_topology_from_backend(backend)?;
+    if !topology.has_strong_setup_identity() {
+        return Ok(None);
+    }
+
+    match workflow::plan_profile_for_topology(profile, &topology) {
+        Ok(plan) => Ok(Some((topology, plan))),
+        Err(CoreError::ProfileMismatch) => Ok(None),
+        Err(err) => Err(anyhow::Error::from(err)),
+    }
 }
 
 pub(super) fn emit_action_outcome(
@@ -422,6 +715,9 @@ pub(super) fn emit_action_outcome(
         ))
     );
     print_plan_summary(&outcome.plan);
+    if let Some(test) = &outcome.validation {
+        print_validation_result(&Ok(test.clone()));
+    }
     if let Some(saved_profile) = &outcome.saved_profile {
         println!(
             "{} {}",

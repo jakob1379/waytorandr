@@ -66,6 +66,12 @@ pub enum CoreError {
         #[source]
         source: std::io::Error,
     },
+    #[error("refusing to read {path:?}: file is {actual_bytes} bytes, limit is {max_bytes} bytes")]
+    FileTooLarge {
+        path: PathBuf,
+        actual_bytes: u64,
+        max_bytes: u64,
+    },
     #[error("failed to write file {path:?}")]
     WriteFile {
         path: PathBuf,
@@ -100,6 +106,18 @@ pub enum CoreError {
         legacy_path: PathBuf,
         setup_path: PathBuf,
     },
+    #[error("too many legacy profiles in {path:?}: {actual} found, limit is {max}")]
+    TooManyLegacyProfiles {
+        path: PathBuf,
+        actual: usize,
+        max: usize,
+    },
+    #[error("invalid profile name '{name}': {reason}")]
+    InvalidProfileName { name: String, reason: String },
+    #[error("refusing hook-bearing profiles from untrusted profile store {path:?}: {reason}")]
+    UntrustedProfileStore { path: PathBuf, reason: String },
+    #[error("invalid backend topology: {0}")]
+    InvalidTopology(String),
     #[error("profile does not match current topology")]
     ProfileMismatch,
     #[error("backend error")]

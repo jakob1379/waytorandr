@@ -278,11 +278,40 @@ impl Backend for GnomeBackend {
 
         let applied_state = self.enumerate_outputs()?;
         let mut result = ApplyResult::default();
-        result.success = true;
-        result.message = Some("GNOME applied the configuration".to_string());
+        result.success = plan_matches_topology(plan, &applied_state);
+        result.message = Some(if result.success {
+            "GNOME applied the configuration".to_string()
+        } else {
+            "GNOME reported success but the resulting topology does not match the requested plan"
+                .to_string()
+        });
+        if !result.success {
+            result.failure = Some(ConfigFailureKind::Rejected);
+        }
         result.applied_state = Some(applied_state);
         Ok(result)
     }
+}
+
+fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
+    for (name, desired) in &plan.outputs {
+        let Some(actual) = topology.outputs.get(name) else {
+            if desired.enabled {
+                return false;
+            }
+            continue;
+        };
+        if !actual.same_layout_as(desired) {
+            return false;
+        }
+    }
+
+    topology.outputs.iter().all(|(name, actual)| {
+        plan.outputs.contains_key(name)
+            || !actual.enabled
+            || actual.identity.is_ignored
+            || actual.identity.is_virtual
+    })
 }
 
 #[derive(Debug)]
@@ -902,6 +931,17 @@ mod tests {
             Some(Mode::new(2560, 1440, 144))
         );
         assert_eq!(topology.outputs["DP-1"].mirror_target, None);
+    }
+
+    #[test]
+    fn plan_match_rejects_extra_enabled_outputs() {
+        let topology = GnomeBackend::export_topology(&sample_state());
+        let plan = LayoutPlan::new(HashMap::from([(
+            "eDP-1".to_string(),
+            topology.outputs["eDP-1"].clone(),
+        )]));
+
+        assert!(!plan_matches_topology(&plan, &topology));
     }
 
     #[test]

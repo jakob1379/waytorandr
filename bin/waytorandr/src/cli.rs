@@ -111,7 +111,7 @@ pub struct ServiceArgs {
     pub(crate) command: ServiceCommands,
 }
 
-#[derive(Subcommand, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Subcommand, Clone, Debug, Eq, PartialEq)]
 pub enum ServiceCommands {
     #[command(about = "Install the waytorandrd user service")]
     Install,
@@ -133,9 +133,18 @@ pub enum ServiceCommands {
 
     #[command(about = "Run waytorandrd in the foreground")]
     #[command(
-        help_template = "Run waytorandrd in the foreground\n\nUsage: {usage}\n\nThis command does not support --json.\n\nOptions:\n  -h, --help  Print help\n"
+        help_template = "Run waytorandrd in the foreground\n\nUsage: {usage}\n\nThis command does not support --json.\n\nOptions:\n      --no-hooks  Disable profile hook execution in the foreground daemon\n  -h, --help      Print help\n"
     )]
-    Run,
+    Run(ServiceRunArgs),
+}
+
+#[derive(Args, Clone, Debug, Eq, PartialEq)]
+pub struct ServiceRunArgs {
+    #[arg(
+        long = "no-hooks",
+        help = "Disable profile hook execution in the foreground daemon"
+    )]
+    pub(crate) no_hooks: bool,
 }
 
 #[derive(Args)]
@@ -194,6 +203,12 @@ pub struct SetArgs {
         help = "Only with `horizontal` or `vertical`: reverse ordering"
     )]
     pub(crate) reverse: bool,
+
+    #[arg(
+        long = "force",
+        help = "Apply even when backend validation is unsupported"
+    )]
+    pub(crate) force: bool,
 }
 
 #[derive(Args)]

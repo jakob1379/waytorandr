@@ -331,23 +331,23 @@ impl WaylandClient {
         for attempt in 0..attempts {
             self.sync()?;
             let status = self.submit(plan, test_only)?;
-            if !matches!(status, ConfigStatus::Cancelled) {
+            if !should_retry_cancelled(status, attempt, attempts) {
                 return Ok(status);
             }
 
-            if attempt + 1 < attempts {
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    total_attempts = attempts,
-                    "wlroots configuration cancelled, retrying after refreshing compositor state"
-                );
-            } else {
-                return Ok(status);
-            }
+            tracing::warn!(
+                attempt = attempt + 1,
+                total_attempts = attempts,
+                "wlroots configuration cancelled, retrying after refreshing compositor state"
+            );
         }
 
         unreachable!("submit_with_retry always returns from inside the retry loop")
     }
+}
+
+fn should_retry_cancelled(status: ConfigStatus, attempt: usize, attempts: usize) -> bool {
+    matches!(status, ConfigStatus::Cancelled) && attempt + 1 < attempts
 }
 
 fn bind_manager(globals: &GlobalList, qh: &QueueHandle<State>) -> Result<ZwlrOutputManagerV1> {
@@ -665,7 +665,7 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ()> for State {
 
 #[cfg(test)]
 mod tests {
-    use super::{head_is_enabled, update_identity_field};
+    use super::{head_is_enabled, should_retry_cancelled, update_identity_field, ConfigStatus};
 
     #[test]
     fn disabled_head_stays_disabled_even_if_mode_lingers() {
@@ -678,5 +678,14 @@ mod tests {
         let mut field = Some("Microstep".to_string());
         update_identity_field(&mut field, "Unknown");
         assert_eq!(field.as_deref(), Some("Microstep"));
+    }
+
+    #[test]
+    fn cancelled_configuration_retries_until_last_attempt() {
+        assert!(should_retry_cancelled(ConfigStatus::Cancelled, 0, 3));
+        assert!(should_retry_cancelled(ConfigStatus::Cancelled, 1, 3));
+        assert!(!should_retry_cancelled(ConfigStatus::Cancelled, 2, 3));
+        assert!(!should_retry_cancelled(ConfigStatus::Failed, 0, 3));
+        assert!(!should_retry_cancelled(ConfigStatus::Succeeded, 0, 3));
     }
 }
