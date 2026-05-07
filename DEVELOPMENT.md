@@ -39,6 +39,7 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 - Smoke-test the built binaries:
   - `./result/bin/waytorandr --help`
   - `./result/bin/waytorandr save --help`
+  - `./result/bin/waytorandr set --help`
   - `./result/bin/waytorandr service run --help`
   - `./result/bin/waytorandrd --help`
   - `./result/bin/waytorandrd --log-level debug --help`

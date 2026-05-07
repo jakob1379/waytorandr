@@ -58,6 +58,11 @@ nix build .#flatpak
 nix build .#snap
 ```
 
+The Flatpak and Snap artifacts are compatibility packages, not strong sandboxes.
+Flatpak needs Wayland/session-bus access plus access to the waytorandr XDG config
+and state paths. The Snap is classic confined for the same compositor/session
+integration reason.
+
 Inspect the current layout and save a profile:
 
 ```bash
@@ -91,7 +96,7 @@ waytorandr service   Manage the waytorandrd user service
 
 Built-in `set` targets:
 
-- `auto` - apply the setup default or best matching saved profile
+- `auto` - recover blank internal-only topologies with the built-in fallback, then apply the setup default or best matching saved profile when the current outputs have strong live identity
 - `off` - disable external outputs and keep built-in panels on when present
 - `external` - prefer external outputs; if none are present, keep built-in panels enabled
 - `common` - clone all connected outputs at the largest shared resolution
@@ -106,6 +111,11 @@ selection.
 If a saved profile name collides with `auto` or a virtual set target, select it
 explicitly with `waytorandr set --profile <name>`.
 
+`set` refuses to apply a layout that would leave every real output disabled.
+`save` refuses to persist a profile from a topology with no enabled real outputs.
+Use `--force` only when you accept applying through a backend whose validation
+result is unsupported; it does not override the blank-layout safety gate.
+
 `--default` is setup-local: it only updates the default for the current setup
 fingerprint. With virtual targets, `set --default` saves the resulting layout as
 profile `default` and makes that saved profile the default for the current setup.
@@ -116,6 +126,8 @@ for the full command reference and examples.
 > [!TIP]
 > Use `--json` on supported commands when you want stable machine-readable output.
 > Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
+> Human-readable output and daemon logs escape terminal control characters from profile, backend, and monitor strings. JSON preserves raw values through serde escaping.
+> Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
 > `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured.
@@ -124,18 +136,31 @@ for the full command reference and examples.
 
 `waytorandrd` watches for physical display changes such as dock, undock, and
 hotplug events. It does not react to compositor-only layout changes on an
-unchanged set of connected displays. When the physical setup changes, it first
-tries the configured default profile for the current fingerprint, then the best
-matching saved profile, then a remembered layout for that setup, and finally
-falls back to remembering the current topology. Remembered layouts that would
-leave all real outputs disabled are skipped instead of being reused. Transient
-all-disabled topologies are still evaluated so a matching profile can re-enable
-the right outputs, but blank layouts are not remembered as setup state.
+unchanged set of connected displays. If the current topology is blank and only
+built-in/internal panels are connected, it applies an immutable built-in fallback
+before user defaults or saved profiles. Otherwise, when the physical setup
+changes, it tries the configured default profile for the current fingerprint,
+then the best matching saved profile, then a remembered layout for that setup,
+and finally falls back to remembering the current topology. Remembered layouts
+that would leave all real outputs disabled are skipped instead of being reused.
+Blank layouts are not remembered as setup state.
+Automatic profile apply is skipped when the current topology only has weak,
+connector-only output identity; cached monitor identity is not treated as live
+trust for `set auto` or daemon apply.
 
 By default, the daemon logs at `info` level and still honors `RUST_LOG` when no
 explicit log-level option is passed. Use `waytorandrd --log-level debug` or the
 shortcut `waytorandrd --verbose` to enable debug logging for foreground runs or
 custom service units.
+
+Profiles are trusted executable content when they define hooks. Hooks run as the
+current user with `Command::new` and argv, not through a shell unless the profile
+explicitly runs one. Hook stdout and stderr are discarded, hook timeouts are
+clamped to 1-300 seconds, and timed-out hooks are killed as a process group on
+Unix. Use `waytorandrd --no-hooks` or `waytorandr service run --no-hooks` to run
+the daemon without executing profile hooks. Applying a hook-bearing profile emits
+a warning because editing the profile file is equivalent to editing commands that
+will execute as your user.
 
 You can give a setup a stable friendly alias such as `office` or `meetingroom-01`
 with `waytorandr save --setup-name <name>`. Matching still uses the raw setup
@@ -149,7 +174,10 @@ waytorandr service start
 waytorandr service status
 ```
 
-`waytorandr service run` starts the daemon in the foreground and does not support `--json`.
+`waytorandr service run` starts the daemon in the foreground and does not support `--json`. Add `--no-hooks` to disable daemon hook execution for that foreground run.
+`waytorandr service install` writes an absolute path to the sibling `waytorandrd`
+binary into the user unit; command discovery still depends on the `waytorandr`
+binary you invoked.
 
 ## Home Manager
 
@@ -193,6 +221,9 @@ Current option surface:
 - `services.waytorandr.environment`
 - `services.waytorandr.systemdTarget`
 
+The Home Manager unit uses an absolute `ExecStart` from the configured package.
+Values under `services.waytorandr.environment` are trusted same-user input.
+
 Profiles and saved default settings remain in standard XDG config, while runtime state remains in XDG state:
 
 - `$XDG_CONFIG_HOME/waytorandr/waytorandr.json`
@@ -202,6 +233,17 @@ If the XDG variables are unset, these typically resolve to:
 
 - `~/.config/waytorandr/waytorandr.json`
 - `~/.local/state/waytorandr/state.toml`
+
+These files are same-user trust boundaries. A local process that can edit them
+can change display policy and, for hook-bearing profiles, commands executed by
+`waytorandr` or `waytorandrd`. Oversized profile/state files and hostile backend
+topology payloads are rejected before full parsing/planning.
+
+Virtual and ignored outputs are preserved in layout data but excluded from setup
+fingerprints and auto-apply identity decisions.
+
+Shell completion does not query the live compositor; it lists saved profile names
+from the profile store and may include profiles for other setups.
 
 ## Limits
 
