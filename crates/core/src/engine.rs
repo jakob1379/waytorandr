@@ -411,7 +411,9 @@ fn kill_hook_child_platform(child: &mut std::process::Child) -> std::io::Result<
     let killed_group = unsafe { unix_process::kill(-pid, unix_process::SIGKILL) };
     if killed_group == -1 {
         let group_error = std::io::Error::last_os_error();
-        child.kill()?;
+        if child.kill().is_ok() {
+            return Ok(());
+        }
         return Err(group_error);
     }
     Ok(())

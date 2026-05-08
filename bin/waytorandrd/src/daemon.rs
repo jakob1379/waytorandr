@@ -363,6 +363,9 @@ fn apply_profile(
         return Ok(DaemonOutcome::TopologyChanged);
     }
 
+    let plan = workflow::plan_profile_for_topology(profile, &latest_topology)
+        .map_err(anyhow::Error::from)?;
+
     let validation = workflow::validate_plan(backend, &plan).map_err(anyhow::Error::from)?;
     if validation.failure == Some(ConfigFailureKind::TopologyChanged) {
         tracing::warn!(

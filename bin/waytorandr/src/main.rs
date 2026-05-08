@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     match commands::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Error: {}", escape_terminal_text(err.to_string()));
+            eprintln!("Error: {}", escape_terminal_text(format!("{err:#}")));
             ExitCode::FAILURE
         }
     }

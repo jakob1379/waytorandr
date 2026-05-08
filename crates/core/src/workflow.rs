@@ -175,7 +175,14 @@ pub fn select_trusted_target_for_topology(
         return None;
     }
 
-    select_target_for_topology(topology, profiles, settings)
+    let setup_fingerprint = topology.setup_fingerprint();
+    let trusted_profiles: Vec<Profile> = profiles
+        .iter()
+        .filter(|profile| profile.setup_fingerprint() == setup_fingerprint)
+        .cloned()
+        .collect();
+
+    select_target_for_topology(topology, &trusted_profiles, settings)
 }
 
 #[must_use]

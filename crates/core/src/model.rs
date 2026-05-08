@@ -372,7 +372,7 @@ impl OutputIdentity {
 
     #[must_use]
     pub fn has_non_connector_identity(&self) -> bool {
-        self.edid_hash.is_some()
+        normalized_identity_value(self.edid_hash.as_deref()).is_some()
             || normalized_identity_value(self.make.as_deref()).is_some()
             || normalized_identity_value(self.model.as_deref()).is_some()
             || normalized_identity_value(self.serial.as_deref()).is_some()
