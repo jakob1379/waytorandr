@@ -277,6 +277,7 @@ fn apply_builtin_fallback(
         workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?;
     if applied_topology.setup_fingerprint() != pre_apply_topology.setup_fingerprint()
         || !applied_topology.has_enabled_real_outputs()
+        || !plan_matches_topology(&pre_apply_plan, &applied_topology)
     {
         return Ok(DaemonOutcome::TopologyChanged);
     }
@@ -428,6 +429,17 @@ fn apply_profile(
                 planned_outputs = %plan_outputs_summary(&plan),
                 applied_outputs = %topology_outputs_summary(&applied_topology),
                 "backend reported a successful apply but the resulting topology has no enabled real outputs; retrying full daemon pass"
+            );
+            return Ok(DaemonOutcome::TopologyChanged);
+        }
+
+        if !plan_matches_topology(&plan, &applied_topology) {
+            tracing::warn!(
+                profile = %escape_terminal_text(&profile.name),
+                current_outputs = %topology_outputs_summary(topology),
+                planned_outputs = %plan_outputs_summary(&plan),
+                applied_outputs = %topology_outputs_summary(&applied_topology),
+                "backend reported a successful apply but the resulting topology does not match the intended plan; retrying full daemon pass"
             );
             return Ok(DaemonOutcome::TopologyChanged);
         }

@@ -537,6 +537,21 @@ fn invalid_validation_cycle(validation_plan: LayoutPlan, validation: TestResult)
     }
 }
 
+/// Check if the applied topology matches the intended plan.
+///
+/// Returns true if all real outputs in the topology match their desired layout
+/// in the plan, false otherwise.
+fn topology_matches_plan(topology: &Topology, plan: &LayoutPlan) -> bool {
+    topology
+        .outputs
+        .iter()
+        .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
+        .all(|(name, current)| match plan.outputs.get(name) {
+            Some(desired) => desired.same_layout_as(current),
+            None => !current.enabled,
+        })
+}
+
 /// Validate a plan without applying it.
 ///
 /// # Errors
@@ -586,9 +601,25 @@ fn apply_plan_cycle<B: Backend + ?Sized>(
     let applied_topology = apply_result
         .applied_state
         .clone()
-        .unwrap_or(plan_snapshot.topology);
+        .unwrap_or_else(|| {
+            // Re-enumerate to get post-apply topology if backend didn't provide it
+            backend.enumerate_outputs().unwrap_or(plan_snapshot.topology.clone())
+        });
     let apply_result = match applied_topology.validate_limits() {
-        Ok(()) => apply_result,
+        Ok(()) => {
+            // Check if the applied topology matches the intended plan
+            if apply_result.success && !topology_matches_plan(&applied_topology, &plan_snapshot.plan) {
+                let mut failed = apply_result;
+                failed.success = false;
+                failed.failure = Some(ConfigFailureKind::Rejected);
+                failed.message = Some(
+                    "backend reported success but applied topology does not match the intended plan".to_string()
+                );
+                failed
+            } else {
+                apply_result
+            }
+        }
         Err(message) => {
             let mut failed = apply_result;
             failed.success = false;
