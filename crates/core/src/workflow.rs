@@ -280,6 +280,11 @@ pub fn observed_topology_from_backend<B: Backend + ?Sized>(
     state_store.observe_topology_and_persist_known_outputs(&topology)
 }
 
+/// Build a topology by enumerating outputs from a backend and validate topology limits.
+///
+/// # Errors
+/// Returns `CoreError::InvalidTopology` when `validate_limits` fails, or forwards
+/// errors from `backend.enumerate_outputs()`.
 pub fn bounded_topology_from_backend<B: Backend + ?Sized>(backend: &B) -> CoreResult<Topology> {
     let topology = backend.enumerate_outputs()?;
     topology
@@ -541,7 +546,8 @@ fn invalid_validation_cycle(validation_plan: LayoutPlan, validation: TestResult)
 ///
 /// Returns true if all real outputs in the topology match their desired layout
 /// in the plan, false otherwise.
-fn topology_matches_plan(topology: &Topology, plan: &LayoutPlan) -> bool {
+#[must_use]
+pub fn topology_matches_plan(topology: &Topology, plan: &LayoutPlan) -> bool {
     topology
         .outputs
         .iter()
@@ -597,14 +603,26 @@ fn apply_plan_cycle<B: Backend + ?Sized>(
         });
     }
 
-    let apply_result = apply_plan(backend, hooks, policy.hook_policy, &plan_snapshot.plan)?;
-    let applied_topology = apply_result
-        .applied_state
-        .clone()
-        .unwrap_or_else(|| {
+    let mut apply_result = apply_plan(backend, hooks, policy.hook_policy, &plan_snapshot.plan)?;
+    let applied_topology = match apply_result.applied_state.clone() {
+        Some(topology) => topology,
+        None => {
             // Re-enumerate to get post-apply topology if backend didn't provide it
-            backend.enumerate_outputs().unwrap_or(plan_snapshot.topology.clone())
-        });
+            match bounded_topology_from_backend(backend) {
+                Ok(topology) => topology,
+                Err(err) => {
+                    // Propagate enumeration error into apply_result message
+                    apply_result.success = false;
+                    apply_result.failure = Some(ConfigFailureKind::Rejected);
+                    apply_result.message = Some(format!(
+                        "failed to enumerate topology after apply: {}",
+                        err
+                    ));
+                    plan_snapshot.topology.clone()
+                }
+            }
+        }
+    };
     let apply_result = match applied_topology.validate_limits() {
         Ok(()) => {
             // Check if the applied topology matches the intended plan

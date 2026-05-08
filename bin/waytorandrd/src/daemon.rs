@@ -277,7 +277,7 @@ fn apply_builtin_fallback(
         workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?;
     if applied_topology.setup_fingerprint() != pre_apply_topology.setup_fingerprint()
         || !applied_topology.has_enabled_real_outputs()
-        || !plan_matches_topology(&pre_apply_plan, &applied_topology)
+        || !workflow::topology_matches_plan(&applied_topology, &pre_apply_plan)
     {
         return Ok(DaemonOutcome::TopologyChanged);
     }
@@ -335,7 +335,7 @@ fn apply_profile(
         );
         return Ok(DaemonOutcome::NoMatch);
     }
-    if plan_matches_topology(&plan, topology) {
+    if workflow::topology_matches_plan(topology, &plan) {
         persist_runtime_state(state_store, recorded_profile_name, backend_kind, topology)?;
         if let Some(profile_name) = recorded_profile_name {
             tracing::info!(
@@ -411,7 +411,11 @@ fn apply_profile(
         let applied_topology = apply_result
             .applied_state
             .clone()
-            .unwrap_or(latest_topology);
+            .unwrap_or_else(|| {
+                // Re-enumerate to get post-apply topology if backend didn't provide it
+                workflow::bounded_topology_from_backend(backend)
+                    .unwrap_or(latest_topology.clone())
+            });
         if applied_topology.validate_limits().is_err() {
             return Ok(DaemonOutcome::TopologyChanged);
         }
@@ -433,7 +437,7 @@ fn apply_profile(
             return Ok(DaemonOutcome::TopologyChanged);
         }
 
-        if !plan_matches_topology(&plan, &applied_topology) {
+        if !workflow::topology_matches_plan(&applied_topology, &plan) {
             tracing::warn!(
                 profile = %escape_terminal_text(&profile.name),
                 current_outputs = %topology_outputs_summary(topology),
@@ -500,17 +504,6 @@ fn remember_current_topology(
     }
 
     persist_runtime_state(state_store, None, backend, topology)
-}
-
-fn plan_matches_topology(plan: &LayoutPlan, topology: &Topology) -> bool {
-    topology
-        .outputs
-        .iter()
-        .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
-        .all(|(name, current)| match plan.outputs.get(name) {
-            Some(desired) => desired.same_layout_as(current),
-            None => !current.enabled,
-        })
 }
 
 fn topology_outputs_summary(topology: &Topology) -> String {
@@ -843,7 +836,7 @@ mod tests {
             ]),
         };
 
-        assert!(plan_matches_topology(&plan, &topology));
+        assert!(workflow::topology_matches_plan(&topology, &plan));
     }
 
     #[test]
@@ -853,7 +846,7 @@ mod tests {
             outputs: HashMap::from([("DP-1".to_string(), output("DP-1", true))]),
         };
 
-        assert!(!plan_matches_topology(&plan, &topology));
+        assert!(!workflow::topology_matches_plan(&topology, &plan));
     }
 
     #[test]
@@ -873,7 +866,7 @@ mod tests {
             outputs: HashMap::from([("DP-1".to_string(), current)]),
         };
 
-        assert!(plan_matches_topology(&plan, &topology));
+        assert!(workflow::topology_matches_plan(&topology, &plan));
     }
 
     #[test]
