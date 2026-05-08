@@ -114,6 +114,7 @@ impl Default for OutputState {
             available_modes: Vec::new(),
             position: Position::default(),
             scale: 1.0,
+            scaled_resolution: None,
             transform: Transform::default(),
             mirror_target: None,
             backend_data: None,
@@ -217,6 +218,8 @@ pub struct OutputState {
     pub available_modes: Vec<Mode>,
     pub position: Position,
     pub scale: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scaled_resolution: Option<Resolution>,
     pub transform: Transform,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror_target: Option<String>,
@@ -241,6 +244,27 @@ impl OutputState {
             && self.mirror_target == other.mirror_target
     }
 
+    pub fn refresh_scaled_resolution(&mut self) {
+        self.scaled_resolution = self.mode.and_then(|mode| {
+            Resolution::from_mode_scale_transform(mode, self.scale, self.transform)
+        });
+    }
+
+    #[must_use]
+    pub fn with_refreshed_scaled_resolution(mut self) -> Self {
+        self.refresh_scaled_resolution();
+        self
+    }
+
+    #[must_use]
+    pub fn layout_resolution(&self) -> Option<Resolution> {
+        self.mode
+            .and_then(|mode| {
+                Resolution::from_mode_scale_transform(mode, self.scale, self.transform)
+            })
+            .or(self.scaled_resolution)
+    }
+
     #[must_use]
     pub fn fingerprint(&self) -> String {
         let key = self.identity.primary_key();
@@ -258,8 +282,15 @@ impl OutputState {
             .as_ref()
             .map_or_else(String::new, |m| m.refresh.to_string());
         let scale = self.scale;
+        let scaled_resolution = self
+            .layout_resolution()
+            .map_or_else(String::new, |resolution| {
+                format!("{}x{}", resolution.width, resolution.height)
+            });
         let transform = self.transform;
-        format!("{key}:{enabled}:{width}x{height}@{refresh}:{scale}:{transform}")
+        format!(
+            "{key}:{enabled}:{width}x{height}@{refresh}:{scale}:{scaled_resolution}:{transform}"
+        )
     }
 
     pub fn validate_limits(&self, name: &str) -> Result<(), String> {
@@ -536,6 +567,60 @@ impl Position {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+pub struct Resolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Resolution {
+    #[must_use]
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    #[must_use]
+    pub fn from_mode_scale(mode: Mode, scale: f64) -> Option<Self> {
+        Self::from_mode_scale_transform(mode, scale, Transform::Normal)
+    }
+
+    #[must_use]
+    pub fn from_mode_scale_transform(mode: Mode, scale: f64, transform: Transform) -> Option<Self> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return None;
+        }
+
+        let resolution = Self {
+            width: scaled_dimension(mode.width, scale),
+            height: scaled_dimension(mode.height, scale),
+        };
+
+        Some(if transform.swaps_axes() {
+            Self {
+                width: resolution.height,
+                height: resolution.width,
+            }
+        } else {
+            resolution
+        })
+    }
+}
+
+fn scaled_dimension(value: u32, scale: f64) -> u32 {
+    if value == 0 {
+        return 0;
+    }
+
+    let scaled = (f64::from(value) / scale).round();
+    if scaled < 1.0 {
+        1
+    } else if scaled > f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        scaled as u32
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,
@@ -595,6 +680,16 @@ impl std::fmt::Display for Transform {
             Transform::Flipped180 => write!(f, "flipped-180"),
             Transform::Flipped270 => write!(f, "flipped-270"),
         }
+    }
+}
+
+impl Transform {
+    #[must_use]
+    pub const fn swaps_axes(self) -> bool {
+        matches!(
+            self,
+            Self::Rot90 | Self::Rot270 | Self::Flipped90 | Self::Flipped270
+        )
     }
 }
 
@@ -676,6 +771,40 @@ mod tests {
         right.backend_data = Some(serde_json::json!({"side": "right"}));
 
         assert!(left.same_layout_as(&right));
+    }
+
+    #[test]
+    fn refresh_scaled_resolution_derives_logical_size_from_mode_and_scale() {
+        let mut output = OutputState::new("DP-1");
+        output.mode = Some(Mode::new(2560, 1440, 60));
+        output.scale = 1.25;
+
+        output.refresh_scaled_resolution();
+
+        assert_eq!(output.scaled_resolution, Some(Resolution::new(2048, 1152)));
+    }
+
+    #[test]
+    fn refresh_scaled_resolution_uses_transformed_logical_footprint() {
+        let mut output = OutputState::new("DP-1");
+        output.mode = Some(Mode::new(2560, 1440, 60));
+        output.scale = 1.25;
+        output.transform = Transform::Rot90;
+
+        output.refresh_scaled_resolution();
+
+        assert_eq!(output.scaled_resolution, Some(Resolution::new(1152, 2048)));
+    }
+
+    #[test]
+    fn refresh_scaled_resolution_skips_invalid_scale() {
+        let mut output = OutputState::new("DP-1");
+        output.mode = Some(Mode::new(2560, 1440, 60));
+        output.scale = 0.0;
+
+        output.refresh_scaled_resolution();
+
+        assert_eq!(output.scaled_resolution, None);
     }
 
     #[test]

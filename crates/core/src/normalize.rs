@@ -34,6 +34,7 @@ pub fn normalize_profile_with_known_outputs<S: BuildHasher>(
                 config.state.identity = config.state.identity.with_fallback(cached);
             }
         }
+        config.state.refresh_scaled_resolution();
     }
 
     normalized
@@ -50,6 +51,7 @@ pub fn normalize_topology_with_known_outputs<S: BuildHasher>(
         if let Some(cached) = known_outputs.get(name) {
             output.identity = output.identity.with_fallback(cached);
         }
+        output.refresh_scaled_resolution();
     }
 
     normalized
