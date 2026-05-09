@@ -52,11 +52,17 @@ pub(crate) fn enforce_topology_policy(
             DaemonOutcome::Applied | DaemonOutcome::NoMatch => return Ok(()),
             DaemonOutcome::TopologyChanged => {
                 let retry = attempt + 1;
-                if retry == 1 || retry == MAX_RETRIES {
+                if retry == 1 {
                     tracing::warn!(
                         attempt = retry,
                         total_attempts = MAX_RETRIES,
                         "topology changed during daemon apply, retrying full pass"
+                    );
+                } else if retry == MAX_RETRIES {
+                    tracing::warn!(
+                        attempt = retry,
+                        total_attempts = MAX_RETRIES,
+                        "topology changed during daemon apply, reached max attempts, giving up"
                     );
                 } else {
                     tracing::debug!(
@@ -273,8 +279,11 @@ fn apply_builtin_fallback(
         );
     }
 
-    let applied_topology =
-        workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?;
+    let applied_topology = if let Some(applied_state) = apply_result.applied_state {
+        applied_state
+    } else {
+        workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?
+    };
     if applied_topology.setup_fingerprint() != pre_apply_topology.setup_fingerprint()
         || !applied_topology.has_enabled_real_outputs()
         || !workflow::topology_matches_plan(&applied_topology, &pre_apply_plan)
