@@ -244,7 +244,7 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
         .iter()
         .filter(|(_, desired)| desired.enabled)
         .collect();
-    desired_outputs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    desired_outputs.sort_by_key(|(name, _)| *name);
 
     for (name, desired) in desired_outputs {
         let current = outputs_by_name
