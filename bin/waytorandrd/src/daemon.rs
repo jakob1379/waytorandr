@@ -96,7 +96,7 @@ fn wait_for_stable_topology(
 
 fn wait_for_stable_topology_with(
     backend: &(impl Backend + ?Sized),
-    _state_store: &StateStore,
+    state_store: &StateStore,
     timeout: Duration,
     interval: Duration,
     stable_samples_required: usize,
@@ -106,7 +106,7 @@ fn wait_for_stable_topology_with(
     let mut stable_samples = 0usize;
 
     loop {
-        let topology = workflow::bounded_topology_from_backend(backend)?;
+        let topology = workflow::normalized_topology_from_backend(backend, state_store)?;
         let fingerprint = topology.state_fingerprint();
 
         if last_fingerprint.as_deref() == Some(fingerprint.as_str()) {
@@ -159,7 +159,12 @@ fn maybe_apply_matching_profile(
     }
 
     let state = state_store.load_state()?.unwrap_or_default();
-    let setup_profiles = store.profiles_for_setup(&setup_fingerprint, state_store)?;
+    let stored_profiles = store.list(state_store)?;
+    let setup_profiles: Vec<_> = stored_profiles
+        .iter()
+        .filter(|stored| stored.setup_fingerprint == setup_fingerprint)
+        .map(|stored| stored.profile.clone())
+        .collect();
 
     if let Some(default_name) = settings.setup_default_profile(&setup_fingerprint) {
         if let Some(profile) = setup_profiles
@@ -192,6 +197,35 @@ fn maybe_apply_matching_profile(
             topology,
             Some(&matched.profile.name),
             hook_policy,
+        );
+    }
+
+    let default_candidates: Vec<_> = stored_profiles
+        .iter()
+        .filter(|stored| stored.setup_fingerprint != setup_fingerprint)
+        .filter(|stored| {
+            settings.setup_default_profile(&stored.setup_fingerprint)
+                == Some(stored.profile.name.as_str())
+        })
+        .map(|stored| stored.profile.clone())
+        .collect();
+    let matched_defaults = Matcher::matching_profiles_exact(topology, &default_candidates);
+    if matched_defaults.len() == 1 {
+        let matched = &matched_defaults[0];
+        tracing::info!(profile = %escape_terminal_text(&matched.profile.name), "selected explicit default profile from another setup fingerprint");
+        return apply_profile(
+            backend,
+            state_store,
+            &matched.profile,
+            topology,
+            Some(&matched.profile.name),
+            hook_policy,
+        );
+    }
+    if matched_defaults.len() > 1 {
+        tracing::warn!(
+            matches = matched_defaults.len(),
+            "multiple explicit default profiles from other setup fingerprints matched current topology; skipping cross-setup default fallback"
         );
     }
 
@@ -361,8 +395,8 @@ fn apply_profile(
         return Ok(DaemonOutcome::Applied);
     }
 
-    let latest_topology =
-        workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?;
+    let latest_topology = workflow::normalized_topology_from_backend(backend, state_store)
+        .map_err(anyhow::Error::from)?;
     if !latest_topology.has_strong_setup_identity()
         || latest_topology.setup_fingerprint() != topology.setup_fingerprint()
     {
@@ -419,7 +453,7 @@ fn apply_profile(
     if apply_result.success {
         let applied_topology = apply_result.applied_state.clone().unwrap_or_else(|| {
             // Re-enumerate to get post-apply topology if backend didn't provide it
-            workflow::bounded_topology_from_backend(backend).unwrap_or_else(|e| {
+            workflow::normalized_topology_from_backend(backend, state_store).unwrap_or_else(|e| {
                 tracing::error!(
                     error = %e,
                     "failed to enumerate topology after apply"
@@ -580,7 +614,7 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
     use waytorandr_core::engine::{ApplyResult, OutputWatcher, TestResult};
     use waytorandr_core::error::CoreError;
-    use waytorandr_core::model::{Capabilities, OutputState, Position};
+    use waytorandr_core::model::{Capabilities, OutputIdentity, OutputState, Position};
     use waytorandr_core::profile::{OutputMatcher, Profile};
 
     struct ScopedEnvVar {
@@ -666,6 +700,201 @@ mod tests {
         let mut profile = profile(name, connector, enabled);
         profile.layout.get_mut(connector).unwrap().state.position = Position::new(100, 0);
         profile
+    }
+
+    fn external_only_profile(
+        name: &str,
+        internal_identity: OutputIdentity,
+        external_identity: OutputIdentity,
+    ) -> Profile {
+        Profile::new(
+            name,
+            0,
+            vec![
+                OutputMatcher::new(internal_identity, false, None),
+                OutputMatcher::new(external_identity, true, None),
+            ],
+            HashMap::from([
+                ("eDP-1".to_string(), output("eDP-1", false).into()),
+                ("DP-1".to_string(), output("DP-1", true).into()),
+            ]),
+        )
+    }
+
+    #[test]
+    fn default_profile_from_different_setup_is_applied_exactly() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([
+                    ("eDP-1".to_string(), output("eDP-1", true)),
+                    ("DP-1".to_string(), output("DP-1", true)),
+                ]),
+            };
+            let profile = external_only_profile(
+                "external-only",
+                weak_output("eDP-1", false).identity,
+                output("DP-1", true).identity,
+            );
+            store.save(&profile, &state_store)?;
+            let stored_setup = store.list(&state_store)?[0].setup_fingerprint.clone();
+            assert_ne!(stored_setup, current.setup_fingerprint());
+            store.set_setup_default_profile(&stored_setup, &profile.name)?;
+            let apply_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: current.clone(),
+                applied_topology: None,
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let outcome = maybe_apply_matching_profile(
+                &backend,
+                &store,
+                &state_store,
+                &current,
+                HookPolicy::Enabled,
+            )?;
+            let state = state_store.load_state()?.unwrap_or_default();
+            let remembered = state
+                .remembered_topology_for_setup(&current.setup_fingerprint())
+                .ok_or_else(|| std::io::Error::other("remembered topology missing"))?;
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                1
+            );
+            assert!(!remembered.outputs["eDP-1"].enabled);
+            assert!(remembered.outputs["DP-1"].enabled);
+            assert_eq!(state.last_profile.as_deref(), Some("external-only"));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn non_default_profile_from_different_setup_is_not_applied() -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([
+                    ("eDP-1".to_string(), output("eDP-1", true)),
+                    ("DP-1".to_string(), output("DP-1", true)),
+                ]),
+            };
+            let profile = external_only_profile(
+                "external-only",
+                weak_output("eDP-1", false).identity,
+                output("DP-1", true).identity,
+            );
+            store.save(&profile, &state_store)?;
+            assert_ne!(
+                store.list(&state_store)?[0].setup_fingerprint,
+                current.setup_fingerprint()
+            );
+            let apply_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: current.clone(),
+                applied_topology: None,
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let outcome = maybe_apply_matching_profile(
+                &backend,
+                &store,
+                &state_store,
+                &current,
+                HookPolicy::Enabled,
+            )?;
+            let state = state_store.load_state()?.unwrap_or_default();
+
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(state.last_profile, None);
+            assert!(state
+                .remembered_topology_for_setup(&current.setup_fingerprint())
+                .is_some_and(Topology::has_enabled_real_outputs));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_default_profiles_from_other_setups_are_not_applied() -> Result<(), Box<dyn Error>>
+    {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([
+                    ("eDP-1".to_string(), output("eDP-1", true)),
+                    ("DP-1".to_string(), output("DP-1", true)),
+                ]),
+            };
+            let profile_a = external_only_profile(
+                "external-only-a",
+                weak_output("eDP-1", false).identity,
+                output("DP-1", true).identity,
+            );
+            let profile_b = external_only_profile(
+                "external-only-b",
+                output("eDP-1", true).identity,
+                weak_output("DP-1", true).identity,
+            );
+            store.save(&profile_a, &state_store)?;
+            store.save(&profile_b, &state_store)?;
+            for stored in store.list(&state_store)? {
+                assert_ne!(stored.setup_fingerprint, current.setup_fingerprint());
+                store.set_setup_default_profile(&stored.setup_fingerprint, &stored.profile.name)?;
+            }
+            let apply_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: current.clone(),
+                applied_topology: None,
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let outcome = maybe_apply_matching_profile(
+                &backend,
+                &store,
+                &state_store,
+                &current,
+                HookPolicy::Enabled,
+            )?;
+            let state = state_store.load_state()?.unwrap_or_default();
+
+            assert!(matches!(outcome, DaemonOutcome::NoMatch));
+            assert_eq!(
+                *apply_calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                0
+            );
+            assert_eq!(state.last_profile, None);
+            Ok(())
+        })?;
+        Ok(())
     }
 
     #[test]
@@ -815,7 +1044,7 @@ mod tests {
             })
         }
 
-        fn apply(&self, _plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<ApplyResult> {
+        fn apply(&self, plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<ApplyResult> {
             *self
                 .apply_calls
                 .lock()
@@ -823,11 +1052,10 @@ mod tests {
             let mut result = ApplyResult::default();
             result.success = true;
             result.message = Some("applied".to_string());
-            result.applied_state = Some(
-                self.applied_topology
-                    .clone()
-                    .unwrap_or_else(|| self.enumerated_topology.clone()),
-            );
+            result.applied_state =
+                Some(self.applied_topology.clone().unwrap_or_else(|| Topology {
+                    outputs: plan.outputs.clone(),
+                }));
             Ok(result)
         }
     }

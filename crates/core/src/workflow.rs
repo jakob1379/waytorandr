@@ -1046,6 +1046,58 @@ mod tests {
     }
 
     #[test]
+    fn plan_profile_for_topology_disables_present_optional_output() {
+        let mut internal = output("eDP-1");
+        internal.enabled = true;
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("eDP-1".to_string(), internal),
+                ("DP-1".to_string(), output("DP-1")),
+            ]),
+        };
+        let mut disabled_internal = output("eDP-1");
+        disabled_internal.enabled = false;
+        let profile = Profile {
+            name: "external-only".to_string(),
+            priority: 0,
+            match_rules: vec![
+                crate::profile::OutputMatcher {
+                    identity: output("eDP-1").identity,
+                    required: false,
+                    position_hint: None,
+                },
+                crate::profile::OutputMatcher {
+                    identity: output("DP-1").identity,
+                    required: true,
+                    position_hint: None,
+                },
+            ],
+            layout: HashMap::from([
+                (
+                    "eDP-1".to_string(),
+                    crate::profile::OutputConfig {
+                        state: disabled_internal,
+                        preset: None,
+                    },
+                ),
+                (
+                    "DP-1".to_string(),
+                    crate::profile::OutputConfig {
+                        state: output("DP-1"),
+                        preset: None,
+                    },
+                ),
+            ]),
+            hooks: Hooks::default(),
+        };
+
+        let plan = plan_profile_for_topology(&profile, &topology).unwrap();
+
+        assert!(!plan.outputs["eDP-1"].enabled);
+        assert!(plan.outputs["DP-1"].enabled);
+    }
+
+    #[test]
     fn plan_profile_for_topology_rejects_extra_real_outputs() {
         let topology = Topology {
             outputs: HashMap::from([
