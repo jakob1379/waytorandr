@@ -614,10 +614,8 @@ fn apply_plan_cycle<B: Backend + ?Sized>(
                     // Propagate enumeration error into apply_result message
                     apply_result.success = false;
                     apply_result.failure = Some(ConfigFailureKind::Rejected);
-                    apply_result.message = Some(format!(
-                        "failed to enumerate topology after apply: {}",
-                        err
-                    ));
+                    apply_result.message =
+                        Some(format!("failed to enumerate topology after apply: {}", err));
                     plan_snapshot.topology.clone()
                 }
             }
@@ -626,7 +624,9 @@ fn apply_plan_cycle<B: Backend + ?Sized>(
     let apply_result = match applied_topology.validate_limits() {
         Ok(()) => {
             // Check if the applied topology matches the intended plan
-            if apply_result.success && !topology_matches_plan(&applied_topology, &plan_snapshot.plan) {
+            if apply_result.success
+                && !topology_matches_plan(&applied_topology, &plan_snapshot.plan)
+            {
                 let mut failed = apply_result;
                 failed.success = false;
                 failed.failure = Some(ConfigFailureKind::Rejected);

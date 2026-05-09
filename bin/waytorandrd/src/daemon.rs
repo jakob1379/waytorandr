@@ -417,20 +417,16 @@ fn apply_profile(
     }
 
     if apply_result.success {
-        let applied_topology = apply_result
-            .applied_state
-            .clone()
-            .unwrap_or_else(|| {
-                // Re-enumerate to get post-apply topology if backend didn't provide it
-                workflow::bounded_topology_from_backend(backend)
-                    .unwrap_or_else(|e| {
-                        tracing::error!(
-                            error = %e,
-                            "failed to enumerate topology after apply"
-                        );
-                        latest_topology.clone()
-                    })
-            });
+        let applied_topology = apply_result.applied_state.clone().unwrap_or_else(|| {
+            // Re-enumerate to get post-apply topology if backend didn't provide it
+            workflow::bounded_topology_from_backend(backend).unwrap_or_else(|e| {
+                tracing::error!(
+                    error = %e,
+                    "failed to enumerate topology after apply"
+                );
+                latest_topology.clone()
+            })
+        });
         if applied_topology.validate_limits().is_err() {
             return Ok(DaemonOutcome::TopologyChanged);
         }
