@@ -5,6 +5,7 @@
 
 mod atomic {
     use crate::error::{CoreError, CoreResult};
+    use fs4::FileExt;
     use std::fs::{self, File, OpenOptions};
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -21,18 +22,19 @@ mod atomic {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|source| CoreError::WriteFile {
                 path: lock_path.clone(),
                 source,
             })?;
-        lock_file.lock().map_err(|source| CoreError::WriteFile {
+        FileExt::lock(&lock_file).map_err(|source| CoreError::WriteFile {
             path: lock_path.clone(),
             source,
         })?;
 
         let result = action();
-        let unlock_result = lock_file.unlock().map_err(|source| CoreError::WriteFile {
+        let unlock_result = FileExt::unlock(&lock_file).map_err(|source| CoreError::WriteFile {
             path: lock_path,
             source,
         });

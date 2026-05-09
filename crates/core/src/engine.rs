@@ -7,16 +7,11 @@ use crate::planner::LayoutPlan;
 use crate::profile::{Hook, Hooks};
 use crate::terminal::escape_terminal_text;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HookPolicy {
+    #[default]
     Enabled,
     Disabled,
-}
-
-impl Default for HookPolicy {
-    fn default() -> Self {
-        Self::Enabled
-    }
 }
 
 pub trait Backend {
