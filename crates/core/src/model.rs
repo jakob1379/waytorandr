@@ -256,6 +256,16 @@ impl OutputState {
         self
     }
 
+    /// Returns the output's layout resolution with live recomputation precedence.
+    ///
+    /// This method first attempts to compute the resolution live via
+    /// [`Resolution::from_mode_scale_transform`] using [`mode`](Self::mode),
+    /// [`scale`](Self::scale), and [`transform`](Self::transform). It only falls back
+    /// to the cached [`scaled_resolution`](Self::scaled_resolution) when [`mode`](Self::mode)
+    /// is `None` or recomputation fails.
+    ///
+    /// The cache is primarily for persisted JSON consumers and should not be relied upon
+    /// when live data is available.
     #[must_use]
     pub fn layout_resolution(&self) -> Option<Resolution> {
         self.mode
