@@ -273,7 +273,11 @@ impl Planner {
 
         let max_width = outputs
             .iter()
-            .filter_map(|(_, state)| state.mode.and_then(|mode| i32::try_from(mode.width).ok()))
+            .filter_map(|(_, state)| {
+                state
+                    .layout_resolution()
+                    .and_then(|resolution| i32::try_from(resolution.width).ok())
+            })
             .max()
             .unwrap_or(0);
         let mut x = 0i32;
@@ -284,17 +288,17 @@ impl Planner {
             let position_x = if is_horizontal {
                 x
             } else {
-                let width = state
-                    .mode
-                    .map_or(0, |mode| i32::try_from(mode.width).unwrap_or(i32::MAX));
+                let width = state.layout_resolution().map_or(0, |resolution| {
+                    i32::try_from(resolution.width).unwrap_or(i32::MAX)
+                });
                 (max_width - width) / 2
             };
             state.position = Position { x: position_x, y };
-            if let Some(mode) = &state.mode {
+            if let Some(resolution) = state.layout_resolution() {
                 if is_horizontal {
-                    x += i32::try_from(mode.width).unwrap_or(i32::MAX);
+                    x += i32::try_from(resolution.width).unwrap_or(i32::MAX);
                 } else {
-                    y += i32::try_from(mode.height).unwrap_or(i32::MAX);
+                    y += i32::try_from(resolution.height).unwrap_or(i32::MAX);
                 }
             }
             state.mirror_target = None;
@@ -1001,6 +1005,45 @@ mod tests {
         assert!(plan.outputs["B"].enabled);
         assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
         assert_eq!(plan.outputs["B"].position, Position::new(1920, 0));
+    }
+
+    #[test]
+    fn horizontal_positions_outputs_by_scaled_logical_width() {
+        let mut a = output("A", 2560, 1440);
+        a.scale = 1.25;
+        a.refresh_scaled_resolution();
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("A".to_string(), a),
+                ("B".to_string(), output("B", 1920, 1080)),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::Horizontal, &topology, None, None).unwrap();
+
+        assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["B"].position, Position::new(2048, 0));
+    }
+
+    #[test]
+    fn horizontal_positions_outputs_by_transformed_logical_width() {
+        let mut a = output("A", 2560, 1440);
+        a.scale = 1.25;
+        a.transform = Transform::Rot90;
+        a.refresh_scaled_resolution();
+        let topology = Topology {
+            outputs: HashMap::from([
+                ("A".to_string(), a),
+                ("B".to_string(), output("B", 1920, 1080)),
+            ]),
+        };
+
+        let plan =
+            Planner::plan_from_preset(VirtualPreset::Horizontal, &topology, None, None).unwrap();
+
+        assert_eq!(plan.outputs["A"].position, Position::new(0, 0));
+        assert_eq!(plan.outputs["B"].position, Position::new(1152, 0));
     }
 
     #[test]

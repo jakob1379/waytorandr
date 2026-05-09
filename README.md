@@ -229,6 +229,15 @@ Profiles and saved default settings remain in standard XDG config, while runtime
 - `$XDG_CONFIG_HOME/waytorandr/waytorandr.json`
 - `$XDG_STATE_HOME/waytorandr/state.toml`
 
+Saved output layouts include the physical mode, scale factor, and may include a
+derived `scaled_resolution` as `{ "width": ..., "height": ... }` only when it can
+be computed (i.e., when derivable from mode, scale and transform). The value is
+the logical footprint used for layout positioning: physical mode divided by scale,
+with width and height swapped for rotated transforms. Serialization omits
+`scaled_resolution` when derivation is unavailable (None). Manual edits are
+recalculated from `mode`, `scale`, and `transform` during normalization of profiles
+or observed topologies.
+
 If the XDG variables are unset, these typically resolve to:
 
 - `~/.config/waytorandr/waytorandr.json`

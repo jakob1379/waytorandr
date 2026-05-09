@@ -231,7 +231,12 @@ pub fn profile_from_topology(name: &str, topology: &Topology) -> Profile {
         layout: topology
             .outputs
             .iter()
-            .map(|(output_name, output)| (output_name.clone(), output.clone().into()))
+            .map(|(output_name, output)| {
+                (
+                    output_name.clone(),
+                    output.clone().with_refreshed_scaled_resolution().into(),
+                )
+            })
             .collect(),
         hooks: Hooks::default(),
     }
@@ -767,7 +772,7 @@ pub fn record_daemon_started_in_store(
 mod tests {
     use super::*;
     use crate::engine::OutputWatcher;
-    use crate::model::{OutputIdentity, OutputState};
+    use crate::model::{Mode, OutputIdentity, OutputState, Resolution};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -976,6 +981,24 @@ mod tests {
             Some("DP-1")
         );
         assert!(!profile.match_rules[0].required);
+    }
+
+    #[test]
+    fn profile_from_topology_persists_derived_scaled_resolution() {
+        let mut output = output("DP-1");
+        output.mode = Some(Mode::new(2560, 1440, 60));
+        output.scale = 1.25;
+        output.scaled_resolution = None;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), output)]),
+        };
+
+        let profile = profile_from_topology("desk", &topology);
+
+        assert_eq!(
+            profile.layout["DP-1"].state.scaled_resolution,
+            Some(Resolution::new(2048, 1152))
+        );
     }
 
     #[test]
