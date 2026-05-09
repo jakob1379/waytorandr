@@ -195,8 +195,8 @@
           --socket=wayland \
           --socket=session-bus \
           --share=ipc \
-          --share=network \
-          --filesystem=home \
+          --filesystem=xdg-config/waytorandr:create \
+          --filesystem=~/.local/state/waytorandr:create \
           "$build_dir"
 
         ostree init --repo="$repo_dir" --mode=archive-z2
