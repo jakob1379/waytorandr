@@ -1,7 +1,8 @@
 use anyhow::{anyhow, bail, Result};
 
 use super::apply::{
-    current_setup_fingerprint, emit_action_outcome, execute_profile_action, execute_virtual_action,
+    current_setup_fingerprint, emit_action_outcome, execute_builtin_fallback_action,
+    execute_profile_action, execute_trusted_profile_action, execute_virtual_action,
     save_runtime_state, set_default_profile_for_fingerprint, DefaultScope, JsonRemoveResponse,
     JsonSaveResponse,
 };
@@ -12,7 +13,7 @@ use crate::preset::resolve_virtual_preset;
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::model::{BackendKind, Topology};
 use waytorandr_core::planner::LayoutPlan;
-use waytorandr_core::profile::Profile;
+use waytorandr_core::profile::{validate_profile_name, Profile};
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
 use waytorandr_core::workflow;
@@ -27,6 +28,7 @@ pub(super) struct SetOptions {
     pub(super) save: bool,
     pub(super) reverse: bool,
     pub(super) largest: bool,
+    pub(super) force: bool,
 }
 
 struct SavedCurrentLayout {
@@ -39,6 +41,7 @@ fn save_current_layout(
     setup_name: Option<&str>,
     make_default: bool,
 ) -> Result<SavedCurrentLayout> {
+    validate_cli_profile_name(name)?;
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
@@ -48,6 +51,9 @@ fn save_current_layout(
 
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
+    }
+    if !topology.has_enabled_real_outputs() {
+        bail!("cannot save a profile with no enabled real outputs")
     }
 
     let profile = workflow::profile_from_topology(name, &topology);
@@ -75,12 +81,16 @@ pub(super) fn cmd_save(
     make_default: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
+    validate_cli_profile_name(name)?;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
     let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
 
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
+    }
+    if !topology.has_enabled_real_outputs() {
+        bail!("cannot save a profile with no enabled real outputs")
     }
 
     let profile = workflow::profile_from_topology(name, &topology);
@@ -165,6 +175,10 @@ pub(super) fn cmd_save(
     Ok(())
 }
 
+fn validate_cli_profile_name(name: &str) -> Result<()> {
+    validate_profile_name(name).map_err(|reason| anyhow!("invalid profile name '{name}': {reason}"))
+}
+
 pub(super) fn cmd_set(
     target: Option<&str>,
     forced_profile: Option<&str>,
@@ -177,6 +191,7 @@ pub(super) fn cmd_set(
         save,
         reverse,
         largest,
+        force,
     } = options;
     let save_for_current_setup = make_default || save;
 
@@ -196,12 +211,12 @@ pub(super) fn cmd_set(
         if save_for_current_setup {
             bail!("--default and --save cannot be used with `waytorandr set auto`")
         }
-        return cmd_change(dry_run, output_mode);
+        return cmd_change(dry_run, force, output_mode);
     }
 
     if !force_saved_profile {
         if let Some(preset) = resolve_virtual_preset(name, reverse, largest)? {
-            let mut outcome = execute_virtual_action(preset, dry_run, None)?;
+            let mut outcome = execute_virtual_action(preset, dry_run, None, force)?;
             if save_for_current_setup {
                 outcome.record_saved_profile(DEFAULT_SAVED_PROFILE_NAME);
                 outcome.set_default_assignment(DEFAULT_SAVED_PROFILE_NAME, DefaultScope::Setup);
@@ -228,20 +243,27 @@ pub(super) fn cmd_set(
     let profile = store
         .get_for_setup(name, &setup_fingerprint, &state_store)?
         .ok_or_else(|| anyhow!("profile '{name}' not found"))?;
-    let outcome = execute_profile_action(&profile.profile, dry_run, make_default)?;
+    let outcome = execute_profile_action(&profile.profile, dry_run, make_default, force)?;
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
 
-pub(super) fn cmd_change(dry_run: bool, output_mode: OutputMode) -> Result<()> {
+pub(super) fn cmd_change(dry_run: bool, force: bool, output_mode: OutputMode) -> Result<()> {
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
-    let topology = super::shared::load_current_topology(&state_store)?;
-    let profiles = store.profiles(&state_store)?;
     let settings = store.settings()?;
-    let target = workflow::select_target_for_topology(&topology, &profiles, &settings)
+    if let Some(outcome) =
+        execute_builtin_fallback_action(dry_run, settings.builtin_output.as_ref(), force)?
+    {
+        return emit_action_outcome("set", Some("auto"), &outcome, output_mode);
+    }
+
+    let backend = connect_backend()?;
+    let topology = workflow::bounded_topology_from_backend(backend.as_ref())?;
+    let profiles = store.profiles(&state_store)?;
+    let target = workflow::select_trusted_target_for_topology(&topology, &profiles, &settings)
         .ok_or_else(|| anyhow!("no matching profile configured"))?;
 
-    let outcome = execute_profile_action(&target, dry_run, false)?;
+    let outcome = execute_trusted_profile_action(&target, dry_run, force)?;
 
     emit_action_outcome("set", Some("auto"), &outcome, output_mode)
 }
@@ -329,7 +351,7 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
             .map_or(0, |idx| (idx + 1) % profiles.len())
     });
 
-    let outcome = execute_profile_action(&profiles[next_idx], dry_run, false)?;
+    let outcome = execute_profile_action(&profiles[next_idx], dry_run, false, false)?;
     emit_action_outcome("cycle", None, &outcome, output_mode)
 }
 
@@ -348,6 +370,7 @@ mod tests {
                 save: false,
                 reverse: true,
                 largest: false,
+                force: false,
             },
             OutputMode::Text,
         )
@@ -370,6 +393,7 @@ mod tests {
                 save: false,
                 reverse: false,
                 largest: false,
+                force: false,
             },
             OutputMode::Text,
         )
@@ -392,6 +416,7 @@ mod tests {
                 save: false,
                 reverse: true,
                 largest: false,
+                force: false,
             },
             OutputMode::Text,
         )
@@ -414,6 +439,7 @@ mod tests {
                 save: false,
                 reverse: false,
                 largest: false,
+                force: false,
             },
             OutputMode::Text,
         )

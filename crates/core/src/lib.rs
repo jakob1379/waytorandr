@@ -5,6 +5,7 @@
 
 mod atomic {
     use crate::error::{CoreError, CoreResult};
+    use fs4::FileExt;
     use std::fs::{self, File, OpenOptions};
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -21,18 +22,19 @@ mod atomic {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|source| CoreError::WriteFile {
                 path: lock_path.clone(),
                 source,
             })?;
-        lock_file.lock().map_err(|source| CoreError::WriteFile {
+        FileExt::lock(&lock_file).map_err(|source| CoreError::WriteFile {
             path: lock_path.clone(),
             source,
         })?;
 
         let result = action();
-        let unlock_result = lock_file.unlock().map_err(|source| CoreError::WriteFile {
+        let unlock_result = FileExt::unlock(&lock_file).map_err(|source| CoreError::WriteFile {
             path: lock_path,
             source,
         });
@@ -128,4 +130,40 @@ pub mod planner;
 pub mod profile;
 pub mod state;
 pub mod store;
+pub mod terminal {
+    #[must_use]
+    pub fn escape_terminal_text(value: impl AsRef<str>) -> String {
+        let mut escaped = String::new();
+        for ch in value.as_ref().chars() {
+            match ch {
+                '\u{1b}' => escaped.push_str("\\e"),
+                '\u{07}' => escaped.push_str("\\a"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                ch if ch.is_control() => escaped.push_str(&format!("\\u{{{:04x}}}", ch as u32)),
+                ch => escaped.push(ch),
+            }
+        }
+        escaped
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn escapes_terminal_controls() {
+            assert_eq!(
+                escape_terminal_text("a\x1b]0;pwn\x07\r\nb"),
+                "a\\e]0;pwn\\a\\r\\nb"
+            );
+        }
+
+        #[test]
+        fn keeps_printable_unicode() {
+            assert_eq!(escape_terminal_text("Dell 日本"), "Dell 日本");
+        }
+    }
+}
 pub mod workflow;

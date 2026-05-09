@@ -71,6 +71,34 @@ impl Profile {
     }
 }
 
+pub const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 30;
+pub const MIN_HOOK_TIMEOUT_SECS: u64 = 1;
+pub const MAX_HOOK_TIMEOUT_SECS: u64 = 300;
+pub const MAX_PROFILE_NAME_CHARS: usize = 128;
+
+pub fn validate_profile_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() {
+        return Err("name cannot be empty");
+    }
+    if name.chars().count() > MAX_PROFILE_NAME_CHARS {
+        return Err("name is too long");
+    }
+    if name.trim() != name {
+        return Err("name cannot start or end with whitespace");
+    }
+    if matches!(name, "." | "..") {
+        return Err("name cannot be '.' or '..'");
+    }
+    if name
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '/' | '\\'))
+    {
+        return Err("name cannot contain control characters or path separators");
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub struct Hooks {
@@ -93,7 +121,7 @@ pub struct Hook {
 }
 
 fn default_timeout() -> u64 {
-    30
+    DEFAULT_HOOK_TIMEOUT_SECS
 }
 
 impl Hook {
@@ -105,9 +133,27 @@ impl Hook {
             timeout_secs: default_timeout(),
         }
     }
+
+    #[must_use]
+    pub fn effective_timeout_secs(&self) -> u64 {
+        self.timeout_secs
+            .clamp(MIN_HOOK_TIMEOUT_SECS, MAX_HOOK_TIMEOUT_SECS)
+    }
+}
+
+impl Hooks {
+    #[must_use]
+    pub fn has_hooks(&self) -> bool {
+        !self.pre_apply.is_empty() || !self.post_apply.is_empty() || !self.on_failure.is_empty()
+    }
 }
 
 impl Profile {
+    #[must_use]
+    pub fn has_hooks(&self) -> bool {
+        self.hooks.has_hooks()
+    }
+
     #[must_use]
     pub fn setup_fingerprint(&self) -> String {
         let mut parts: Vec<String> = if self.match_rules.is_empty() {

@@ -37,9 +37,17 @@ impl KScreenBackend {
     /// # Errors
     /// Returns an error if `kscreen-doctor` is unavailable or the current session cannot be queried.
     pub fn connect() -> CoreResult<Self> {
+        let override_command = std::env::var_os("WAYTORANDR_KSCREEN_DOCTOR");
+        if override_command.is_some() && std::env::var_os("WAYTORANDR_DAEMON_MODE").is_some() {
+            return Err(CoreError::BackendConnection(
+                BackendConnectionError::Initialize {
+                    backend: BackendKind::KScreen,
+                    source: anyhow!("WAYTORANDR_KSCREEN_DOCTOR is not honored in daemon mode"),
+                },
+            ));
+        }
         let backend = Self {
-            command: std::env::var_os("WAYTORANDR_KSCREEN_DOCTOR")
-                .unwrap_or_else(|| OsString::from(KSCREEN_DOCTOR)),
+            command: override_command.unwrap_or_else(|| OsString::from(KSCREEN_DOCTOR)),
         };
         backend
             .load_config()
@@ -139,7 +147,7 @@ impl KScreenBackend {
 impl Backend for KScreenBackend {
     fn capabilities(&self) -> Capabilities {
         let mut capabilities = Capabilities::new(BackendKind::KScreen);
-        capabilities.can_test = false;
+        capabilities.can_test = true;
         capabilities.supports_mirror = true;
         capabilities.supports_largest_mirror = true;
         capabilities
@@ -162,10 +170,19 @@ impl Backend for KScreenBackend {
     }
 
     fn test(&self, plan: &LayoutPlan) -> CoreResult<TestResult> {
-        Ok(TestResult::unsupported(Some(format!(
-            "KScreen does not provide a dry-run API; {} output changes were planned",
-            plan.outputs.len()
-        ))))
+        let config = self
+            .load_config()
+            .map_err(|source| CoreError::Backend { source })?;
+        match build_apply_args(plan, &config) {
+            Ok(args) => Ok(TestResult::supported(Some(format!(
+                "KScreen local validation passed; dry-run API unavailable; {} output changes were planned",
+                args.len()
+            )))),
+            Err(err) => Ok(TestResult::rejected(
+                Some(ConfigFailureKind::Rejected),
+                Some(err.to_string()),
+            )),
+        }
     }
 
     fn apply(&self, plan: &LayoutPlan) -> CoreResult<ApplyResult> {
@@ -175,6 +192,16 @@ impl Backend for KScreenBackend {
 }
 
 fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<String>> {
+    for output in config.outputs.iter().filter(|output| output.connected) {
+        validate_output_name(&output.name)?;
+    }
+    for (name, desired) in &plan.outputs {
+        validate_output_name(name)?;
+        if let Some(target_name) = desired.mirror_target.as_deref() {
+            validate_output_name(target_name)?;
+        }
+    }
+
     let outputs_by_name: HashMap<&str, &KScreenOutput> = config
         .outputs
         .iter()
@@ -283,6 +310,20 @@ fn build_apply_args(plan: &LayoutPlan, config: &KScreenConfig) -> Result<Vec<Str
     disable_args.extend(enable_args);
     disable_args.extend(mirror_args);
     Ok(disable_args)
+}
+
+fn validate_output_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 128 {
+        bail!("invalid KScreen output name `{name}`");
+    }
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        bail!("invalid KScreen output name `{name}`");
+    }
+
+    Ok(())
 }
 
 fn mode_command_for_output(
@@ -658,6 +699,17 @@ mod tests {
                 "output.eDP-1.mode.2".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn build_apply_args_rejects_invalid_output_names() {
+        let mut config = sample_config();
+        config.outputs[0].name = "eDP-1.enable".to_string();
+        let plan = LayoutPlan::new(HashMap::new());
+
+        let err = build_apply_args(&plan, &config).expect_err("invalid name should fail");
+
+        assert!(err.to_string().contains("invalid KScreen output name"));
     }
 
     #[test]

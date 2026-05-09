@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub const MAX_TOPOLOGY_OUTPUTS: usize = 64;
+pub const MAX_OUTPUT_MODES: usize = 256;
+pub const MAX_TOPOLOGY_STRING_BYTES: usize = 512;
+pub const MAX_MODE_DIMENSION: u32 = 32768;
+pub const MAX_REFRESH_MILLIHZ: u32 = 2_000_000;
+pub const MAX_ABS_POSITION: i32 = 1_000_000;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
@@ -169,6 +176,35 @@ impl Topology {
             output.enabled && !output.identity.is_ignored && !output.identity.is_virtual
         })
     }
+
+    #[must_use]
+    pub fn has_strong_setup_identity(&self) -> bool {
+        self.outputs
+            .values()
+            .filter(|output| !output.identity.is_ignored && !output.identity.is_virtual)
+            .all(|output| output.identity.has_non_connector_identity())
+            && self
+                .outputs
+                .values()
+                .any(|output| !output.identity.is_ignored && !output.identity.is_virtual)
+    }
+
+    pub fn validate_limits(&self) -> Result<(), String> {
+        if self.outputs.len() > MAX_TOPOLOGY_OUTPUTS {
+            return Err(format!(
+                "{} outputs reported, limit is {}",
+                self.outputs.len(),
+                MAX_TOPOLOGY_OUTPUTS
+            ));
+        }
+
+        for (name, output) in &self.outputs {
+            validate_string("output name", name)?;
+            output.validate_limits(name)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -224,6 +260,36 @@ impl OutputState {
         let scale = self.scale;
         let transform = self.transform;
         format!("{key}:{enabled}:{width}x{height}@{refresh}:{scale}:{transform}")
+    }
+
+    pub fn validate_limits(&self, name: &str) -> Result<(), String> {
+        self.identity.validate_limits(name)?;
+        if self.available_modes.len() > MAX_OUTPUT_MODES {
+            return Err(format!(
+                "output {name} reported {} modes, limit is {}",
+                self.available_modes.len(),
+                MAX_OUTPUT_MODES
+            ));
+        }
+        for mode in self.available_modes.iter().chain(self.mode.iter()) {
+            mode.validate_limits(name)?;
+        }
+        if !self.scale.is_finite() || !(0.05..=100.0).contains(&self.scale) {
+            return Err(format!(
+                "output {name} reported invalid scale {}",
+                self.scale
+            ));
+        }
+        if self.position.x.unsigned_abs() > MAX_ABS_POSITION as u32
+            || self.position.y.unsigned_abs() > MAX_ABS_POSITION as u32
+        {
+            return Err(format!("output {name} reported out-of-range position"));
+        }
+        if let Some(target) = &self.mirror_target {
+            validate_string("mirror target", target)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -305,6 +371,14 @@ impl OutputIdentity {
     }
 
     #[must_use]
+    pub fn has_non_connector_identity(&self) -> bool {
+        normalized_identity_value(self.edid_hash.as_deref()).is_some()
+            || normalized_identity_value(self.make.as_deref()).is_some()
+            || normalized_identity_value(self.model.as_deref()).is_some()
+            || normalized_identity_value(self.serial.as_deref()).is_some()
+    }
+
+    #[must_use]
     pub fn with_fallback(&self, fallback: &OutputIdentity) -> OutputIdentity {
         Self {
             edid_hash: self
@@ -326,6 +400,39 @@ impl OutputIdentity {
             is_ignored: self.is_ignored,
         }
     }
+
+    pub fn validate_limits(&self, name: &str) -> Result<(), String> {
+        for (field, value) in [
+            ("edid_hash", self.edid_hash.as_deref()),
+            ("make", self.make.as_deref()),
+            ("model", self.model.as_deref()),
+            ("serial", self.serial.as_deref()),
+            ("connector", self.connector.as_deref()),
+            ("description", self.description.as_deref()),
+        ] {
+            if let Some(value) = value {
+                validate_string(field, value)
+                    .map_err(|err| format!("output {name} has invalid {err}"))?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn validate_string(label: &str, value: &str) -> Result<(), String> {
+    if value.len() > MAX_TOPOLOGY_STRING_BYTES {
+        return Err(format!(
+            "{label} is {} bytes, limit is {}",
+            value.len(),
+            MAX_TOPOLOGY_STRING_BYTES
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{label} contains control characters"));
+    }
+
+    Ok(())
 }
 
 #[must_use]
@@ -443,6 +550,22 @@ impl Mode {
             height,
             refresh,
         }
+    }
+
+    pub fn validate_limits(&self, name: &str) -> Result<(), String> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > MAX_MODE_DIMENSION
+            || self.height > MAX_MODE_DIMENSION
+            || self.refresh > MAX_REFRESH_MILLIHZ
+        {
+            return Err(format!(
+                "output {name} reported invalid mode {}x{}@{}",
+                self.width, self.height, self.refresh
+            ));
+        }
+
+        Ok(())
     }
 }
 

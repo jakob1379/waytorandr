@@ -4,8 +4,10 @@ use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::engine::HookPolicy;
 use waytorandr_core::state::StateStore;
 use waytorandr_core::store::ProfileStore;
+use waytorandr_core::terminal::escape_terminal_text;
 use waytorandr_core::workflow;
 
 mod daemon;
@@ -33,6 +35,9 @@ struct Cli {
         help = "Enable debug logging"
     )]
     verbose: bool,
+
+    #[arg(long = "no-hooks", help = "Disable profile hook execution")]
+    no_hooks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -60,6 +65,14 @@ impl Cli {
             None
         }
     }
+
+    const fn hook_policy(&self) -> HookPolicy {
+        if self.no_hooks {
+            HookPolicy::Disabled
+        } else {
+            HookPolicy::Enabled
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -77,6 +90,8 @@ fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    std::env::set_var("WAYTORANDR_DAEMON_MODE", "1");
+
     let mut backend = connect_backend()?;
     let mut capabilities = backend.capabilities();
     let store = ProfileStore::bootstrap()?;
@@ -85,8 +100,10 @@ fn main() -> Result<()> {
 
     workflow::record_daemon_started_in_store(&state_store, capabilities.backend)?;
 
-    if let Err(err) = daemon::enforce_topology_policy(backend.as_ref(), &store, &state_store) {
-        tracing::error!(error = %err, "failed to apply matching profile");
+    if let Err(err) =
+        daemon::enforce_topology_policy(backend.as_ref(), &store, &state_store, cli.hook_policy())
+    {
+        tracing::error!(error = %escape_terminal_text(err.to_string()), "failed to apply matching profile");
     }
 
     tracing::info!(backend = %capabilities.backend, "daemon ready, watching outputs");
@@ -100,15 +117,18 @@ fn main() -> Result<()> {
                     &topology,
                 )?;
                 tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
-                if let Err(err) =
-                    daemon::enforce_topology_policy(backend.as_ref(), &store, &state_store)
-                {
-                    tracing::error!(error = %err, "failed to apply matching profile");
+                if let Err(err) = daemon::enforce_topology_policy(
+                    backend.as_ref(),
+                    &store,
+                    &state_store,
+                    cli.hook_policy(),
+                ) {
+                    tracing::error!(error = %escape_terminal_text(err.to_string()), "failed to apply matching profile");
                 }
             }
             Ok(None) => {}
             Err(err) => {
-                tracing::warn!(error = %err, "output watcher failed; reconnecting backend");
+                tracing::warn!(error = %escape_terminal_text(err.to_string()), "output watcher failed; reconnecting backend");
                 loop {
                     std::thread::sleep(WATCHER_RECONNECT_INTERVAL);
                     match connect_backend().and_then(|next_backend| {
@@ -129,13 +149,14 @@ fn main() -> Result<()> {
                                 backend.as_ref(),
                                 &store,
                                 &state_store,
+                                cli.hook_policy(),
                             ) {
-                                tracing::error!(error = %err, "failed to apply matching profile after reconnect");
+                                tracing::error!(error = %escape_terminal_text(err.to_string()), "failed to apply matching profile after reconnect");
                             }
                             break;
                         }
                         Err(err) => {
-                            tracing::warn!(error = %err, "backend reconnect failed");
+                            tracing::warn!(error = %escape_terminal_text(err.to_string()), "backend reconnect failed");
                         }
                     }
                 }
@@ -181,5 +202,12 @@ mod tests {
         let cli = Cli::parse_from(["waytorandrd", "--verbose"]);
 
         assert_eq!(cli.log_filter(), "debug");
+    }
+
+    #[test]
+    fn daemon_cli_accepts_no_hooks() {
+        let cli = Cli::parse_from(["waytorandrd", "--no-hooks"]);
+
+        assert_eq!(cli.hook_policy(), HookPolicy::Disabled);
     }
 }

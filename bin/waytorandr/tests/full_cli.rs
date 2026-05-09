@@ -471,6 +471,19 @@ fn save_updates_setup_name_for_current_setup() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn set_auto_rejects_cached_identity_enrichment() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+    env.run_json(["save", "desk", "--default", "--json"])?;
+
+    env.write_backend_topology(&connector_only_fixture_topology())?;
+    let failure = env.run_json_failure(["set", "auto", "--json"])?;
+
+    assert!(failure.stderr.contains("no matching profile configured"));
+    Ok(())
+}
+
 struct TestEnvironment {
     root: PathBuf,
     config_home: PathBuf,
@@ -788,6 +801,41 @@ fn fixture_topology() -> Topology {
     }
 }
 
+fn connector_only_fixture_topology() -> Topology {
+    Topology {
+        outputs: [
+            (
+                "DP-1".to_string(),
+                connector_only_output(
+                    "DP-1",
+                    2560,
+                    1440,
+                    &[
+                        Mode::new(2560, 1440, 60),
+                        Mode::new(1920, 1080, 60),
+                        Mode::new(1280, 720, 60),
+                    ],
+                    0,
+                    0,
+                ),
+            ),
+            (
+                "eDP-1".to_string(),
+                connector_only_output(
+                    "eDP-1",
+                    1920,
+                    1080,
+                    &[Mode::new(1920, 1080, 60), Mode::new(1280, 720, 60)],
+                    2560,
+                    0,
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
 fn alternate_topology() -> Topology {
     Topology {
         outputs: [(
@@ -817,7 +865,25 @@ fn output(
     y: i32,
 ) -> OutputState {
     let mut state = OutputState::new(connector);
+    state.identity.make = Some("TestDisplay".to_string());
+    state.identity.model = Some(description.map_or_else(|| connector.to_string(), str::to_string));
     state.identity.description = description.map(str::to_string);
+    state.enabled = true;
+    state.mode = Some(Mode::new(width, height, 60));
+    state.available_modes = available_modes.to_vec();
+    state.position = Position::new(x, y);
+    state
+}
+
+fn connector_only_output(
+    connector: &str,
+    width: u32,
+    height: u32,
+    available_modes: &[Mode],
+    x: i32,
+    y: i32,
+) -> OutputState {
+    let mut state = OutputState::new(connector);
     state.enabled = true;
     state.mode = Some(Mode::new(width, height, 60));
     state.available_modes = available_modes.to_vec();

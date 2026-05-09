@@ -2,11 +2,15 @@ use crate::atomic::{atomic_write, with_exclusive_lock};
 use crate::error::{CoreError, CoreResult};
 use crate::model::OutputIdentity;
 use crate::normalize::canonicalize_profile;
-use crate::profile::Profile;
+use crate::profile::{validate_profile_name, Profile};
 use crate::state::StateStore;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const MAX_PROFILES_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_LEGACY_PROFILE_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_LEGACY_PROFILE_COUNT: usize = 256;
 
 pub struct ProfileStore {
     path: PathBuf,
@@ -85,7 +89,11 @@ impl ProfileStore {
             .parent()
             .ok_or(CoreError::MissingConfigDirectory)?
             .to_path_buf();
-        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir { path: dir, source })?;
+        fs::create_dir_all(&dir).map_err(|source| CoreError::CreateDir {
+            path: dir.clone(),
+            source,
+        })?;
+        restrict_dir_permissions(&dir)?;
         store.migrate_legacy_profiles_json()?;
         store.migrate_legacy_profiles()?;
         store.migrate_legacy_defaults_from_state()?;
@@ -346,6 +354,10 @@ impl ProfileStore {
         profile: &Profile,
         known_outputs: &HashMap<String, OutputIdentity>,
     ) -> CoreResult<()> {
+        validate_profile_name(&profile.name).map_err(|reason| CoreError::InvalidProfileName {
+            name: profile.name.clone(),
+            reason: reason.to_string(),
+        })?;
         let profile = canonicalize_profile(profile, known_outputs);
         let setup_fingerprint = profile.setup_fingerprint();
         self.update_profiles_file(|stored| {
@@ -485,6 +497,10 @@ impl ProfileStore {
         self.update_profiles_file(|stored| {
             for (setup_fingerprint, profile_name) in &state.default_profiles {
                 if setup_fingerprint.starts_with("__") {
+                    tracing::warn!(
+                        setup_fingerprint,
+                        "skipping legacy default profile migration for reserved setup fingerprint"
+                    );
                     continue;
                 }
 
@@ -574,6 +590,7 @@ fn legacy_profile_dir() -> CoreResult<PathBuf> {
 }
 
 fn load_profile_from_file(path: &Path) -> CoreResult<Profile> {
+    reject_large_file(path, MAX_LEGACY_PROFILE_FILE_BYTES)?;
     let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
         path: path.to_path_buf(),
         source,
@@ -610,14 +627,19 @@ fn load_profiles_file_from_path(path: &Path) -> CoreResult<ProfilesFile> {
 }
 
 fn load_profiles_json_file(path: &Path) -> CoreResult<ProfilesFile> {
+    warn_if_untrusted_store_file(path);
+    reject_large_file(path, MAX_PROFILES_FILE_BYTES)?;
     let content = fs::read_to_string(path).map_err(|source| CoreError::ReadFile {
         path: path.to_path_buf(),
         source,
     })?;
-    serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
-        path: path.to_path_buf(),
-        source,
-    })
+    let profiles: ProfilesFile =
+        serde_json::from_str(&content).map_err(|source| CoreError::ParseJson {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    reject_hook_profiles_from_untrusted_store(path, &profiles)?;
+    Ok(profiles)
 }
 
 impl ProfileStore {
@@ -675,6 +697,7 @@ fn load_legacy_profiles_from_dir(dir: &Path) -> CoreResult<Vec<(PathBuf, Profile
                     .extension()
                     .is_some_and(|extension| extension == "toml")
                 {
+                    ensure_legacy_profile_limit(dir, profiles.len() + 1)?;
                     profiles.push((nested_path.clone(), load_profile_from_file(&nested_path)?));
                 }
             }
@@ -685,11 +708,107 @@ fn load_legacy_profiles_from_dir(dir: &Path) -> CoreResult<Vec<(PathBuf, Profile
             .extension()
             .is_some_and(|extension| extension == "toml")
         {
+            ensure_legacy_profile_limit(dir, profiles.len() + 1)?;
             profiles.push((path.clone(), load_profile_from_file(&path)?));
         }
     }
 
     Ok(profiles)
+}
+
+#[cfg(unix)]
+fn restrict_dir_permissions(path: &Path) -> CoreResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
+        CoreError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
+}
+
+#[cfg(not(unix))]
+fn restrict_dir_permissions(_path: &Path) -> CoreResult<()> {
+    Ok(())
+}
+
+fn reject_large_file(path: &Path, max_bytes: u64) -> CoreResult<()> {
+    let actual_bytes = fs::metadata(path)
+        .map_err(|source| CoreError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    if actual_bytes > max_bytes {
+        return Err(CoreError::FileTooLarge {
+            path: path.to_path_buf(),
+            actual_bytes,
+            max_bytes,
+        });
+    }
+
+    Ok(())
+}
+
+fn ensure_legacy_profile_limit(dir: &Path, actual: usize) -> CoreResult<()> {
+    if actual > MAX_LEGACY_PROFILE_COUNT {
+        return Err(CoreError::TooManyLegacyProfiles {
+            path: dir.to_path_buf(),
+            actual,
+            max: MAX_LEGACY_PROFILE_COUNT,
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn warn_if_untrusted_store_file(path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.mode() & 0o022 != 0 {
+        tracing::warn!(
+            path = ?path,
+            "profile store is group/world writable; profiles and hooks are trusted executable content"
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_untrusted_store_file(_path: &Path) {}
+
+fn reject_hook_profiles_from_untrusted_store(
+    path: &Path,
+    profiles: &ProfilesFile,
+) -> CoreResult<()> {
+    let Some(reason) = untrusted_store_reason(path) else {
+        return Ok(());
+    };
+    if profiles.profiles.iter().any(Profile::has_hooks) {
+        return Err(CoreError::UntrustedProfileStore {
+            path: path.to_path_buf(),
+            reason,
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn untrusted_store_reason(path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(path).ok()?;
+    (metadata.mode() & 0o022 != 0).then(|| "profile store is group/world writable".to_string())
+}
+
+#[cfg(not(unix))]
+fn untrusted_store_reason(_path: &Path) -> Option<String> {
+    None
 }
 
 fn merge_legacy_profile(

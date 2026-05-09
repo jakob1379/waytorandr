@@ -1,5 +1,5 @@
 use crate::engine::{
-    ApplyResult, Backend, ConfigFailureKind, Engine, TestResult, ValidationStatus,
+    ApplyResult, Backend, ConfigFailureKind, Engine, HookPolicy, TestResult, ValidationStatus,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::matcher::Matcher;
@@ -104,6 +104,21 @@ pub enum ApplyExecution {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ApplyPolicy {
+    pub allow_unsupported_validation: bool,
+    pub hook_policy: HookPolicy,
+}
+
+impl Default for ApplyPolicy {
+    fn default() -> Self {
+        Self {
+            allow_unsupported_validation: false,
+            hook_policy: HookPolicy::Enabled,
+        }
+    }
+}
+
 impl ApplyExecution {
     #[must_use]
     pub fn failure_kind(&self) -> Option<ConfigFailureKind> {
@@ -148,6 +163,26 @@ pub fn select_target_for_topology(
     }
 
     Matcher::match_profile_exact(topology, profiles).map(|matched| matched.profile)
+}
+
+#[must_use]
+pub fn select_trusted_target_for_topology(
+    topology: &Topology,
+    profiles: &[Profile],
+    settings: &ProfilesSettings,
+) -> Option<Profile> {
+    if !topology.has_strong_setup_identity() {
+        return None;
+    }
+
+    let setup_fingerprint = topology.setup_fingerprint();
+    let trusted_profiles: Vec<Profile> = profiles
+        .iter()
+        .filter(|profile| profile.setup_fingerprint() == setup_fingerprint)
+        .cloned()
+        .collect();
+
+    select_target_for_topology(topology, &trusted_profiles, settings)
 }
 
 #[must_use]
@@ -223,12 +258,13 @@ pub fn normalized_topology_from_backend<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
 ) -> CoreResult<Topology> {
-    let topology = backend.enumerate_outputs()?;
+    let topology = bounded_topology_from_backend(backend)?;
     let state = state_store.load_state()?.unwrap_or_default();
-    Ok(normalize_topology_with_known_outputs(
-        &topology,
-        &state.known_outputs,
-    ))
+    let normalized = normalize_topology_with_known_outputs(&topology, &state.known_outputs);
+    normalized
+        .validate_limits()
+        .map_err(CoreError::InvalidTopology)?;
+    Ok(normalized)
 }
 
 /// Load the backend topology and persist it as the latest observed state.
@@ -240,8 +276,21 @@ pub fn observed_topology_from_backend<B: Backend + ?Sized>(
     backend: &B,
     state_store: &StateStore,
 ) -> CoreResult<Topology> {
-    let topology = backend.enumerate_outputs()?;
+    let topology = bounded_topology_from_backend(backend)?;
     state_store.observe_topology_and_persist_known_outputs(&topology)
+}
+
+/// Build a topology by enumerating outputs from a backend and validate topology limits.
+///
+/// # Errors
+/// Returns `CoreError::InvalidTopology` when `validate_limits` fails, or forwards
+/// errors from `backend.enumerate_outputs()`.
+pub fn bounded_topology_from_backend<B: Backend + ?Sized>(backend: &B) -> CoreResult<Topology> {
+    let topology = backend.enumerate_outputs()?;
+    topology
+        .validate_limits()
+        .map_err(CoreError::InvalidTopology)?;
+    Ok(topology)
 }
 
 /// Load a normalized topology from the backend and plan `profile` for it.
@@ -309,6 +358,7 @@ where
 fn apply_with_planner<B, F>(
     backend: &B,
     hooks: &Hooks,
+    policy: ApplyPolicy,
     mut plan_snapshot: F,
 ) -> CoreResult<ApplyExecution>
 where
@@ -317,7 +367,17 @@ where
 {
     let plan_snapshot = plan_snapshot()?;
 
-    match apply_plan_cycle(backend, hooks, plan_snapshot)? {
+    if !plan_snapshot.plan.has_enabled_real_outputs() {
+        return Ok(ApplyExecution::Rejected {
+            plan: plan_snapshot.plan,
+            validation: TestResult::rejected(
+                Some(ConfigFailureKind::Rejected),
+                Some("refusing to apply a layout with no enabled real outputs".to_string()),
+            ),
+        });
+    }
+
+    match apply_plan_cycle(backend, hooks, policy, plan_snapshot)? {
         ExecutionCycle::Applied {
             validation,
             apply_plan,
@@ -396,7 +456,16 @@ pub fn apply_profile_workflow<B: Backend + ?Sized>(
     state_store: &StateStore,
     profile: &Profile,
 ) -> CoreResult<ApplyExecution> {
-    apply_with_planner(backend, &profile.hooks, || {
+    apply_profile_workflow_with_policy(backend, state_store, profile, ApplyPolicy::default())
+}
+
+pub fn apply_profile_workflow_with_policy<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    profile: &Profile,
+    policy: ApplyPolicy,
+) -> CoreResult<ApplyExecution> {
+    apply_with_planner(backend, &profile.hooks, policy, || {
         plan_profile_with_backend(backend, state_store, profile)
     })
 }
@@ -411,8 +480,24 @@ pub fn apply_preset_workflow<B: Backend + ?Sized>(
     preset: VirtualPreset,
     builtin_output: Option<&crate::model::OutputIdentity>,
 ) -> CoreResult<ApplyExecution> {
+    apply_preset_workflow_with_policy(
+        backend,
+        state_store,
+        preset,
+        builtin_output,
+        ApplyPolicy::default(),
+    )
+}
+
+pub fn apply_preset_workflow_with_policy<B: Backend + ?Sized>(
+    backend: &B,
+    state_store: &StateStore,
+    preset: VirtualPreset,
+    builtin_output: Option<&crate::model::OutputIdentity>,
+    policy: ApplyPolicy,
+) -> CoreResult<ApplyExecution> {
     let hooks = Hooks::default();
-    apply_with_planner(backend, &hooks, || {
+    apply_with_planner(backend, &hooks, policy, || {
         plan_preset_with_backend(backend, state_store, preset, builtin_output)
     })
 }
@@ -436,10 +521,11 @@ pub fn validate_plan<B: Backend + ?Sized>(
 pub fn apply_plan<B: Backend + ?Sized>(
     backend: &B,
     hooks: &Hooks,
+    hook_policy: HookPolicy,
     plan: &LayoutPlan,
 ) -> CoreResult<ApplyResult> {
     let engine = Engine::new(backend);
-    engine.apply_plan(plan, hooks)
+    engine.apply_plan(plan, hooks, hook_policy)
 }
 
 fn invalid_validation_cycle(validation_plan: LayoutPlan, validation: TestResult) -> ExecutionCycle {
@@ -454,6 +540,22 @@ fn invalid_validation_cycle(validation_plan: LayoutPlan, validation: TestResult)
             validation,
         }
     }
+}
+
+/// Check if the applied topology matches the intended plan.
+///
+/// Returns true if all real outputs in the topology match their desired layout
+/// in the plan, false otherwise.
+#[must_use]
+pub fn topology_matches_plan(topology: &Topology, plan: &LayoutPlan) -> bool {
+    topology
+        .outputs
+        .iter()
+        .filter(|(_, output)| !output.identity.is_ignored && !output.identity.is_virtual)
+        .all(|(name, current)| match plan.outputs.get(name) {
+            Some(desired) => desired.same_layout_as(current),
+            None => !current.enabled,
+        })
 }
 
 /// Validate a plan without applying it.
@@ -482,6 +584,7 @@ fn validate_plan_cycle<B: Backend + ?Sized>(
 fn apply_plan_cycle<B: Backend + ?Sized>(
     backend: &B,
     hooks: &Hooks,
+    policy: ApplyPolicy,
     plan_snapshot: PlanSnapshot,
 ) -> CoreResult<ExecutionCycle> {
     let validation = validate_plan(backend, &plan_snapshot.plan)?;
@@ -493,11 +596,58 @@ fn apply_plan_cycle<B: Backend + ?Sized>(
         });
     }
 
-    let apply_result = apply_plan(backend, hooks, &plan_snapshot.plan)?;
-    let applied_topology = apply_result
-        .applied_state
-        .clone()
-        .unwrap_or(plan_snapshot.topology);
+    if validation.status == ValidationStatus::Unsupported && !policy.allow_unsupported_validation {
+        return Ok(ExecutionCycle::Unsupported {
+            validation_plan: plan_snapshot.plan,
+            validation,
+        });
+    }
+
+    let mut apply_result = apply_plan(backend, hooks, policy.hook_policy, &plan_snapshot.plan)?;
+    let applied_topology = match apply_result.applied_state.clone() {
+        Some(topology) => topology,
+        None => {
+            // Re-enumerate to get post-apply topology if backend didn't provide it
+            match bounded_topology_from_backend(backend) {
+                Ok(topology) => topology,
+                Err(err) => {
+                    // Propagate enumeration error into apply_result message
+                    apply_result.success = false;
+                    apply_result.failure = Some(ConfigFailureKind::Rejected);
+                    apply_result.message =
+                        Some(format!("failed to enumerate topology after apply: {}", err));
+                    plan_snapshot.topology.clone()
+                }
+            }
+        }
+    };
+    let apply_result = match applied_topology.validate_limits() {
+        Ok(()) => {
+            // Check if the applied topology matches the intended plan
+            if apply_result.success
+                && !topology_matches_plan(&applied_topology, &plan_snapshot.plan)
+            {
+                let mut failed = apply_result;
+                failed.success = false;
+                failed.failure = Some(ConfigFailureKind::Rejected);
+                failed.message = Some(
+                    "backend reported success but applied topology does not match the intended plan".to_string()
+                );
+                failed
+            } else {
+                apply_result
+            }
+        }
+        Err(message) => {
+            let mut failed = apply_result;
+            failed.success = false;
+            failed.failure = Some(ConfigFailureKind::Rejected);
+            failed.message = Some(format!(
+                "backend returned invalid topology after apply: {message}"
+            ));
+            failed
+        }
+    };
 
     Ok(ExecutionCycle::Applied {
         validation_plan: plan_snapshot.plan.clone(),
@@ -518,6 +668,9 @@ pub fn persist_applied_runtime_state(
     backend: Option<BackendKind>,
     topology: &Topology,
 ) -> CoreResult<()> {
+    topology
+        .validate_limits()
+        .map_err(CoreError::InvalidTopology)?;
     state_store.update_observed_topology(topology, |state, topology| {
         state.record_applied_profile(profile_name, backend, topology);
         Ok(())
@@ -533,6 +686,9 @@ pub fn persist_observed_runtime_state(
     backend: Option<BackendKind>,
     topology: &Topology,
 ) -> CoreResult<()> {
+    topology
+        .validate_limits()
+        .map_err(CoreError::InvalidTopology)?;
     state_store.update_observed_topology(topology, |state, topology| {
         state.record_observed_topology(backend, topology);
         Ok(())
@@ -549,6 +705,9 @@ pub fn persist_daemon_runtime_state(
     backend: BackendKind,
     topology: &Topology,
 ) -> CoreResult<()> {
+    topology
+        .validate_limits()
+        .map_err(CoreError::InvalidTopology)?;
     state_store.update_observed_topology(topology, |state, topology| {
         if let Some(profile_name) = profile_name {
             state.record_applied_profile(profile_name, Some(backend), topology);
@@ -614,23 +773,26 @@ mod tests {
 
     fn output(connector: &str) -> OutputState {
         let mut state = OutputState::new(connector);
+        state.identity.make = Some("Test".to_string());
+        state.identity.model = Some(connector.to_string());
         state.enabled = true;
         state
     }
 
     fn profile(name: &str, connector: &str) -> Profile {
+        let output = output(connector);
         Profile {
             name: name.to_string(),
             priority: 0,
             match_rules: vec![crate::profile::OutputMatcher {
-                identity: OutputIdentity::new(connector),
+                identity: output.identity.clone(),
                 required: true,
                 position_hint: Some(crate::model::Position::default()),
             }],
             layout: HashMap::from([(
                 connector.to_string(),
                 crate::profile::OutputConfig {
-                    state: output(connector),
+                    state: output,
                     preset: None,
                 },
             )]),
@@ -663,6 +825,37 @@ mod tests {
         let selected = select_profile_for_topology(&topology, &profiles, &settings).unwrap();
 
         assert_eq!(selected.name, "desk");
+    }
+
+    #[test]
+    fn select_profile_refuses_connector_only_topology() {
+        let mut weak_output = OutputState::new("DP-1");
+        weak_output.enabled = true;
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), weak_output.clone())]),
+        };
+        let profile = Profile {
+            name: "desk".to_string(),
+            priority: 0,
+            match_rules: vec![crate::profile::OutputMatcher {
+                identity: weak_output.identity.clone(),
+                required: true,
+                position_hint: Some(crate::model::Position::default()),
+            }],
+            layout: HashMap::from([(
+                "DP-1".to_string(),
+                crate::profile::OutputConfig {
+                    state: weak_output,
+                    preset: None,
+                },
+            )]),
+            hooks: Hooks::default(),
+        };
+
+        let selected =
+            select_trusted_target_for_topology(&topology, &[profile], &ProfilesSettings::default());
+
+        assert!(selected.is_none());
     }
 
     #[test]
@@ -933,6 +1126,7 @@ mod tests {
         let cycle = apply_plan_cycle(
             &backend,
             &hooks,
+            ApplyPolicy::default(),
             PlanSnapshot::new(
                 topology.clone(),
                 LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
@@ -959,7 +1153,43 @@ mod tests {
     }
 
     #[test]
-    fn execute_plan_cycle_applies_when_validation_is_unsupported() {
+    fn apply_with_planner_rejects_blank_plan_before_backend_calls() {
+        let backend = CycleBackend {
+            test_result: TestResult::supported(None),
+            test_calls: Arc::new(Mutex::new(0)),
+            apply_calls: Arc::new(Mutex::new(0)),
+        };
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), {
+                let mut state = output("DP-1");
+                state.enabled = false;
+                state
+            })]),
+        };
+        let hooks = Hooks::default();
+
+        let execution = apply_with_planner(&backend, &hooks, ApplyPolicy::default(), || {
+            Ok(PlanSnapshot::new(
+                topology.clone(),
+                LayoutPlan::new(topology.outputs.clone()),
+            ))
+        })
+        .unwrap();
+
+        match execution {
+            ApplyExecution::Rejected { validation, .. } => {
+                assert_eq!(validation.status, ValidationStatus::Rejected);
+            }
+            ApplyExecution::Unsupported { .. }
+            | ApplyExecution::ApplyFailed { .. }
+            | ApplyExecution::Applied { .. } => panic!("expected blank plan rejection"),
+        }
+        assert_eq!(*backend.test_calls.lock().unwrap(), 0);
+        assert_eq!(*backend.apply_calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn execute_plan_cycle_blocks_apply_when_validation_is_unsupported() {
         let backend = CycleBackend {
             test_result: TestResult::unsupported(None),
             test_calls: Arc::new(Mutex::new(0)),
@@ -973,6 +1203,7 @@ mod tests {
         let cycle = apply_plan_cycle(
             &backend,
             &hooks,
+            ApplyPolicy::default(),
             PlanSnapshot::new(
                 topology.clone(),
                 LayoutPlan::new(HashMap::from([("DP-1".to_string(), output("DP-1"))])),
@@ -981,20 +1212,15 @@ mod tests {
         .unwrap();
 
         match cycle {
-            ExecutionCycle::Applied {
-                validation,
-                apply_result,
-                ..
-            } => {
+            ExecutionCycle::Unsupported { validation, .. } => {
                 assert_eq!(validation.status, ValidationStatus::Unsupported);
                 assert!(!validation.success);
-                assert!(apply_result.success);
             }
             ExecutionCycle::DryRun { .. }
             | ExecutionCycle::Rejected { .. }
-            | ExecutionCycle::Unsupported { .. } => panic!("expected applied cycle"),
+            | ExecutionCycle::Applied { .. } => panic!("expected unsupported cycle"),
         }
         assert_eq!(*backend.test_calls.lock().unwrap(), 1);
-        assert_eq!(*backend.apply_calls.lock().unwrap(), 1);
+        assert_eq!(*backend.apply_calls.lock().unwrap(), 0);
     }
 }

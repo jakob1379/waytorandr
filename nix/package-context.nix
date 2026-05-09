@@ -13,6 +13,7 @@
     rust
     cargo
     clippy
+    act
     alejandra
     deadnix
     statix

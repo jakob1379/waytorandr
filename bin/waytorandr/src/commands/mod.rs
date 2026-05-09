@@ -47,6 +47,7 @@ pub(crate) fn run() -> Result<()> {
                 save: args.save,
                 reverse: args.reverse,
                 largest: args.largest,
+                force: args.force,
             },
             output_mode,
         ),
