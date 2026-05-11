@@ -5,6 +5,7 @@ use anyhow::{bail, Result};
 use waytorandr_core::engine::{Backend, ConfigFailureKind, HookPolicy};
 use waytorandr_core::matcher::Matcher;
 use waytorandr_core::model::{BackendKind, Topology, VirtualPreset};
+use waytorandr_core::normalize::normalize_topology_with_known_outputs;
 use waytorandr_core::planner::{topology_is_blank_internal_only, LayoutPlan, Planner};
 use waytorandr_core::profile::{Hooks, Profile};
 use waytorandr_core::state::StateStore;
@@ -35,18 +36,21 @@ pub(crate) fn enforce_topology_policy(
     state_store: &StateStore,
     hook_policy: HookPolicy,
 ) -> Result<()> {
+    let settings = store.settings()?;
     for attempt in 0..MAX_RETRIES {
-        let topology = match wait_for_stable_topology(backend, state_store)? {
-            TopologyStability::Stable(topology) => topology,
-            TopologyStability::TimedOut(topology) => {
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    total_attempts = MAX_RETRIES,
-                    "topology did not stabilize before timeout, proceeding with latest sample"
-                );
-                topology
-            }
-        };
+        let topology =
+            match wait_for_stable_topology(backend, state_store, settings.builtin_output.as_ref())?
+            {
+                TopologyStability::Stable(topology) => topology,
+                TopologyStability::TimedOut(topology) => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        total_attempts = MAX_RETRIES,
+                        "topology did not stabilize before timeout, proceeding with latest sample"
+                    );
+                    topology
+                }
+            };
 
         match maybe_apply_matching_profile(backend, store, state_store, &topology, hook_policy)? {
             DaemonOutcome::Applied | DaemonOutcome::NoMatch => return Ok(()),
@@ -84,10 +88,12 @@ pub(crate) fn enforce_topology_policy(
 fn wait_for_stable_topology(
     backend: &(impl Backend + ?Sized),
     state_store: &StateStore,
+    builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
 ) -> Result<TopologyStability> {
     wait_for_stable_topology_with(
         backend,
         state_store,
+        builtin_output,
         STABLE_TIMEOUT,
         STABLE_INTERVAL,
         STABLE_SAMPLES,
@@ -97,6 +103,7 @@ fn wait_for_stable_topology(
 fn wait_for_stable_topology_with(
     backend: &(impl Backend + ?Sized),
     state_store: &StateStore,
+    builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
     timeout: Duration,
     interval: Duration,
     stable_samples_required: usize,
@@ -108,6 +115,14 @@ fn wait_for_stable_topology_with(
     loop {
         let topology = workflow::normalized_topology_from_backend(backend, state_store)?;
         let fingerprint = topology.state_fingerprint();
+
+        if topology_is_blank_internal_only(&topology, builtin_output) {
+            tracing::debug!(
+                fingerprint = %topology.setup_fingerprint(),
+                "accepting blank internal-only topology without waiting for additional stable samples"
+            );
+            return Ok(TopologyStability::Stable(topology));
+        }
 
         if last_fingerprint.as_deref() == Some(fingerprint.as_str()) {
             stable_samples += 1;
@@ -269,7 +284,8 @@ fn apply_builtin_fallback(
     builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
 ) -> Result<DaemonOutcome> {
     let Some((pre_apply_topology, pre_apply_plan)) =
-        plan_builtin_fallback_from_current(backend, builtin_output).map_err(anyhow::Error::from)?
+        plan_builtin_fallback_from_current(backend, state_store, builtin_output)
+            .map_err(anyhow::Error::from)?
     else {
         tracing::warn!("topology changed before built-in fallback apply; retrying full pass");
         return Ok(DaemonOutcome::TopologyChanged);
@@ -313,11 +329,12 @@ fn apply_builtin_fallback(
         );
     }
 
-    let applied_topology = if let Some(applied_state) = apply_result.applied_state {
+    let raw_applied_topology = if let Some(applied_state) = apply_result.applied_state {
         applied_state
     } else {
         workflow::bounded_topology_from_backend(backend).map_err(anyhow::Error::from)?
     };
+    let applied_topology = normalize_topology_from_state(state_store, &raw_applied_topology)?;
     if applied_topology.setup_fingerprint() != pre_apply_topology.setup_fingerprint()
         || !applied_topology.has_enabled_real_outputs()
         || !workflow::topology_matches_plan(&applied_topology, &pre_apply_plan)
@@ -339,9 +356,10 @@ fn apply_builtin_fallback(
 
 fn plan_builtin_fallback_from_current(
     backend: &(impl Backend + ?Sized),
+    state_store: &StateStore,
     builtin_output: Option<&waytorandr_core::model::OutputIdentity>,
 ) -> waytorandr_core::error::CoreResult<Option<(Topology, LayoutPlan)>> {
-    let topology = workflow::bounded_topology_from_backend(backend)?;
+    let topology = workflow::normalized_topology_from_backend(backend, state_store)?;
     if !topology_is_blank_internal_only(&topology, builtin_output) {
         return Ok(None);
     }
@@ -451,7 +469,7 @@ fn apply_profile(
     }
 
     if apply_result.success {
-        let applied_topology = apply_result.applied_state.clone().unwrap_or_else(|| {
+        let raw_applied_topology = apply_result.applied_state.clone().unwrap_or_else(|| {
             // Re-enumerate to get post-apply topology if backend didn't provide it
             workflow::normalized_topology_from_backend(backend, state_store).unwrap_or_else(|e| {
                 tracing::error!(
@@ -461,6 +479,14 @@ fn apply_profile(
                 latest_topology.clone()
             })
         });
+        let applied_topology = normalize_topology_from_state(state_store, &raw_applied_topology)
+            .unwrap_or_else(|e| {
+                tracing::error!(
+                    error = %e,
+                    "failed to normalize topology after apply"
+                );
+                raw_applied_topology
+            });
         if applied_topology.validate_limits().is_err() {
             return Ok(DaemonOutcome::TopologyChanged);
         }
@@ -522,6 +548,18 @@ fn apply_profile(
                 .unwrap_or("backend failed to apply configuration")
         );
     }
+}
+
+fn normalize_topology_from_state(
+    state_store: &StateStore,
+    topology: &Topology,
+) -> Result<Topology> {
+    let state = state_store.load_state()?.unwrap_or_default();
+    let normalized = normalize_topology_with_known_outputs(topology, &state.known_outputs);
+    normalized
+        .validate_limits()
+        .map_err(waytorandr_core::error::CoreError::InvalidTopology)?;
+    Ok(normalized)
 }
 
 fn persist_runtime_state(
@@ -993,6 +1031,57 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn blank_internal_only_fallback_uses_normalized_pre_apply_topology(
+    ) -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let store = ProfileStore::bootstrap()?;
+            let current = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let raw_current = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), weak_output("eDP-1", false))]),
+            };
+            let applied = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), weak_output("eDP-1", true))]),
+            };
+            let mut state = state_store.load_state()?.unwrap_or_default();
+            state.known_outputs.insert(
+                "eDP-1".to_string(),
+                current.outputs["eDP-1"].identity.clone(),
+            );
+            state_store.save_state(&state)?;
+            let apply_calls = Arc::new(Mutex::new(0));
+            let backend = StubBackend {
+                enumerated_topology: raw_current,
+                applied_topology: Some(applied),
+                test_success: true,
+                test_failure: None,
+                test_message: None,
+                apply_calls: apply_calls.clone(),
+                test_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let outcome = maybe_apply_matching_profile(
+                &backend,
+                &store,
+                &state_store,
+                &current,
+                HookPolicy::Enabled,
+            )?;
+            let state = state_store.load_state()?.unwrap_or_default();
+
+            assert!(matches!(outcome, DaemonOutcome::Applied));
+            assert_eq!(*apply_calls.lock().unwrap(), 1);
+            assert!(state
+                .remembered_topology_for_setup(&current.setup_fingerprint())
+                .is_some_and(Topology::has_enabled_real_outputs));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     struct StubBackend {
         enumerated_topology: Topology,
         applied_topology: Option<Topology>,
@@ -1056,6 +1145,76 @@ mod tests {
                 Some(self.applied_topology.clone().unwrap_or_else(|| Topology {
                     outputs: plan.outputs.clone(),
                 }));
+            Ok(result)
+        }
+    }
+
+    struct SequenceBackend {
+        topologies: Arc<Mutex<Vec<Topology>>>,
+        enumerate_calls: Arc<Mutex<usize>>,
+    }
+
+    impl SequenceBackend {
+        fn new(topologies: Vec<Topology>) -> Self {
+            Self {
+                topologies: Arc::new(Mutex::new(topologies)),
+                enumerate_calls: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        fn enumerate_calls(&self) -> usize {
+            *self
+                .enumerate_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+    }
+
+    impl Backend for SequenceBackend {
+        fn capabilities(&self) -> Capabilities {
+            let mut capabilities = Capabilities::new(BackendKind::Test);
+            capabilities.can_test = true;
+            capabilities
+        }
+
+        fn enumerate_outputs(&self) -> waytorandr_core::error::CoreResult<Topology> {
+            *self
+                .enumerate_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+            let mut topologies = self
+                .topologies
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if topologies.len() > 1 {
+                Ok(topologies.remove(0))
+            } else {
+                topologies
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| CoreError::Backend {
+                        source: anyhow::anyhow!("no topology samples configured"),
+                    })
+            }
+        }
+
+        fn watch_outputs(&self) -> waytorandr_core::error::CoreResult<Box<dyn OutputWatcher>> {
+            Err(CoreError::Backend {
+                source: anyhow::anyhow!("not used in tests"),
+            })
+        }
+
+        fn test(&self, _plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<TestResult> {
+            Ok(TestResult::supported(None))
+        }
+
+        fn apply(&self, plan: &LayoutPlan) -> waytorandr_core::error::CoreResult<ApplyResult> {
+            let mut result = ApplyResult::default();
+            result.success = true;
+            result.message = Some("applied".to_string());
+            result.applied_state = Some(Topology {
+                outputs: plan.outputs.clone(),
+            });
             Ok(result)
         }
     }
@@ -1177,6 +1336,7 @@ mod tests {
             let outcome = wait_for_stable_topology_with(
                 &backend,
                 &state_store,
+                None,
                 Duration::from_millis(1),
                 Duration::from_millis(0),
                 2,
@@ -1209,12 +1369,45 @@ mod tests {
             let outcome = wait_for_stable_topology_with(
                 &backend,
                 &state_store,
+                None,
                 Duration::from_millis(0),
                 Duration::from_millis(0),
                 2,
             )?;
 
             assert!(matches!(outcome, TopologyStability::TimedOut(_)));
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn wait_for_stable_topology_returns_blank_internal_only_without_waiting(
+    ) -> Result<(), Box<dyn Error>> {
+        with_test_state_dir(|| {
+            let state_store = StateStore::bootstrap()?;
+            let blank = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", false))]),
+            };
+            let enabled = Topology {
+                outputs: HashMap::from([("eDP-1".to_string(), output("eDP-1", true))]),
+            };
+            let backend = SequenceBackend::new(vec![blank.clone(), enabled]);
+
+            let outcome = wait_for_stable_topology_with(
+                &backend,
+                &state_store,
+                None,
+                Duration::from_millis(1_000),
+                Duration::from_millis(1_000),
+                2,
+            )?;
+
+            let TopologyStability::Stable(topology) = outcome else {
+                panic!("blank internal-only topology should be accepted immediately");
+            };
+            assert_eq!(topology.fingerprint(), blank.fingerprint());
+            assert_eq!(backend.enumerate_calls(), 1);
             Ok(())
         })?;
         Ok(())
