@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use waytorandr_backend_loader::connect_backend;
@@ -7,10 +7,11 @@ use waytorandr_core::{
     Backend, BackendKind, Capabilities, OutputWatcher, ProfileStore, StateStore, Topology,
 };
 
-use super::{enforce_topology_policy, record_daemon_started};
+use super::{duration_ms, elapsed_ms, enforce_topology_policy, record_daemon_started};
 
-const INITIAL_POLICY_FAILURE: &str = "failed to apply matching profile";
-const RECONNECTED_POLICY_FAILURE: &str = "failed to apply matching profile after reconnect";
+const INITIAL_POLICY_CONTEXT: &str = "initial";
+const RECONNECTED_POLICY_CONTEXT: &str = "after_reconnect";
+const SLOW_WATCH_POLL: Duration = Duration::from_secs(1);
 
 pub(crate) fn run_watch_loop(
     backend: &mut Box<dyn Backend>,
@@ -27,7 +28,7 @@ pub(crate) fn run_watch_loop(
         backend.as_ref(),
         store,
         state_store,
-        INITIAL_POLICY_FAILURE,
+        INITIAL_POLICY_CONTEXT,
         no_hooks,
     );
 
@@ -55,18 +56,48 @@ fn run_watch_step(
     reconnect: &mut impl FnMut(&mut Box<dyn Backend>) -> Result<(Capabilities, Box<dyn OutputWatcher>)>,
     no_hooks: bool,
 ) -> Result<()> {
+    let poll_start = Instant::now();
     match watcher.poll_changed() {
-        Ok(Some(topology)) => handle_topology_change(
-            backend.as_ref(),
-            store,
-            state_store,
-            capabilities.backend,
-            &topology,
-            no_hooks,
-        ),
-        Ok(None) => Ok(()),
+        Ok(Some(topology)) => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(poll_start),
+                backend = %capabilities.backend,
+                setup_fingerprint = %topology.setup_fingerprint(),
+                state_fingerprint = %topology.state_fingerprint(),
+                "daemon output watcher detected setup change"
+            );
+            handle_topology_change(
+                backend.as_ref(),
+                store,
+                state_store,
+                capabilities.backend,
+                &topology,
+                no_hooks,
+            )
+        }
+        Ok(None) => {
+            let poll_elapsed = poll_start.elapsed();
+            if poll_elapsed >= SLOW_WATCH_POLL {
+                tracing::debug!(
+                    elapsed_ms = duration_ms(poll_elapsed),
+                    backend = %capabilities.backend,
+                    "daemon output watcher poll was slow without setup change"
+                );
+            } else {
+                tracing::trace!(
+                    elapsed_ms = duration_ms(poll_elapsed),
+                    backend = %capabilities.backend,
+                    "daemon output watcher poll completed without setup change"
+                );
+            }
+            Ok(())
+        }
         Err(err) => {
-            tracing::warn!(error = %err, "output watcher failed; reconnecting backend");
+            tracing::warn!(
+                elapsed_ms = elapsed_ms(poll_start),
+                error = %err,
+                "output watcher failed; reconnecting backend"
+            );
             let (next_capabilities, next_watcher) = reconnect(backend)?;
             *capabilities = next_capabilities;
             *watcher = next_watcher;
@@ -76,7 +107,7 @@ fn run_watch_step(
                 backend.as_ref(),
                 store,
                 state_store,
-                RECONNECTED_POLICY_FAILURE,
+                RECONNECTED_POLICY_CONTEXT,
                 no_hooks,
             );
             Ok(())
@@ -92,14 +123,22 @@ fn handle_topology_change(
     topology: &Topology,
     no_hooks: bool,
 ) -> Result<()> {
+    let change_start = Instant::now();
     workflow::persist_observed_runtime_state(state_store, Some(backend_kind), topology)?;
     tracing::info!(fingerprint = %topology.fingerprint(), "topology changed");
     enforce_initial_policy(
         backend,
         store,
         state_store,
-        INITIAL_POLICY_FAILURE,
+        INITIAL_POLICY_CONTEXT,
         no_hooks,
+    );
+    tracing::debug!(
+        elapsed_ms = elapsed_ms(change_start),
+        backend = %backend_kind,
+        setup_fingerprint = %topology.setup_fingerprint(),
+        state_fingerprint = %topology.state_fingerprint(),
+        "daemon topology change handling completed"
     );
     Ok(())
 }
@@ -108,11 +147,23 @@ fn enforce_initial_policy(
     backend: &(impl Backend + ?Sized),
     store: &ProfileStore,
     state_store: &StateStore,
-    error_message: &'static str,
+    policy_context: &'static str,
     no_hooks: bool,
 ) {
+    let policy_start = Instant::now();
     if let Err(err) = enforce_topology_policy(backend, store, state_store, no_hooks) {
-        tracing::error!(error = %err, message = error_message, "daemon topology policy failed");
+        tracing::error!(
+            elapsed_ms = elapsed_ms(policy_start),
+            error = %err,
+            context = policy_context,
+            "daemon topology policy failed"
+        );
+    } else {
+        tracing::debug!(
+            elapsed_ms = elapsed_ms(policy_start),
+            context = policy_context,
+            "daemon topology policy enforcement returned"
+        );
     }
 }
 
@@ -121,6 +172,7 @@ fn reconnect_backend(
     reconnect_interval: Duration,
 ) -> Result<(Capabilities, Box<dyn OutputWatcher>)> {
     loop {
+        let reconnect_start = Instant::now();
         std::thread::sleep(reconnect_interval);
         match connect_backend().and_then(|next_backend| {
             let next_capabilities = next_backend.capabilities();
@@ -128,11 +180,20 @@ fn reconnect_backend(
             Ok((next_backend, next_capabilities, next_watcher))
         }) {
             Ok((next_backend, next_capabilities, next_watcher)) => {
+                tracing::debug!(
+                    elapsed_ms = elapsed_ms(reconnect_start),
+                    backend = %next_capabilities.backend,
+                    "daemon backend reconnect completed"
+                );
                 *backend = next_backend;
                 return Ok((next_capabilities, next_watcher));
             }
             Err(err) => {
-                tracing::warn!(error = %err, "backend reconnect failed");
+                tracing::warn!(
+                    elapsed_ms = elapsed_ms(reconnect_start),
+                    error = %err,
+                    "backend reconnect failed"
+                );
             }
         }
     }
@@ -153,9 +214,9 @@ mod tests {
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn policy_failure_messages_distinguish_initial_and_reconnect_paths() {
-        assert_eq!(INITIAL_POLICY_FAILURE, "failed to apply matching profile");
-        assert!(RECONNECTED_POLICY_FAILURE.contains("after reconnect"));
+    fn policy_contexts_distinguish_initial_and_reconnect_paths() {
+        assert_eq!(INITIAL_POLICY_CONTEXT, "initial");
+        assert_eq!(RECONNECTED_POLICY_CONTEXT, "after_reconnect");
     }
 
     #[test]

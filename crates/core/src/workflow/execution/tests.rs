@@ -142,7 +142,12 @@ fn apply_plan_cycle_rejects_without_apply() -> anyhow::Result<()> {
         apply_calls: Arc::new(Mutex::new(0)),
     };
 
-    let execution = apply_plan_cycle(&backend, &Hooks::default(), prepared_plan("DP-1"))?;
+    let execution = apply_plan_cycle(
+        &backend,
+        &Hooks::default(),
+        ApplyPolicy::default(),
+        prepared_plan("DP-1"),
+    )?;
 
     let ApplyExecution::Rejected { validation, .. } = execution else {
         anyhow::bail!("expected rejected apply execution");

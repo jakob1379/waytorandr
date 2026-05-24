@@ -166,13 +166,13 @@ impl TestEnvironment {
         for (key, value) in extra_env {
             command.env(key, value);
         }
-        Ok(command.full_cli_output_state()?)
+        Ok(command.output()?)
     }
 
     fn run<const N: usize>(&self, args: [&str; N]) -> Result<Output, Box<dyn Error>> {
         let mut command = self.base_command()?;
         command.args(args);
-        Ok(command.full_cli_output_state()?)
+        Ok(command.output()?)
     }
 
     fn base_command(&self) -> Result<Command, Box<dyn Error>> {

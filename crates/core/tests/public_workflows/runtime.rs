@@ -242,7 +242,7 @@ fn apply_profile_workflow_returns_structured_apply_failures() -> TestResult {
 }
 
 #[test]
-fn apply_profile_workflow_applies_when_validation_is_unsupported() -> TestResult {
+fn apply_profile_workflow_applies_when_unsupported_validation_is_allowed() -> TestResult {
     with_test_dirs(|_| {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), public_workflow_output_state("DP-1"))]),
@@ -259,10 +259,13 @@ fn apply_profile_workflow_applies_when_validation_is_unsupported() -> TestResult
             apply_message: None,
         };
 
-        let execution = workflow::apply_profile_workflow(
+        let execution = workflow::apply_profile_workflow_with_policy(
             &backend,
             &state_store,
             &public_workflow_profile("desk", "DP-1"),
+            workflow::ApplyPolicy {
+                allow_unsupported_validation: true,
+            },
         )?;
 
         assert!(matches!(

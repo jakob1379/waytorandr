@@ -67,6 +67,16 @@ pub(super) enum ConfigStatus {
     Cancelled,
 }
 
+impl ConfigStatus {
+    pub(super) const fn as_label(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 impl State {
     pub(super) fn to_topology(&self) -> Topology {
         export_protocol_topology(self)

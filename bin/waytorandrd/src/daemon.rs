@@ -26,6 +26,14 @@ const STABLE_INTERVAL: Duration = Duration::from_millis(250);
 const STABLE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_RETRIES: usize = 5;
 
+pub(super) fn duration_ms(duration: Duration) -> u128 {
+    duration.as_millis()
+}
+
+pub(super) fn elapsed_ms(start: Instant) -> u128 {
+    duration_ms(start.elapsed())
+}
+
 #[cfg(test)]
 fn xdg_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -39,9 +47,28 @@ enum DaemonOutcome {
     TopologyChanged,
 }
 
+impl DaemonOutcome {
+    fn as_label(&self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::NoMatch => "no_match",
+            Self::TopologyChanged => "topology_changed",
+        }
+    }
+}
+
 enum TopologyStability {
     Stable(Topology),
     TimedOut(Topology),
+}
+
+impl TopologyStability {
+    fn as_label(&self) -> &'static str {
+        match self {
+            Self::Stable(_) => "stable",
+            Self::TimedOut(_) => "timed_out",
+        }
+    }
 }
 
 pub(crate) fn enforce_topology_policy(
@@ -50,8 +77,25 @@ pub(crate) fn enforce_topology_policy(
     state_store: &StateStore,
     no_hooks: bool,
 ) -> Result<()> {
+    let policy_start = Instant::now();
     for attempt in 0..MAX_RETRIES {
-        let topology = match wait_for_stable_topology(backend, state_store)? {
+        let attempt_start = Instant::now();
+        tracing::debug!(
+            attempt = attempt + 1,
+            total_attempts = MAX_RETRIES,
+            "daemon topology policy attempt started"
+        );
+
+        let stability_start = Instant::now();
+        let stability = wait_for_stable_topology(backend, state_store)?;
+        tracing::debug!(
+            attempt = attempt + 1,
+            total_attempts = MAX_RETRIES,
+            elapsed_ms = elapsed_ms(stability_start),
+            outcome = stability.as_label(),
+            "daemon topology stability wait completed"
+        );
+        let topology = match stability {
             TopologyStability::Stable(topology) => topology,
             TopologyStability::TimedOut(topology) => {
                 tracing::warn!(
@@ -63,8 +107,28 @@ pub(crate) fn enforce_topology_policy(
             }
         };
 
-        match maybe_apply_matching_profile(backend, store, state_store, &topology, no_hooks)? {
-            DaemonOutcome::Applied | DaemonOutcome::NoMatch => return Ok(()),
+        let outcome =
+            maybe_apply_matching_profile(backend, store, state_store, &topology, no_hooks)?;
+        tracing::debug!(
+            attempt = attempt + 1,
+            total_attempts = MAX_RETRIES,
+            elapsed_ms = elapsed_ms(attempt_start),
+            total_elapsed_ms = elapsed_ms(policy_start),
+            outcome = outcome.as_label(),
+            setup_fingerprint = %topology.setup_fingerprint(),
+            state_fingerprint = %topology.state_fingerprint(),
+            "daemon topology policy attempt completed"
+        );
+        match outcome {
+            DaemonOutcome::Applied | DaemonOutcome::NoMatch => {
+                tracing::debug!(
+                    attempts = attempt + 1,
+                    elapsed_ms = elapsed_ms(policy_start),
+                    outcome = outcome.as_label(),
+                    "daemon topology policy completed"
+                );
+                return Ok(());
+            }
             DaemonOutcome::TopologyChanged => {
                 tracing::warn!(
                     attempt = attempt + 1,
@@ -75,6 +139,11 @@ pub(crate) fn enforce_topology_policy(
         }
     }
 
+    tracing::debug!(
+        attempts = MAX_RETRIES,
+        elapsed_ms = elapsed_ms(policy_start),
+        "daemon topology policy exhausted retries"
+    );
     bail!("giving up after repeated topology changes during daemon apply");
 }
 
@@ -99,24 +168,47 @@ fn wait_for_stable_topology_with(
     stable_samples_required: usize,
 ) -> Result<TopologyStability> {
     let deadline = Instant::now() + timeout;
+    let wait_start = Instant::now();
     let mut last_fingerprint = None;
     let mut stable_samples = 0usize;
+    let mut samples = 0usize;
+    let mut state_changes = 0usize;
 
     loop {
         let topology = workflow::normalized_topology_from_backend(backend, state_store)?;
         let fingerprint = topology.state_fingerprint();
+        samples += 1;
 
         if last_fingerprint.as_deref() == Some(fingerprint.as_str()) {
             stable_samples += 1;
             if stable_samples >= stable_samples_required {
+                tracing::debug!(
+                    elapsed_ms = elapsed_ms(wait_start),
+                    samples,
+                    stable_samples,
+                    state_changes,
+                    setup_fingerprint = %topology.setup_fingerprint(),
+                    state_fingerprint = %fingerprint,
+                    "daemon topology reached stable sample threshold"
+                );
                 return Ok(TopologyStability::Stable(topology));
             }
         } else {
             last_fingerprint = Some(fingerprint);
             stable_samples = 1;
+            state_changes += 1;
         }
 
         if Instant::now() >= deadline {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(wait_start),
+                samples,
+                stable_samples,
+                state_changes,
+                setup_fingerprint = %topology.setup_fingerprint(),
+                state_fingerprint = %topology.state_fingerprint(),
+                "daemon topology stability wait timed out"
+            );
             return Ok(TopologyStability::TimedOut(topology));
         }
 
@@ -131,6 +223,7 @@ fn maybe_apply_matching_profile(
     topology: &Topology,
     no_hooks: bool,
 ) -> Result<DaemonOutcome> {
+    let selection_start = Instant::now();
     let setup_fingerprint = topology.setup_fingerprint();
     let state = state_store.load_state()?.unwrap_or_default();
     let query_context = ProfileQueryContext::from_state(&state);
@@ -140,6 +233,13 @@ fn maybe_apply_matching_profile(
     match workflow::select_profile_application_target(topology, &setup_profiles, &settings, &state)
     {
         workflow::ProfileSelectionDecision::SetupDefault(profile) => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(selection_start),
+                setup_fingerprint = %setup_fingerprint,
+                profile = %profile.name,
+                decision = "setup_default",
+                "daemon profile selection completed"
+            );
             tracing::info!(profile = %profile.name, "selected explicit default profile for current topology");
             apply_profile(
                 backend,
@@ -151,6 +251,13 @@ fn maybe_apply_matching_profile(
             )
         }
         workflow::ProfileSelectionDecision::ExactMatch(profile) => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(selection_start),
+                setup_fingerprint = %setup_fingerprint,
+                profile = %profile.name,
+                decision = "exact_match",
+                "daemon profile selection completed"
+            );
             tracing::info!(profile = %profile.name, "selected matching profile for current topology");
             apply_profile(
                 backend,
@@ -162,6 +269,12 @@ fn maybe_apply_matching_profile(
             )
         }
         workflow::ProfileSelectionDecision::RememberedLayout(remembered) => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(selection_start),
+                setup_fingerprint = %setup_fingerprint,
+                decision = "remembered_layout",
+                "daemon profile selection completed"
+            );
             tracing::info!(fingerprint = %setup_fingerprint, "using remembered layout for current topology");
             let remembered_profile = workflow::profile_from_topology("__remembered__", &remembered);
             apply_profile(
@@ -174,6 +287,12 @@ fn maybe_apply_matching_profile(
             )
         }
         workflow::ProfileSelectionDecision::NoMatch => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(selection_start),
+                setup_fingerprint = %setup_fingerprint,
+                decision = "no_match",
+                "daemon profile selection completed"
+            );
             if settings.setup_default_profile(&setup_fingerprint).is_some() {
                 tracing::warn!(
                     fingerprint = %setup_fingerprint,
@@ -212,10 +331,21 @@ fn apply_profile(
     no_hooks: bool,
 ) -> Result<DaemonOutcome> {
     let backend_kind = backend.capabilities().backend;
+    let prepare_start = Instant::now();
     let prepared =
         workflow::prepare_profile_application(profile, topology).map_err(anyhow::Error::from)?;
     let plan_matches = plan_matches_topology(prepared.plan(), topology);
     let planned_outputs = plan_outputs_summary(prepared.plan());
+    tracing::debug!(
+        elapsed_ms = elapsed_ms(prepare_start),
+        profile = %profile.name,
+        plan_matches,
+        no_hooks,
+        current_setup = %topology.setup_fingerprint(),
+        current_outputs = %topology_outputs_summary(topology),
+        planned_outputs = %planned_outputs,
+        "daemon profile plan prepared"
+    );
     let daemon_apply = DaemonApplyWorkflow::new(
         state_store,
         profile,
@@ -233,6 +363,10 @@ fn apply_profile(
         "evaluated daemon profile plan"
     );
     if plan_matches {
+        tracing::debug!(
+            profile = %profile.name,
+            "daemon profile already matches current topology; skipping backend validation and apply"
+        );
         return daemon_apply.finish_already_matching();
     }
 
@@ -243,8 +377,15 @@ fn apply_profile(
     } else {
         &profile.hooks
     };
+    let execution_start = Instant::now();
     let execution = workflow::apply_prepared_profile_workflow(backend, hooks, prepared)
         .map_err(anyhow::Error::from)?;
+    tracing::debug!(
+        elapsed_ms = elapsed_ms(execution_start),
+        profile = %profile.name,
+        failure_kind = execution.failure_kind().map(ConfigFailureKind::as_label).unwrap_or("none"),
+        "daemon profile backend execution completed"
+    );
 
     daemon_apply.finish_execution(execution)
 }
@@ -342,6 +483,7 @@ impl<'a> DaemonApplyWorkflow<'a> {
     }
 
     fn record_success(&self, topology: &Topology, already_matching: bool) -> Result<DaemonOutcome> {
+        let persist_start = Instant::now();
         record_daemon_apply_outcome(
             self.state_store,
             self.recorded_profile_name,
@@ -349,6 +491,14 @@ impl<'a> DaemonApplyWorkflow<'a> {
             topology,
             already_matching,
         )?;
+        tracing::debug!(
+            elapsed_ms = elapsed_ms(persist_start),
+            profile = self.recorded_profile_name.unwrap_or("__remembered__"),
+            already_matching,
+            setup_fingerprint = %topology.setup_fingerprint(),
+            state_fingerprint = %topology.state_fingerprint(),
+            "daemon apply outcome persisted"
+        );
         Ok(DaemonOutcome::Applied)
     }
 

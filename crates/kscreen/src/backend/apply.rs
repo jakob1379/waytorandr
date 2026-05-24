@@ -164,7 +164,7 @@ fn enabled_connected_outputs<'a>(
         .iter()
         .filter(|(_, desired)| desired.enabled)
         .collect();
-    desired_outputs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    desired_outputs.sort_by_key(|(name, _)| *name);
 
     desired_outputs
         .into_iter()

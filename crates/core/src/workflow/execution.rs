@@ -8,6 +8,7 @@ use crate::model::{OutputIdentity, Topology, VirtualPreset};
 use crate::planning::{LayoutPlan, Planner};
 use crate::profile::{Hooks, Profile};
 use crate::state::StateStore;
+use std::time::Instant;
 
 #[non_exhaustive]
 pub struct PreparedPlanApplication {
@@ -345,7 +346,16 @@ pub(crate) fn apply_plan_cycle<B: Backend + ?Sized>(
     policy: ApplyPolicy,
     plan_snapshot: PreparedPlanApplication,
 ) -> CoreResult<ApplyExecution> {
+    let plan_outputs = plan_snapshot.plan.outputs.len();
+    let validation_start = Instant::now();
     let validation = validate_plan(backend, &plan_snapshot.plan)?;
+    tracing::debug!(
+        elapsed_ms = validation_start.elapsed().as_millis(),
+        plan_outputs,
+        validation_status = ?validation.status,
+        failure_kind = validation.failure().map(ConfigFailureKind::as_label).unwrap_or("none"),
+        "display plan validation completed"
+    );
 
     if validation.status == ValidationStatus::Rejected {
         return Ok(ApplyExecution::Rejected {
@@ -360,13 +370,34 @@ pub(crate) fn apply_plan_cycle<B: Backend + ?Sized>(
         });
     }
 
+    let apply_start = Instant::now();
     let apply_result = apply_plan(backend, hooks, &plan_snapshot.plan)?;
+    tracing::debug!(
+        elapsed_ms = apply_start.elapsed().as_millis(),
+        plan_outputs,
+        applied = apply_result.is_applied(),
+        failure_kind = apply_result
+            .failure()
+            .map(ConfigFailureKind::as_label)
+            .unwrap_or("none"),
+        "display plan apply completed"
+    );
+
+    let applied_state_start = Instant::now();
     let applied_topology = apply_result
         .applied_state()
         .cloned()
         .unwrap_or_else(|| Topology {
             outputs: plan_snapshot.plan.outputs.clone(),
         });
+    tracing::debug!(
+        elapsed_ms = applied_state_start.elapsed().as_millis(),
+        plan_outputs,
+        applied_state_from_backend = apply_result.applied_state().is_some(),
+        setup_fingerprint = %applied_topology.setup_fingerprint(),
+        state_fingerprint = %applied_topology.state_fingerprint(),
+        "display plan applied topology resolved"
+    );
 
     if apply_result.is_applied() {
         Ok(ApplyExecution::Applied {

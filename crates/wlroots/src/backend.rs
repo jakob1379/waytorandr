@@ -1,6 +1,7 @@
 use std::convert::TryFrom;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use wayland_client::globals::{registry_queue_init, GlobalList};
@@ -10,9 +11,7 @@ use wayland_protocols_wlr::output_management::v1::client::zwlr_output_configurat
 use wayland_protocols_wlr::output_management::v1::client::zwlr_output_manager_v1::ZwlrOutputManagerV1;
 
 use waytorandr_core::LayoutPlan;
-use waytorandr_core::{
-    ApplyResult, Backend, ConfigFailureKind, OutputWatcher, PollingOutputWatcher, ValidationResult,
-};
+use waytorandr_core::{ApplyResult, Backend, ConfigFailureKind, OutputWatcher, ValidationResult};
 use waytorandr_core::{BackendConnectionError, CoreError, CoreResult};
 use waytorandr_core::{BackendKind, Capabilities, Mode, OutputState, Topology, Transform};
 
@@ -21,6 +20,7 @@ mod protocol;
 use protocol::{ConfigStatus, HeadInfo, State};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SLOW_WATCH_REFRESH: Duration = Duration::from_secs(1);
 
 enum SubmitError {
     Transport(anyhow::Error),
@@ -36,12 +36,105 @@ struct WaylandClient {
     state: State,
 }
 
+struct WlrootsOutputWatcher {
+    client: WaylandClient,
+    interval: Duration,
+    last_setup_fingerprint: Option<String>,
+}
+
 impl WlrootsBackend {
     /// Connects to the wlroots backend.
     ///
     /// # Errors
     /// Returns an error if the Wayland display or output-management protocol is unavailable.
     pub fn connect() -> CoreResult<Self> {
+        Ok(Self {
+            inner: Mutex::new(WaylandClient::connect()?),
+        })
+    }
+
+    fn enumerate_live_topology(&self) -> CoreResult<Topology> {
+        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
+            source: anyhow!("backend lock poisoned"),
+        })?;
+        inner
+            .sync()
+            .map_err(|source| CoreError::Backend { source })?;
+        Ok(inner.state.to_topology())
+    }
+
+    fn snapshot_topology() -> CoreResult<Topology> {
+        Self::connect()?.enumerate_live_topology()
+    }
+}
+
+impl WlrootsOutputWatcher {
+    fn connect(interval: Duration) -> CoreResult<Self> {
+        let client = WaylandClient::connect()?;
+        let initial = client.state.to_topology();
+        Ok(Self {
+            client,
+            interval,
+            last_setup_fingerprint: Some(initial.setup_fingerprint()),
+        })
+    }
+}
+
+impl OutputWatcher for WlrootsOutputWatcher {
+    fn poll_changed(&mut self) -> CoreResult<Option<Topology>> {
+        let sleep_start = Instant::now();
+        thread::sleep(self.interval);
+        let sleep_elapsed = sleep_start.elapsed();
+
+        let refresh_start = Instant::now();
+        self.client
+            .sync()
+            .map_err(|source| CoreError::Backend { source })?;
+        if self.client.state.manager.is_none() {
+            return Err(CoreError::Backend {
+                source: anyhow!("wlroots output manager finished"),
+            });
+        }
+        let refresh_elapsed = refresh_start.elapsed();
+
+        let topology = self.client.state.to_topology();
+        let setup_fingerprint = topology.setup_fingerprint();
+        let changed = self.last_setup_fingerprint.as_ref() != Some(&setup_fingerprint);
+
+        if changed {
+            self.last_setup_fingerprint = Some(setup_fingerprint);
+            tracing::debug!(
+                sleep_ms = sleep_elapsed.as_millis(),
+                refresh_ms = refresh_elapsed.as_millis(),
+                setup_fingerprint = %topology.setup_fingerprint(),
+                state_fingerprint = %topology.state_fingerprint(),
+                "wlroots output watcher observed setup change"
+            );
+            return Ok(Some(topology));
+        }
+
+        if refresh_elapsed >= SLOW_WATCH_REFRESH {
+            tracing::debug!(
+                sleep_ms = sleep_elapsed.as_millis(),
+                refresh_ms = refresh_elapsed.as_millis(),
+                setup_fingerprint = %setup_fingerprint,
+                "wlroots output watcher refresh was slow without setup change"
+            );
+        } else {
+            tracing::trace!(
+                sleep_ms = sleep_elapsed.as_millis(),
+                refresh_ms = refresh_elapsed.as_millis(),
+                setup_fingerprint = %setup_fingerprint,
+                "wlroots output watcher refresh completed without setup change"
+            );
+        }
+
+        Ok(None)
+    }
+}
+
+impl WaylandClient {
+    fn connect() -> CoreResult<Self> {
         let connection = Connection::connect_to_env()
             .context("failed to connect to Wayland display")
             .map_err(|source| {
@@ -86,23 +179,7 @@ impl WlrootsBackend {
             })
         })?;
 
-        Ok(Self {
-            inner: Mutex::new(client),
-        })
-    }
-
-    fn enumerate_live_topology(&self) -> CoreResult<Topology> {
-        let mut inner = self.inner.lock().map_err(|_| CoreError::Backend {
-            source: anyhow!("backend lock poisoned"),
-        })?;
-        inner
-            .sync()
-            .map_err(|source| CoreError::Backend { source })?;
-        Ok(inner.state.to_topology())
-    }
-
-    fn snapshot_topology() -> CoreResult<Topology> {
-        Self::connect()?.enumerate_live_topology()
+        Ok(client)
     }
 }
 
@@ -120,12 +197,7 @@ impl Backend for WlrootsBackend {
     }
 
     fn watch_outputs(&self) -> CoreResult<Box<dyn OutputWatcher>> {
-        let initial = self.enumerate_outputs()?;
-        Ok(Box::new(PollingOutputWatcher::new(
-            WlrootsBackend::connect()?,
-            POLL_INTERVAL,
-            Some(initial.setup_fingerprint()),
-        )))
+        Ok(Box::new(WlrootsOutputWatcher::connect(POLL_INTERVAL)?))
     }
 
     fn validate(&self, plan: &LayoutPlan) -> CoreResult<ValidationResult> {
@@ -265,15 +337,27 @@ impl WaylandClient {
         let attempts = attempts.max(1);
         let mut attempt = 1;
         loop {
+            let attempt_start = Instant::now();
             self.sync().map_err(SubmitError::Transport)?;
             let status = self.submit(plan, test_only)?;
+            let elapsed = attempt_start.elapsed();
             if !matches!(status, ConfigStatus::Cancelled) || attempt == attempts {
+                tracing::debug!(
+                    attempt,
+                    total_attempts = attempts,
+                    elapsed_ms = elapsed.as_millis(),
+                    test_only,
+                    status = status.as_label(),
+                    "wlroots configuration submission attempt completed"
+                );
                 return Ok(status);
             }
 
             tracing::warn!(
                 attempt,
                 total_attempts = attempts,
+                elapsed_ms = elapsed.as_millis(),
+                test_only,
                 "wlroots configuration cancelled, retrying after refreshing compositor state"
             );
             attempt += 1;
@@ -388,7 +472,7 @@ fn transform_to_wl(transform: Transform) -> wl_output::Transform {
 mod tests {
     use super::{
         apply_failure_from_submit_error, custom_mode_values, validate_requested_head_config,
-        validation_rejection_from_submit_error,
+        validation_rejection_from_submit_error, ConfigStatus,
     };
     use waytorandr_core::{ConfigFailureKind, Mode, OutputState};
 
@@ -434,5 +518,12 @@ mod tests {
             "{message}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn config_status_labels_are_stable_for_debug_logs() {
+        assert_eq!(ConfigStatus::Succeeded.as_label(), "succeeded");
+        assert_eq!(ConfigStatus::Failed.as_label(), "failed");
+        assert_eq!(ConfigStatus::Cancelled.as_label(), "cancelled");
     }
 }

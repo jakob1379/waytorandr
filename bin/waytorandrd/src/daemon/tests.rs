@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use waytorandr_core::{ApplyResult, OutputWatcher, ValidationResult};
 use waytorandr_core::{Capabilities, OutputIdentity, OutputState, Position};
 use waytorandr_core::{CoreError, CoreResult};
@@ -202,6 +203,12 @@ fn plan_match_ignores_virtual_outputs() {
     };
 
     assert!(plan_matches_topology(&plan, &topology));
+}
+
+#[test]
+fn timing_helpers_report_elapsed_milliseconds() {
+    assert_eq!(duration_ms(Duration::from_millis(42)), 42);
+    assert_eq!(duration_ms(Duration::from_micros(999)), 0);
 }
 
 #[test]

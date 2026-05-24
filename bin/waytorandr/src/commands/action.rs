@@ -136,7 +136,7 @@ pub(super) fn execute_profile_action(
             state_store,
             &profile.name,
             Some(backend_kind),
-            &applied_topology,
+            applied_topology,
         )?;
         if make_default {
             set_default_profile_for_fingerprint(

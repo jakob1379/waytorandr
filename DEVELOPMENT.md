@@ -35,6 +35,16 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 - The script runs `cargo test -p waytorandr --test full_cli`, which builds and executes the debug `waytorandr` binary
 - The test covers the real CLI process flow against simulated `wlroots`, `kscreen`, and `gnome` backends
 
+## Daemon Timing Diagnostics
+
+Use the existing `waytorandrd` daemon debug logs to diagnose slow automatic
+profile switching. The daemon emits elapsed-millisecond fields for watcher
+polls, topology stability waits, profile selection, backend validation, backend
+apply, retry attempts, and policy completion.
+
+- Foreground run: `nix develop -c waytorandrd --verbose`
+- User service run: set `RUST_LOG=waytorandrd=debug,waytorandr_core=debug` in the service environment, then inspect `journalctl --user -u waytorandrd.service -b`
+
 ## Packaging Check
 
 - Build the package the same way Nix users will consume it: `nix build`
