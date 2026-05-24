@@ -31,7 +31,10 @@
   ];
 
   # Nix's Rust link line uses -fuse-ld=lld for the package build.
-  packageNativeBuildInputs = with pkgs; [pkg-config lld];
+  packageNativeBuildInputs = with pkgs; [
+    pkg-config
+    lld
+  ];
 
   packageBuildInputs = runtimeLibraries;
 
@@ -56,8 +59,14 @@
     buildInputs ? packageBuildInputs,
     cargoBuildTarget ? null,
   }:
-    rustPlatform.buildRustPackage ({
-        inherit pname stdenv nativeBuildInputs buildInputs;
+    rustPlatform.buildRustPackage (
+      {
+        inherit
+          pname
+          stdenv
+          nativeBuildInputs
+          buildInputs
+          ;
         inherit (workspace) version;
         src = self;
 
@@ -68,7 +77,8 @@
       }
       // lib.optionalAttrs (cargoBuildTarget != null) {
         CARGO_BUILD_TARGET = cargoBuildTarget;
-      });
+      }
+    );
 
   waytorandrPackage = mkWaytorandrPackage {};
 
@@ -84,7 +94,11 @@
       mkWaytorandrPackage {
         pname = "waytorandr-portable";
         inherit (pkgs.pkgsCross.musl64) rustPlatform stdenv;
-        nativeBuildInputs = with pkgs; [pkg-config clang lld];
+        nativeBuildInputs = with pkgs; [
+          pkg-config
+          clang
+          lld
+        ];
         buildInputs = [];
         cargoBuildTarget = portableTarget;
       };
@@ -104,9 +118,11 @@
     interpreterPath,
     runtimeLibPath,
   }:
-    pkgs.runCommand name {
+    pkgs.runCommand name
+    {
       nativeBuildInputs = [pkgs.patchelf];
-    } ''
+    }
+    ''
       mkdir -p "$out/bin" "$out/lib/waytorandr"
 
       cp ${portablePackage}/bin/waytorandr "$out/bin/waytorandr"

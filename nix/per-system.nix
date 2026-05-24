@@ -9,7 +9,12 @@
   overlays = [rust-overlay.overlays.default];
   pkgs = import nixpkgs {inherit system overlays;};
   context = import ./package-context.nix {
-    inherit self pkgs system workspace;
+    inherit
+      self
+      pkgs
+      system
+      workspace
+      ;
   };
   preCommitCheck = import ./git-hooks.nix {
     inherit git-hooks pkgs;
@@ -46,5 +51,9 @@
   '';
 in {
   inherit devShell formatter;
-  packages = packages // {default = packages.waytorandr;};
+  packages =
+    packages
+    // {
+      default = packages.waytorandr;
+    };
 }

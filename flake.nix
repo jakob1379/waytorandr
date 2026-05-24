@@ -25,7 +25,14 @@
     utils.lib.eachDefaultSystem (
       system: let
         perSystem = import ./nix/per-system.nix {
-          inherit self git-hooks nixpkgs rust-overlay system workspace;
+          inherit
+            self
+            git-hooks
+            nixpkgs
+            rust-overlay
+            system
+            workspace
+            ;
         };
       in
         perSystem

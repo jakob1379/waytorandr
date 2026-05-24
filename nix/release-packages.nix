@@ -13,9 +13,11 @@
     format,
     targetName,
   }:
-    pkgs.runCommand "waytorandr-${format}-${workspace.version}" {
+    pkgs.runCommand "waytorandr-${format}-${workspace.version}"
+    {
       nativeBuildInputs = [pkgs.nfpm];
-    } ''
+    }
+    ''
       mkdir -p "$out"
       cat > nfpm.yaml <<EOF
       name: waytorandr
@@ -158,9 +160,15 @@
     if !isPortableHost
     then null
     else
-      pkgs.runCommand "waytorandr-flatpak-${workspace.version}" {
-        nativeBuildInputs = with pkgs; [flatpak ostree squashfsTools];
-      } ''
+      pkgs.runCommand "waytorandr-flatpak-${workspace.version}"
+      {
+        nativeBuildInputs = with pkgs; [
+          flatpak
+          ostree
+          squashfsTools
+        ];
+      }
+      ''
         app_id="io.github.jakob1379.waytorandr"
         build_dir="$TMPDIR/build"
         repo_dir="$TMPDIR/repo"
@@ -211,9 +219,11 @@
     if !isPortableHost
     then null
     else
-      pkgs.runCommand "waytorandr-snap-${workspace.version}" {
+      pkgs.runCommand "waytorandr-snap-${workspace.version}"
+      {
         nativeBuildInputs = with pkgs; [squashfsTools];
-      } ''
+      }
+      ''
         snap_root="$TMPDIR/snap"
         mkdir -p "$snap_root/bin" "$snap_root/lib/waytorandr" "$snap_root/meta" "$out"
 

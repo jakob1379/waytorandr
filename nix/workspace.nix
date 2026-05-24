@@ -10,5 +10,13 @@
     then "waytorandr::git+${homepage}.git#commit=${revision}"
     else "waytorandr::git+${homepage}.git#tag=${tag}";
 in {
-  inherit aurSource cargoToml description homepage revision tag version;
+  inherit
+    aurSource
+    cargoToml
+    description
+    homepage
+    revision
+    tag
+    version
+    ;
 }

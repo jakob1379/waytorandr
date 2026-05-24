@@ -1,2 +1,1 @@
-{self}:
-import ../modules/home-manager.nix self
+{self}: import ../modules/home-manager.nix self

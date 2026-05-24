@@ -4,5 +4,7 @@ result
 /.codex
 /.direnv/
 /.git-hooks.nix.pre-commit-config.yaml
+/.opencode/
+/skills-lock.json
 *~
 result*
