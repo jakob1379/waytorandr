@@ -49,6 +49,8 @@ in {
       };
     };
 
+    enableBashIntegration = lib.hm.shell.mkBashIntegrationOption {inherit config;};
+
     systemdTarget = mkOption {
       type = types.str;
       default = config.wayland.systemd.target;
@@ -69,6 +71,10 @@ in {
     ];
 
     home.packages = [cfg.package];
+
+    programs.bash.initExtra = mkIf cfg.enableBashIntegration ''
+      source <(COMPLETE=bash ${getExe' cfg.package "waytorandr"})
+    '';
 
     systemd.user.services.waytorandrd = {
       Unit = {
