@@ -219,10 +219,14 @@ Current option surface:
 - `services.waytorandr.enable`
 - `services.waytorandr.package`
 - `services.waytorandr.environment`
+- `services.waytorandr.enableBashIntegration`
 - `services.waytorandr.systemdTarget`
 
 The Home Manager unit uses an absolute `ExecStart` from the configured package.
 Values under `services.waytorandr.environment` are trusted same-user input.
+The bash integration option follows Home Manager's global
+`home.shell.enableBashIntegration` default and registers dynamic `waytorandr`
+completions when enabled.
 
 Profiles and saved default settings remain in standard XDG config, while runtime state remains in XDG state:
 
