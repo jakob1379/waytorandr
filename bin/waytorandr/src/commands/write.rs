@@ -288,13 +288,12 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let query_context = ProfileQueryContext::from_state(&state);
     let setup = load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
     let profiles: Vec<Profile> = store.profiles_for_setup(&setup, &query_context)?;
-    let capabilities = backend.capabilities();
     let presets: Vec<VirtualPreset> = CYCLE_PRESETS
         .into_iter()
         .filter(|preset| {
-            capabilities
-                .virtual_preset_unavailable_message(*preset)
-                .is_none()
+            profiles
+                .iter()
+                .all(|profile| profile.name != preset.as_str())
         })
         .collect();
 
@@ -303,9 +302,6 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         .map(|profile| profile.name.as_str())
         .chain(presets.iter().map(|preset| preset.as_str()))
         .collect();
-    if targets.is_empty() {
-        bail!("no profiles available to cycle")
-    }
 
     let next_idx = state.last_profile.as_ref().map_or(0, |current| {
         targets

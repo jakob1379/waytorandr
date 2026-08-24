@@ -88,7 +88,7 @@ Preview a virtual layout without applying it:
 waytorandr set       Set a saved profile, virtual configuration, or `auto` selection
 waytorandr save      Save the current compositor layout as a profile
 waytorandr remove    Remove a saved profile for the current setup
-waytorandr cycle     Set the next saved profile or virtual layout
+waytorandr cycle     Set the next saved profile or virtual layout (horizontal, vertical)
 waytorandr status    Show the current layout state and related saved profiles
 waytorandr version   Show the waytorandr version
 waytorandr service   Manage the waytorandrd user service

@@ -108,6 +108,45 @@ fn status_defaults_to_current_setup_and_expands_with_all() -> Result<(), Box<dyn
 }
 
 #[test]
+fn cycle_rotates_virtual_layouts_without_saved_profiles() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+
+    let first = env.run_json(["cycle", "--json"])?;
+    assert_eq!(first["target"], "horizontal");
+    assert_eq!(first["target_type"], "virtual");
+
+    let second = env.run_json(["cycle", "--json"])?;
+    assert_eq!(second["target"], "vertical");
+    assert_eq!(second["target_type"], "virtual");
+
+    let wrapped = env.run_json(["cycle", "--json"])?;
+    assert_eq!(wrapped["target"], "horizontal");
+    assert_eq!(wrapped["target_type"], "virtual");
+    Ok(())
+}
+
+#[test]
+fn cycle_skips_presets_shadowed_by_saved_profile_names() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+    env.run_json(["save", "horizontal", "--json"])?;
+
+    let first = env.run_json(["cycle", "--json"])?;
+    assert_eq!(first["target"], "horizontal");
+    assert_eq!(first["target_type"], "profile");
+
+    let second = env.run_json(["cycle", "--json"])?;
+    assert_eq!(second["target"], "vertical");
+    assert_eq!(second["target_type"], "virtual");
+
+    let wrapped = env.run_json(["cycle", "--json"])?;
+    assert_eq!(wrapped["target"], "horizontal");
+    assert_eq!(wrapped["target_type"], "profile");
+    Ok(())
+}
+
+#[test]
 fn json_output_stays_plain_when_color_is_forced() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
 
