@@ -15,7 +15,7 @@ use waytorandr_core::LayoutPlan;
 use waytorandr_core::Profile;
 use waytorandr_core::ProfileStore;
 use waytorandr_core::Topology;
-use waytorandr_core::{ProfileQueryContext, StateStore};
+use waytorandr_core::{ProfileQueryContext, StateStore, VirtualPreset};
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
 const AUTO_SET_TARGET: &str = "auto";
@@ -279,6 +279,8 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
 }
 
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
+    const CYCLE_PRESETS: [VirtualPreset; 2] = [VirtualPreset::Horizontal, VirtualPreset::Vertical];
+
     let store = ProfileStore::bootstrap()?;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
@@ -286,26 +288,49 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     let query_context = ProfileQueryContext::from_state(&state);
     let setup = load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
     let profiles: Vec<Profile> = store.profiles_for_setup(&setup, &query_context)?;
-    if profiles.is_empty() {
+    let capabilities = backend.capabilities();
+    let presets: Vec<VirtualPreset> = CYCLE_PRESETS
+        .into_iter()
+        .filter(|preset| {
+            capabilities
+                .virtual_preset_unavailable_message(*preset)
+                .is_none()
+        })
+        .collect();
+
+    let targets: Vec<&str> = profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .chain(presets.iter().map(|preset| preset.as_str()))
+        .collect();
+    if targets.is_empty() {
         bail!("no profiles available to cycle")
     }
 
     let next_idx = state.last_profile.as_ref().map_or(0, |current| {
-        profiles
+        targets
             .iter()
-            .position(|profile| &profile.name == current)
-            .map_or(0, |idx| (idx + 1) % profiles.len())
+            .position(|target| target == current)
+            .map_or(0, |idx| (idx + 1) % targets.len())
     });
 
-    let outcome = execute_profile_action(
-        backend.as_ref(),
-        &store,
-        &state_store,
-        &profiles[next_idx],
-        dry_run,
-        false,
-        false,
-    )?;
+    let outcome = if let Some(profile) = profiles.get(next_idx) {
+        execute_profile_action(
+            backend.as_ref(),
+            &store,
+            &state_store,
+            profile,
+            dry_run,
+            false,
+            false,
+        )?
+    } else {
+        let preset = presets[next_idx - profiles.len()];
+        let mut outcome =
+            execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, false)?;
+        persist_virtual_action_outcome(&state_store, None, &mut outcome, preset.as_str(), None)?;
+        outcome
+    };
     emit_action_outcome("cycle", None, &outcome, output_mode)
 }
 

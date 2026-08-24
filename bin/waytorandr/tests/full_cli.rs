@@ -206,13 +206,23 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
 
     let cycle_dry_run = env.run_json(["cycle", "--dry-run", "--json"])?;
     assert_eq!(cycle_dry_run["command"], "cycle");
-    assert_eq!(cycle_dry_run["target"], "desk");
+    assert_eq!(cycle_dry_run["target"], "horizontal");
     assert_eq!(cycle_dry_run["dry_run"], true);
     assert_default_and_active(env, Some("desk-alt"), Some("desk-alt"))?;
+
+    let cycled_horizontal = env.run_json(["cycle", "--json"])?;
+    assert_eq!(cycled_horizontal["command"], "cycle");
+    assert_eq!(cycled_horizontal["target"], "horizontal");
+    assert_eq!(cycled_horizontal["target_type"], "virtual");
+
+    let cycled_vertical = env.run_json(["cycle", "--json"])?;
+    assert_eq!(cycled_vertical["target"], "vertical");
+    assert_eq!(cycled_vertical["target_type"], "virtual");
 
     let cycled = env.run_json(["cycle", "--json"])?;
     assert_eq!(cycled["command"], "cycle");
     assert_eq!(cycled["target"], "desk");
+    assert_eq!(cycled["target_type"], "profile");
     assert_default_and_active(env, Some("desk-alt"), Some("desk"))?;
     assert_eq!(env.run_json(["status", "--json"])?["profile"], "desk");
 

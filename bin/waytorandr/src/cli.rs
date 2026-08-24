@@ -81,7 +81,7 @@ Use `--default` together with `save` when you want this saved layout to become t
     #[command(about = "Remove a saved profile for the current setup")]
     Remove(RemoveArgs),
 
-    #[command(about = "Set the next saved profile")]
+    #[command(about = "Set the next saved profile or virtual layout")]
     Cycle(MutatingArgs),
 
     #[command(about = "Show the current layout state and related saved profiles")]
