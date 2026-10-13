@@ -64,10 +64,13 @@ pub(super) fn persist_virtual_action_outcome(
     outcome: &mut ActionOutcome,
     recorded_profile_name: &str,
     saved_profile_name: Option<&str>,
+    assign_default: bool,
 ) -> Result<()> {
     if let Some(saved_profile_name) = saved_profile_name {
         outcome.record_saved_profile(saved_profile_name);
-        outcome.set_default_assignment(saved_profile_name, DefaultScope::Setup);
+        if assign_default {
+            outcome.set_default_assignment(saved_profile_name, DefaultScope::Setup);
+        }
     }
 
     if outcome.is_dry_run() {
@@ -85,7 +88,13 @@ pub(super) fn persist_virtual_action_outcome(
         let profile = workflow::profile_from_topology(saved_profile_name, applied_topology);
 
         profile_store.save(&profile, state_store)?;
-        set_default_profile_for_fingerprint(profile_store, saved_profile_name, &setup_fingerprint)?;
+        if assign_default {
+            set_default_profile_for_fingerprint(
+                profile_store,
+                saved_profile_name,
+                &setup_fingerprint,
+            )?;
+        }
     }
 
     persist_applied_profile_runtime_state(

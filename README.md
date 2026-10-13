@@ -118,8 +118,14 @@ Use `--force` only when you accept applying through a backend whose validation
 result is unsupported; it does not override the blank-layout safety gate.
 
 `--default` is setup-local: it only updates the default for the current setup
-fingerprint. With virtual targets, `set --default` saves the resulting layout as
-profile `default` and makes that saved profile the default for the current setup.
+fingerprint. With virtual targets, `set --default` alone saves the resulting layout
+as profile `default` and makes that saved profile the default for the current setup.
+`set <virtual> --save` saves the layout as a profile named after the applied layout
+(for example `vertical` or `vertical-reverse`) and only makes it the setup default
+when it is the only saved profile for the current setup, so several layouts can be
+saved without replacing the default. Add `--default` to always make it the default.
+`set vertical` still applies the virtual layout; use `set --profile vertical` to
+apply the saved one.
 
 Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
 for the full command reference and examples.
@@ -131,6 +137,7 @@ for the full command reference and examples.
 > Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
+> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
 > `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured.
 
 ## Daemon

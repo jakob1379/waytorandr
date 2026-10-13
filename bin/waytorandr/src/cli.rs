@@ -55,11 +55,14 @@ Examples:
   waytorandr set vertical --reverse --dry-run
 
 `--default` only affects the current setup fingerprint.
-With virtual configurations, `--default` saves the resulting layout as profile `default`
+With virtual configurations, `--default` alone saves the resulting layout as profile `default`
 and makes that saved profile the default for the current setup.
-Use `--save` with a virtual configuration as a shortcut for saving the resulting layout
-as profile `default` and making it the default for the current setup.
-Use `--profile` when a saved profile name collides with `auto` or a virtual target.
+Use `--save` with a virtual configuration to save the resulting layout as a profile named
+after the applied layout (for example `vertical` or `vertical-reverse`). It only becomes the
+default for the current setup when it is the only saved profile for that setup; add `--default`
+to always make it the default.
+Use `--profile` when a saved profile name collides with `auto` or a virtual target, for example
+`waytorandr set --profile vertical` after `waytorandr set vertical --save`.
 
 When a backend cannot support `mirror`, waytorandr prints backend-specific guidance instead of sending an invalid layout.")]
     Set(SetArgs),
@@ -188,7 +191,7 @@ pub struct SetArgs {
     #[arg(
         short = 's',
         long = "save",
-        help = "With virtual configurations: save the resulting layout as profile `default` and make it the default for the current setup"
+        help = "With virtual configurations: save the resulting layout as a profile named after the applied layout; it becomes the setup default only if it is the only saved profile for the setup"
     )]
     pub(crate) save: bool,
 

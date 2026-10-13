@@ -123,7 +123,6 @@ pub(super) fn cmd_set(
         reverse,
         force,
     } = options;
-    let save_for_current_setup = make_default || save;
 
     let (name, force_saved_profile) = match (target, forced_profile) {
         (Some(name), None) => (name, false),
@@ -132,12 +131,12 @@ pub(super) fn cmd_set(
     };
 
     if !force_saved_profile && name == AUTO_SET_TARGET {
-        return handle_auto_set(reverse, save_for_current_setup, dry_run, force, output_mode);
+        return handle_auto_set(reverse, make_default || save, dry_run, force, output_mode);
     }
 
     if !force_saved_profile {
         if let Some(preset) = resolve_virtual_preset(name, reverse)? {
-            return handle_virtual_set(preset, save_for_current_setup, dry_run, force, output_mode);
+            return handle_virtual_set(preset, options, output_mode);
         }
     }
 
@@ -166,32 +165,53 @@ fn handle_auto_set(
 
 fn handle_virtual_set(
     preset: waytorandr_core::VirtualPreset,
-    save_for_current_setup: bool,
-    dry_run: bool,
-    force: bool,
+    options: SetOptions,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let SetOptions {
+        dry_run,
+        make_default,
+        save,
+        force,
+        ..
+    } = options;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
-    let mut outcome =
-        execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
-    let recorded_profile_name = if save_for_current_setup {
-        DEFAULT_SAVED_PROFILE_NAME
+    let saved_profile_name = if save {
+        Some(preset.as_str())
     } else {
-        preset.as_str()
+        make_default.then_some(DEFAULT_SAVED_PROFILE_NAME)
     };
-    let profile_store = if save_for_current_setup && !dry_run {
+    let recorded_profile_name = saved_profile_name.unwrap_or(preset.as_str());
+    let profile_store = if saved_profile_name.is_some() && !dry_run {
         Some(ProfileStore::bootstrap()?)
     } else {
         None
     };
+    let assign_default = match saved_profile_name {
+        Some(name) if !make_default => {
+            let setup_fingerprint =
+                load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
+            ProfileStore::open_read_only()?
+                .profiles_for_setup(
+                    &setup_fingerprint,
+                    &ProfileQueryContext::load(&state_store)?,
+                )?
+                .iter()
+                .all(|profile| profile.name == name)
+        }
+        _ => make_default,
+    };
+    let mut outcome =
+        execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
 
     persist_virtual_action_outcome(
         &state_store,
         profile_store.as_ref(),
         &mut outcome,
         recorded_profile_name,
-        save_for_current_setup.then_some(DEFAULT_SAVED_PROFILE_NAME),
+        saved_profile_name,
+        assign_default,
     )?;
 
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
@@ -324,7 +344,14 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         let preset = presets[next_idx - profiles.len()];
         let mut outcome =
             execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, false)?;
-        persist_virtual_action_outcome(&state_store, None, &mut outcome, preset.as_str(), None)?;
+        persist_virtual_action_outcome(
+            &state_store,
+            None,
+            &mut outcome,
+            preset.as_str(),
+            None,
+            false,
+        )?;
         outcome
     };
     emit_action_outcome("cycle", None, &outcome, output_mode)

@@ -80,6 +80,21 @@ fn full_cli_remove_across_simulated_backends() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn set_save_ignores_profiles_from_other_setups() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+
+    env.write_backend_topology(&fixture_topology())?;
+    env.run_json(["save", "desk", "--json"])?;
+
+    env.write_backend_topology(&alternate_topology())?;
+    let saved = env.run_json(["set", "builtin", "--save", "--json"])?;
+    assert_eq!(saved["saved_profile"], "builtin");
+    assert_eq!(saved["default_set"], true);
+
+    Ok(())
+}
+
+#[test]
 fn status_defaults_to_current_setup_and_expands_with_all() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
 
@@ -316,13 +331,43 @@ fn exercise_virtual_workflows(
     assert_eq!(topology.outputs["eDP-1"].position, Position::new(320, 0));
     assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 1080));
 
+    let preview_first = env.run_json(["set", "horizontal", "--save", "--dry-run", "--json"])?;
+    assert_eq!(preview_first["saved_profile"], "horizontal");
+    assert_eq!(preview_first["default_set"], true);
+    assert_saved_profiles(env, &[])?;
+
+    let save_first = env.run_json(["set", "horizontal", "--save", "--json"])?;
+    assert_eq!(save_first["saved_profile"], "horizontal");
+    assert_eq!(save_first["default_set"], true);
+    assert_default_and_active(env, Some("horizontal"), Some("horizontal"))?;
+
+    let preview_resave = env.run_json(["set", "horizontal", "--save", "--dry-run", "--json"])?;
+    assert_eq!(preview_resave["default_set"], true);
+
+    let preview_second = env.run_json(["set", "vertical", "--save", "--dry-run", "--json"])?;
+    assert_eq!(preview_second["saved_profile"], "vertical");
+    assert!(preview_second.get("default_set").is_none());
+
+    let save_second = env.run_json(["set", "vertical", "--save", "--json"])?;
+    assert_eq!(save_second["saved_profile"], "vertical");
+    assert!(save_second.get("default_set").is_none());
+    assert_saved_profiles(env, &["horizontal", "vertical"])?;
+    assert_default_and_active(env, Some("horizontal"), Some("vertical"))?;
+
+    let save_forced = env.run_json(["set", "vertical", "--save", "--default", "--json"])?;
+    assert_eq!(save_forced["saved_profile"], "vertical");
+    assert_eq!(save_forced["default_set"], true);
+    assert_eq!(save_forced["default_target"], "vertical");
+    assert_saved_profiles(env, &["horizontal", "vertical"])?;
+    assert_default_and_active(env, Some("vertical"), Some("vertical"))?;
+
     let set_setup_default = env.run_json(["set", "vertical", "--default", "--json"])?;
     assert_eq!(set_setup_default["target"], "vertical");
     assert_eq!(set_setup_default["saved_profile"], "default");
     assert_eq!(set_setup_default["default_set"], true);
     assert_eq!(set_setup_default["default_scope"], "setup");
     assert_eq!(set_setup_default["default_target"], "default");
-    assert_saved_profiles(env, &["default"])?;
+    assert_saved_profiles(env, &["default", "horizontal", "vertical"])?;
     assert_default_and_active(env, Some("default"), Some("default"))?;
     assert_eq!(env.run_json(["status", "--json"])?["profile"], "default");
 
