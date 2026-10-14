@@ -9,6 +9,7 @@ use super::shared::load_current_topology;
 use super::OutputMode;
 use crate::preset::resolve_virtual_preset;
 use waytorandr_backend_loader::connect_backend;
+use waytorandr_core::detect_preset;
 use waytorandr_core::validate_profile_name;
 use waytorandr_core::workflow;
 use waytorandr_core::LayoutPlan;
@@ -18,6 +19,7 @@ use waytorandr_core::Topology;
 use waytorandr_core::{ProfileQueryContext, StateStore, VirtualPreset};
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
+const CUSTOM_SAVED_PROFILE_NAME: &str = "custom";
 const AUTO_SET_TARGET: &str = "auto";
 
 // SetOptions mirrors the independent set/cycle/save flags carried through workflows.
@@ -55,13 +57,15 @@ fn save_layout_for_topology(
 }
 
 pub(super) fn cmd_save(
-    name: &str,
+    name: Option<&str>,
     setup_name: Option<&str>,
     dry_run: bool,
     make_default: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    validate_cli_profile_name(name)?;
+    if let Some(name) = name {
+        validate_cli_profile_name(name)?;
+    }
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
     let topology = workflow::normalized_topology_from_backend(backend.as_ref(), &state_store)?;
@@ -69,6 +73,14 @@ pub(super) fn cmd_save(
     if topology.outputs.is_empty() {
         bail!("cannot save a profile from an empty topology")
     }
+
+    let name = match name {
+        Some(name) => name,
+        None if make_default => DEFAULT_SAVED_PROFILE_NAME,
+        None => detect_preset(&topology).map_or(CUSTOM_SAVED_PROFILE_NAME, VirtualPreset::as_str),
+    };
+    let make_default = make_default
+        || is_only_profile_for_setup(name, &topology.setup_fingerprint(), &state_store)?;
 
     let profile = workflow::profile_from_topology(name, &topology);
 
@@ -104,6 +116,17 @@ pub(super) fn cmd_save(
         make_default.then_some(DefaultScope::Setup),
     );
     emit_save_outcome(&outcome, output_mode)
+}
+
+fn is_only_profile_for_setup(
+    name: &str,
+    setup_fingerprint: &str,
+    state_store: &StateStore,
+) -> Result<bool> {
+    Ok(ProfileStore::open_read_only()?
+        .profiles_for_setup(setup_fingerprint, &ProfileQueryContext::load(state_store)?)?
+        .iter()
+        .all(|profile| profile.name == name))
 }
 
 fn validate_cli_profile_name(name: &str) -> Result<()> {
@@ -189,17 +212,11 @@ fn handle_virtual_set(
         None
     };
     let assign_default = match saved_profile_name {
-        Some(name) if !make_default => {
-            let setup_fingerprint =
-                load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint();
-            ProfileStore::open_read_only()?
-                .profiles_for_setup(
-                    &setup_fingerprint,
-                    &ProfileQueryContext::load(&state_store)?,
-                )?
-                .iter()
-                .all(|profile| profile.name == name)
-        }
+        Some(name) if !make_default => is_only_profile_for_setup(
+            name,
+            &load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint(),
+            &state_store,
+        )?,
         _ => make_default,
     };
     let mut outcome =

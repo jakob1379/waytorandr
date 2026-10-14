@@ -76,7 +76,11 @@ When a backend cannot support `mirror`, waytorandr prints backend-specific guida
   waytorandr save docked --default
   waytorandr save docked --dry-run
 
-If the profile name is omitted, `default` is used.
+If the profile name is omitted, the profile is named after the detected layout
+(`horizontal`, `vertical`, or `mirror`, otherwise `custom`).
+A saved profile becomes the default for the current setup only when it is the only saved profile
+for that setup, matching `set <virtual> --save`.
+With `--default` and no name, the profile is saved as `default`.
 Use `--setup-name` to assign a friendly name to the current setup while keeping fingerprint-based matching.
 Use `--default` together with `save` when you want this saved layout to become the default profile for the current setup fingerprint.")]
     Save(SaveArgs),
@@ -213,10 +217,9 @@ pub struct SetArgs {
 pub struct SaveArgs {
     #[arg(
         value_name = "profile",
-        default_value = "default",
-        help = "Profile name to save; defaults to `default`"
+        help = "Profile name to save; defaults to the detected layout (for example `horizontal`), or `default` with `--default`"
     )]
-    pub(crate) name: String,
+    pub(crate) name: Option<String>,
 
     #[arg(
         short = 's',
@@ -229,7 +232,7 @@ pub struct SaveArgs {
     #[arg(
         short = 'd',
         long = "default",
-        help = "Also set the saved profile as the default profile for the current setup fingerprint"
+        help = "Always set the saved profile as the default profile for the current setup fingerprint"
     )]
     pub(crate) make_default: bool,
 

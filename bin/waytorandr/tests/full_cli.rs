@@ -95,6 +95,36 @@ fn set_save_ignores_profiles_from_other_setups() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn save_without_name_uses_detected_layout() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+
+    env.write_backend_topology(&fixture_topology())?;
+    let preview = env.run_json(["save", "--dry-run", "--json"])?;
+    assert_eq!(preview["profile"], "horizontal");
+    assert_eq!(preview["default_set"], true);
+
+    let first = env.run_json(["save", "--json"])?;
+    assert_eq!(first["profile"], "horizontal");
+    assert_eq!(first["default_set"], true);
+
+    let second = env.run_json(["save", "desk", "--json"])?;
+    assert!(second.get("default_set").is_none());
+    assert_default_and_active(&env, Some("horizontal"), None)?;
+
+    let forced = env.run_json(["save", "--default", "--json"])?;
+    assert_eq!(forced["profile"], "default");
+    assert_eq!(forced["default_set"], true);
+    assert_saved_profiles(&env, &["default", "desk", "horizontal"])?;
+
+    env.write_backend_topology(&alternate_topology())?;
+    let custom = env.run_json(["save", "--json"])?;
+    assert_eq!(custom["profile"], "custom");
+    assert_eq!(custom["default_set"], true);
+
+    Ok(())
+}
+
+#[test]
 fn status_defaults_to_current_setup_and_expands_with_all() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
 
@@ -212,7 +242,7 @@ fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
 fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let save_default_dry_run = env.run_json(["save", "--dry-run", "--json"])?;
     assert_eq!(save_default_dry_run["command"], "save");
-    assert_eq!(save_default_dry_run["profile"], "default");
+    assert_eq!(save_default_dry_run["profile"], "horizontal");
     assert_eq!(save_default_dry_run["dry_run"], true);
     assert_eq!(save_default_dry_run["saved"], false);
     assert_eq!(

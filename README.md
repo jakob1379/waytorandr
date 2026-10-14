@@ -126,6 +126,11 @@ when it is the only saved profile for the current setup, so several layouts can 
 saved without replacing the default. Add `--default` to always make it the default.
 `set vertical` still applies the virtual layout; use `set --profile vertical` to
 apply the saved one.
+`save` follows the same rule: without a name it saves the profile under the detected
+layout (`horizontal`, `vertical`, or `mirror`, otherwise `custom`), and any saved
+profile only becomes the setup default when it is the only saved profile for the
+current setup. `save --default` always makes it the default and, without a name,
+saves it as `default`.
 
 Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
 for the full command reference and examples.

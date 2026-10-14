@@ -51,7 +51,7 @@ pub(crate) fn run() -> Result<()> {
             output_mode,
         ),
         Commands::Save(args) => write::cmd_save(
-            &args.name,
+            args.name.as_deref(),
             args.setup_name.as_deref(),
             args.dry_run,
             args.make_default,
