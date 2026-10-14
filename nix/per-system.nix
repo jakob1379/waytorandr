@@ -1,5 +1,6 @@
 {
   self,
+  crane,
   git-hooks,
   nixpkgs,
   rust-overlay,
@@ -11,6 +12,7 @@
   context = import ./package-context.nix {
     inherit
       self
+      crane
       pkgs
       system
       workspace

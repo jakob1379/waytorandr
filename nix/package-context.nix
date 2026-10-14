@@ -1,5 +1,6 @@
 {
   self,
+  crane,
   pkgs,
   system,
   workspace,
@@ -53,30 +54,33 @@
 
   mkWaytorandrPackage = {
     pname ? "waytorandr",
-    rustPlatform ? pkgs.rustPlatform,
-    stdenv ? pkgs.stdenv,
+    crossPkgs ? pkgs,
     nativeBuildInputs ? packageNativeBuildInputs,
     buildInputs ? packageBuildInputs,
     cargoBuildTarget ? null,
-  }:
-    rustPlatform.buildRustPackage (
+  }: let
+    craneLib = crane.mkLib crossPkgs;
+    commonArgs =
       {
         inherit
           pname
-          stdenv
           nativeBuildInputs
           buildInputs
           ;
         inherit (workspace) version;
-        src = self;
-
-        cargoLock.lockFile = self + /Cargo.lock;
+        src = craneLib.cleanCargoSource self;
+        strictDeps = true;
         doCheck = false;
-
-        meta = commonMeta;
       }
       // lib.optionalAttrs (cargoBuildTarget != null) {
         CARGO_BUILD_TARGET = cargoBuildTarget;
+      };
+  in
+    craneLib.buildPackage (
+      commonArgs
+      // {
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {cargoCheckCommand = "true";});
+        meta = commonMeta;
       }
     );
 
@@ -93,7 +97,7 @@
     else
       mkWaytorandrPackage {
         pname = "waytorandr-portable";
-        inherit (pkgs.pkgsCross.musl64) rustPlatform stdenv;
+        crossPkgs = pkgs.pkgsCross.musl64;
         nativeBuildInputs = with pkgs; [
           pkg-config
           clang

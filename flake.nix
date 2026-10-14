@@ -2,6 +2,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -14,6 +15,7 @@
 
   outputs = {
     self,
+    crane,
     git-hooks,
     nixpkgs,
     utils,
@@ -27,6 +29,7 @@
         perSystem = import ./nix/per-system.nix {
           inherit
             self
+            crane
             git-hooks
             nixpkgs
             rust-overlay
