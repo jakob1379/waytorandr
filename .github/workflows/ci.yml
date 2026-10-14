@@ -31,9 +31,12 @@ jobs:
         if: ${{ !env.ACT }}
         uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
 
-      - name: Enable Nix cache
+      - name: Cache Nix store
         if: ${{ !env.ACT }}
-        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - name: Cache Cargo artifacts
         if: ${{ !env.ACT }}
@@ -44,7 +47,7 @@ jobs:
           shared-key: ci
           cache-on-failure: true
           cache-all-crates: true
-          cmd-format: nix develop -c cargo {0}
+          cmd-format: nix develop -c {0}
 
       - name: Run canonical checks
         run: nix develop -c just ci
@@ -66,8 +69,12 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa
 
-      - name: Enable Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7
+      - name: Restore Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          save: false
 
       - name: Build package
         run: |
