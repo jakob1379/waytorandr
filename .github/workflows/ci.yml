@@ -47,7 +47,7 @@ jobs:
           cmd-format: nix develop -c cargo {0}
 
       - name: Run canonical checks
-        run: nix develop -c just check
+        run: nix develop -c just ci
 
   package:
     runs-on: ubuntu-latest

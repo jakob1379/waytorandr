@@ -46,13 +46,25 @@ test:
 test-cli:
     ./scripts/test-cli-integration.sh
 
-check: fmt-check lint test test-cli build
+check: fmt-check lint test test-cli smoke
+
+ci: check smoke-release
 
 build:
+    cargo build --locked --workspace
+
+build-release:
     nix build
 
-smoke: build
-    ./result/bin/waytorandr --help
+smoke: build (_smoke "target/debug")
+
+smoke-release: build-release (_smoke "result/bin")
+
+_smoke dir:
+    ./{{ dir }}/waytorandr --help >/dev/null
+    ./{{ dir }}/waytorandr save --help >/dev/null
+    ./{{ dir }}/waytorandr service run --help >/dev/null
+    ./{{ dir }}/waytorandrd --help >/dev/null
 
 clean:
     rm -rf target result result-*

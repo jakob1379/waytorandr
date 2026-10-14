@@ -11,7 +11,8 @@
 - List shortcuts: `nix develop -c just`
 - Enter the dev shell to install Git hooks automatically: `nix develop`
 - Run all autofixable hooks on demand: `nix fmt`
-- CI-equivalent gate: `nix develop -c just check`
+- Local gate (native cargo build, tests, help smoke test): `nix develop -c just check`
+- CI gate (`just check` plus the `nix build` package smoke test): `nix develop -c just ci`
 - Format everything: `nix develop -c just fmt`
 - Lint everything: `nix develop -c just lint`
 - Format: `nix develop -c cargo fmt --all`
@@ -21,7 +22,9 @@
 - Test only the CLI crate: `nix develop -c cargo test -q -p waytorandr`
 
 `just` is the source of truth for CI, and `just check` includes the subprocess
-CLI integration suite. `git-hooks.nix` is the source of truth
+CLI integration suite. Day-to-day builds use native Cargo in the dev shell
+(`just build`, `just smoke`); `nix build` is reserved for packaging and releases
+(`just build-release`, `just smoke-release`). `git-hooks.nix` is the source of truth
 for local Git hook configuration, and entering the dev shell installs the
 generated hooks automatically. Local hooks cover cheap file hygiene,
 formatting, workflow validation, spell checking, and a lockfile consistency
@@ -47,8 +50,8 @@ apply, retry attempts, and policy completion.
 
 ## Packaging Check
 
-- Build the package the same way Nix users will consume it: `nix build`
-- Smoke-test the built binaries:
+- Build the package the same way Nix users will consume it: `nix develop -c just build-release`
+- Smoke-test the built binaries with `nix develop -c just smoke-release`, or manually:
   - `./result/bin/waytorandr --help`
   - `./result/bin/waytorandr save --help`
   - `./result/bin/waytorandr set --help`
