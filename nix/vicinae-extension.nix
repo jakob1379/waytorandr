@@ -3,11 +3,11 @@
   workspace,
 }: let
   src = ../apps/vicinae;
+  inherit (pkgs.lib.importJSON (src + "/package.json")) name;
 in
   pkgs.buildNpmPackage {
-    pname = "waytorandr-vicinae-extension";
+    inherit name src;
     inherit (workspace) version;
-    inherit src;
     npmDeps = pkgs.importNpmLock {npmRoot = src;};
     inherit (pkgs.importNpmLock) npmConfigHook;
 
@@ -22,7 +22,7 @@ in
     installPhase = ''
       runHook preInstall
       mkdir -p $out
-      cp -r "$HOME/.local/share/vicinae/extensions/waytorandr/." $out/
+      cp -r "$HOME/.local/share/vicinae/extensions/${name}/." $out/
       runHook postInstall
     '';
   }
