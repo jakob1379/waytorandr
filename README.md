@@ -150,6 +150,24 @@ for the full command reference and examples.
 > `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
 > `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, and an optional `layout` field (`horizontal`, `vertical`, or `mirror`) when the current layout matches one.
 
+## Vicinae layout switcher
+
+`apps/vicinae` is a [Vicinae](https://vicinae.com) extension built on the `waytorandr` CLI.
+Its *Display Layout* command shows a floating list of your saved profiles and the `horizontal`,
+`vertical`, `mirror`, `external`, and `builtin` layouts, with the current one tagged *Active*.
+Enter applies it through `waytorandr set`. With the Home Manager Vicinae module:
+
+```nix
+programs.vicinae.extensions = [
+  (config.lib.vicinae.mkExtension {
+    name = "waytorandr";
+    src = "${inputs.waytorandr}/apps/vicinae";
+  })
+];
+```
+
+Bind it to a key with `vicinae cmd launch @jakob1379/waytorandr:layouts`.
+
 ## Daemon
 
 `waytorandrd` watches for physical display changes such as dock, undock, and
