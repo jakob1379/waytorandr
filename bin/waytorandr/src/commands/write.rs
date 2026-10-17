@@ -7,6 +7,7 @@ use super::action::{
 };
 use super::shared::load_current_topology;
 use super::OutputMode;
+use crate::notify::notify;
 use crate::preset::resolve_virtual_preset;
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::detect_preset;
@@ -371,7 +372,14 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         )?;
         outcome
     };
-    emit_action_outcome("cycle", None, &outcome, output_mode)
+    emit_action_outcome("cycle", None, &outcome, output_mode)?;
+    if !dry_run {
+        notify(
+            &format!("Display layout: {}", targets[next_idx]),
+            &format!("{} of {}", next_idx + 1, targets.len()),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

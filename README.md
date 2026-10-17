@@ -106,6 +106,10 @@ Built-in `set` targets:
 - `horizontal`
 - `vertical`
 
+`cycle` shows a desktop notification naming the layout it switched to, so it is
+usable from a keybinding. It is skipped with `--dry-run` and silently ignored when
+no notification server is running.
+
 Bare `waytorandr set` is rejected; use `waytorandr set auto` for automatic
 selection.
 
