@@ -1,18 +1,18 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
-use zbus::blocking::Connection;
+use zbus::blocking::connection::Builder;
 use zbus::zvariant::Value;
 
 const EXPIRE_TIMEOUT_MS: i32 = 3000;
+const METHOD_TIMEOUT: Duration = Duration::from_secs(1);
 
-// Best-effort: a missing session bus or notification server must not fail the command.
 pub(crate) fn notify(summary: &str, body: &str) {
     let _ = try_notify(summary, body);
 }
 
 fn try_notify(summary: &str, body: &str) -> zbus::Result<()> {
-    let connection = Connection::session()?;
-    // Lets servers that support it replace the previous popup instead of stacking one per cycle.
+    let connection = Builder::session()?.method_timeout(METHOD_TIMEOUT).build()?;
     let hints = HashMap::from([
         ("transient", Value::from(true)),
         ("x-canonical-private-synchronous", Value::from("waytorandr")),
