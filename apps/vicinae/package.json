@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
+  "name": "waytorandr",
+  "title": "Waytorandr",
+  "description": "Switch display layouts and saved waytorandr profiles",
+  "categories": [
+    "System"
+  ],
+  "license": "MIT",
+  "platforms": [
+    "Linux"
+  ],
+  "icon": "extension_icon.svg",
+  "author": "jakob1379",
+  "contributors": [],
+  "pastContributors": [],
+  "commands": [
+    {
+      "name": "layouts",
+      "title": "Display Layout",
+      "subtitle": "waytorandr",
+      "description": "Pick a display layout or saved profile and apply it",
+      "mode": "view"
+    }
+  ],
+  "preferences": [],
+  "scripts": {
+    "build": "vici build",
+    "dev": "vici develop",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@vicinae/api": "^0.29.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "19.1.17",
+    "typescript": "^5.9.3"
+  }
+}

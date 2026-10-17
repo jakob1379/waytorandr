@@ -7,4 +7,4 @@ pub use normalize::{
     canonicalize_profile, normalize_profile_with_known_outputs,
     normalize_topology_with_known_outputs,
 };
-pub use planner::{detect_preset, LayoutPlan, Planner};
+pub use planner::{detect_layout, detect_preset, LayoutPlan, Planner};

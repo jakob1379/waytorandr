@@ -7,7 +7,7 @@ use crate::profile::Profile;
 
 mod presets;
 
-pub use presets::detect_preset;
+pub use presets::{detect_layout, detect_preset};
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]

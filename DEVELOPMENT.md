@@ -12,7 +12,7 @@
 - Enter the dev shell to install Git hooks automatically: `nix develop`
 - Run all autofixable hooks on demand: `nix fmt`
 - Local gate (native cargo build, tests, help smoke test): `nix develop -c just check`
-- CI gate (`just check` plus the `nix build` package smoke test): `nix develop -c just ci`
+- CI gate (`just check` plus the `nix build` package smoke test and the Vicinae extension build): `nix develop -c just ci`
 - Format everything: `nix develop -c just fmt`
 - Lint everything: `nix develop -c just lint`
 - Format: `nix develop -c cargo fmt --all`
@@ -37,6 +37,15 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 - Run it through the checked recipe: `nix develop -c just test-cli`
 - The script runs `cargo test -p waytorandr --test full_cli`, which builds and executes the debug `waytorandr` binary
 - The test covers the real CLI process flow against simulated `wlroots`, `kscreen`, and `gnome` backends
+
+## Vicinae Extension
+
+`apps/vicinae` is a Vicinae extension that drives the `waytorandr` CLI. Node comes from the dev shell.
+
+- Install dependencies: `cd apps/vicinae && nix develop -c npm ci`
+- Test and typecheck: `nix develop -c npm test` and `nix develop -c npm run typecheck` (typecheck needs the types `npm run build` generates)
+- Load it into a running Vicinae with live reload: `nix develop -c npm run dev`
+- Build it as Nix users get it, with tests and typecheck in the check phase: `nix build .#vicinae-extension` (also run by `just build-release`)
 
 ## Daemon Timing Diagnostics
 
