@@ -451,11 +451,18 @@ pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
 
     let same_y = positions.iter().all(|(_, y)| *y == positions[0].1);
     let same_x = positions.iter().all(|(x, _)| *x == positions[0].0);
+    let doubled_centers: Vec<i64> = enabled
+        .iter()
+        .map(|s| 2 * i64::from(s.position.x) + s.mode.map_or(0, |mode| i64::from(mode.width)))
+        .collect();
+    let same_center_x = doubled_centers
+        .iter()
+        .all(|center| (center - doubled_centers[0]).abs() <= 1);
 
     if same_y && !same_x {
         return Some(VirtualPreset::Horizontal);
     }
-    if same_x && !same_y {
+    if (same_x || same_center_x) && !same_y {
         return Some(VirtualPreset::Vertical);
     }
     if enabled.iter().any(|state| state.mirror_target.is_some()) {

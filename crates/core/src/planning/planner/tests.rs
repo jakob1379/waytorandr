@@ -475,3 +475,22 @@ fn detect_preset_returns_virtual_preset() {
 
     assert_eq!(detect_preset(&topology), Some(VirtualPreset::Horizontal));
 }
+
+#[test]
+fn detect_preset_recognizes_planned_vertical_with_mixed_widths() -> anyhow::Result<()> {
+    let topology = Topology {
+        outputs: HashMap::from([
+            ("A".to_string(), planner_output_state("A", 3440, 1440)),
+            ("B".to_string(), planner_output_state("B", 2561, 1440)),
+            ("C".to_string(), planner_output_state("C", 1920, 1080)),
+        ]),
+    };
+
+    let plan = Planner::plan_from_preset(VirtualPreset::Vertical, &topology, None, None)?;
+    let planned = Topology {
+        outputs: plan.outputs,
+    };
+
+    assert_eq!(detect_preset(&planned), Some(VirtualPreset::Vertical));
+    Ok(())
+}
