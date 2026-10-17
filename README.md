@@ -155,14 +155,12 @@ for the full command reference and examples.
 `apps/vicinae` is a [Vicinae](https://vicinae.com) extension built on the `waytorandr` CLI.
 Its *Display Layout* command shows a floating list of your saved profiles and the `horizontal`,
 `vertical`, `mirror`, `external`, and `builtin` layouts, with the current one tagged *Active*.
-Enter applies it through `waytorandr set`. With the Home Manager Vicinae module:
+Enter applies it through `waytorandr set`. The flake ships it as `vicinae-extension`; with the
+Home Manager Vicinae module:
 
 ```nix
 programs.vicinae.extensions = [
-  (config.lib.vicinae.mkExtension {
-    name = "waytorandr";
-    src = "${inputs.waytorandr}/apps/vicinae";
-  })
+  inputs.waytorandr.packages.${pkgs.stdenv.hostPlatform.system}.vicinae-extension
 ];
 ```
 

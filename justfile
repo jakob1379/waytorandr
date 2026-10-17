@@ -55,6 +55,7 @@ build:
 
 build-release:
     nix build
+    nix build .#vicinae-extension --no-link
 
 smoke: build (_smoke "target/debug")
 
