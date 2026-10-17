@@ -48,6 +48,7 @@ git-hooks.lib.${pkgs.stdenv.hostPlatform.system}.run {
       enable = true;
       name = "codespell";
       entry = "${pkgs.codespell}/bin/codespell --ignore-words-list=ser";
+      excludes = ["package-lock\\.json$"];
       language = "system";
       pass_filenames = true;
     };
