@@ -183,6 +183,7 @@ impl TestEnvironment {
             .env("XDG_STATE_HOME", &self.state_home)
             .env(TEST_BACKEND_STATE_ENV, &self.backend_state_path)
             .env(TEST_BACKEND_NAME_ENV, &self.backend_name)
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
             .env_remove("XDG_CURRENT_DESKTOP")
             .env_remove("XDG_SESSION_DESKTOP")
             .env_remove("DESKTOP_SESSION");

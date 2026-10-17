@@ -94,6 +94,10 @@ waytorandr version   Show the waytorandr version
 waytorandr service   Manage the waytorandrd user service
 ```
 
+`cycle` shows a desktop notification naming the layout it switched to, so it is
+usable from a keybinding. It is skipped with `--dry-run`, and skipped without
+failing the command when no notification server answers within a second.
+
 Built-in `set` targets:
 
 - `auto` - recover blank internal-only topologies with the built-in fallback, then apply the setup default or best matching saved profile when the current outputs have strong live identity
