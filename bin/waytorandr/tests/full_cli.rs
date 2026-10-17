@@ -478,6 +478,10 @@ fn exercise_virtual_workflows(
     let topology = env.backend_topology()?;
     assert!(topology.outputs["DP-1"].enabled);
     assert!(!topology.outputs["eDP-1"].enabled);
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "external");
+
+    env.run_json(["set", "builtin", "--json"])?;
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "builtin");
 
     let top_level_help = env.run_text(["--help"])?;
     let set_help = env.run_text(["set", "--help"])?;

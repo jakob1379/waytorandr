@@ -6,7 +6,7 @@ use super::shared::{load_current_topology, topology_outputs, JsonOutputEntry};
 use super::{version_text, OutputMode};
 use waytorandr_backend_loader::connect_backend;
 use waytorandr_core::workflow;
-use waytorandr_core::{detect_preset, OutputIdentity, Topology, VirtualPreset};
+use waytorandr_core::{detect_layout, OutputIdentity, Topology, VirtualPreset};
 use waytorandr_core::{ProfileQueryContext, ReadOnlyStateStore};
 use waytorandr_core::{ProfileStore, ProfilesSettings, ReadOnlyProfileStore, StoredProfile};
 
@@ -94,7 +94,8 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
         return write_json(&JsonStatusResponse {
             command: "status",
             profile: view.profile.clone(),
-            layout: detect_preset(&view.topology).map(VirtualPreset::as_str),
+            layout: detect_layout(&view.topology, view.builtin_output.as_ref())
+                .map(VirtualPreset::as_str),
             show_all: view.list.show_all,
             has_saved_profiles: view.has_saved_profiles,
             topology_fingerprint: view.topology.fingerprint(),
