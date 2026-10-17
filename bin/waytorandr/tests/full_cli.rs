@@ -298,10 +298,12 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_eq!(cycled_horizontal["command"], "cycle");
     assert_eq!(cycled_horizontal["target"], "horizontal");
     assert_eq!(cycled_horizontal["target_type"], "virtual");
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "horizontal");
 
     let cycled_vertical = env.run_json(["cycle", "--json"])?;
     assert_eq!(cycled_vertical["target"], "vertical");
     assert_eq!(cycled_vertical["target_type"], "virtual");
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "vertical");
 
     let cycled = env.run_json(["cycle", "--json"])?;
     assert_eq!(cycled["command"], "cycle");
