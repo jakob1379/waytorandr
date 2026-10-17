@@ -472,5 +472,36 @@ pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     None
 }
 
+#[must_use]
+pub fn detect_layout(
+    topology: &Topology,
+    builtin_output: Option<&OutputIdentity>,
+) -> Option<VirtualPreset> {
+    let real: Vec<_> = topology
+        .outputs
+        .values()
+        .filter(|s| !s.identity.is_ignored && !s.identity.is_virtual)
+        .collect();
+    if real.iter().all(|s| s.enabled) {
+        return detect_preset(topology);
+    }
+    if !real.iter().any(|s| s.enabled) {
+        return None;
+    }
+    if real
+        .iter()
+        .all(|s| s.enabled == is_internal_output(s, builtin_output))
+    {
+        return Some(VirtualPreset::Builtin);
+    }
+    if real
+        .iter()
+        .all(|s| s.enabled != is_internal_output(s, builtin_output))
+    {
+        return Some(VirtualPreset::External);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests;

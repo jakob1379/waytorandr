@@ -143,7 +143,7 @@ for the full command reference and examples.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
 > `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
-> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, and an optional `layout` field (`horizontal`, `vertical`, or `mirror`) when the current layout matches one.
+> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, and an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one.
 
 ## Vicinae layout switcher
 
