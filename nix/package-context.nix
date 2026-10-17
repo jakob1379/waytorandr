@@ -25,6 +25,7 @@
     lld
     sccache
     pkg-config
+    nodejs
   ];
 
   runtimeLibraries = with pkgs; [
