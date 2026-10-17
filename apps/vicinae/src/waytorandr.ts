@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 
 export type Status = {
-  profile?: string;
   layout?: string;
   setups: {
     is_current: boolean;
@@ -56,8 +55,12 @@ export function setArgs(target: Target): string[] {
 
 export function run(args: string[]): Promise<string> {
   return new Promise((resolve, reject) =>
-    execFile("waytorandr", args, (err, stdout, stderr) =>
-      err ? reject(new Error(stderr.replace(/^Error:\s*/, "").trim() || err.message)) : resolve(stdout),
-    ),
+    execFile("waytorandr", args, (err, stdout, stderr) => {
+      if (!err) return resolve(stdout);
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return reject(new Error("waytorandr is not on Vicinae's PATH"));
+      }
+      reject(new Error(stderr.replace(/^Error:\s*/, "").trim() || err.message));
+    }),
   );
 }
