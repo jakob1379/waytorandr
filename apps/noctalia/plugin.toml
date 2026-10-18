@@ -14,8 +14,9 @@ id = "layouts"
 entry = "panel.luau"
 width = 560
 height = 480
-placement = "floating"
-position = "center"
+placement = "attached"
+position = "auto"
+open_near_click = true
 keyboard_focus = "exclusive"
 capture_keys = ["up", "down", "return"]
 

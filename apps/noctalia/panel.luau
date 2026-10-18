@@ -7,6 +7,8 @@ local cursor = 1
 local loading = false
 local loadError = nil
 local busy = false
+local closeButton = true
+local radiusScale = 1
 
 local render
 
@@ -34,13 +36,13 @@ end
 local function row(target, index)
   local selected = index == cursor
   local children = {
-    ui.glyph({ name = target.glyph, size = 20, color = selected and "primary" or "on_surface" }),
+    ui.glyph({ name = target.glyph, color = selected and "primary" or "on_surface" }),
     ui.label({ text = target.title, fontWeight = "medium" }),
     ui.label({ text = target.subtitle, color = "on_surface_variant" }),
     ui.spacer({ flexGrow = 1 }),
   }
   if target.active then
-    table.insert(children, ui.label({ text = "Active", fontSize = 11, fontWeight = "semibold", color = "primary" }))
+    table.insert(children, ui.label({ text = "Active", fontWeight = "semibold", color = "primary" }))
   end
   table.insert(children, ui.button({
     glyph = target.isDefault and "star-filled" or "star",
@@ -59,7 +61,7 @@ local function row(target, index)
     paddingH = 12,
     height = 42,
     align = "center",
-    radius = 8,
+    radius = 8 * radiusScale,
     fill = selected and "primary/0.14" or "#00000000",
     onClick = function()
       apply(target)
@@ -74,7 +76,7 @@ local function row(target, index)
 end
 
 local function section(title)
-  return ui.label({ text = title, fontSize = 12, fontWeight = "semibold", color = "on_surface_variant" })
+  return ui.label({ text = title, fontWeight = "medium", color = "on_surface_variant" })
 end
 
 render = function()
@@ -97,8 +99,17 @@ render = function()
     end
   end
 
+  local header = {
+    ui.label({ text = "Display Layout", fontSize = 16, fontWeight = "bold", color = "on_surface", flexGrow = 1 }),
+  }
+  if closeButton then
+    table.insert(header, ui.button({ glyph = "close", onClick = function()
+      panel.close()
+    end }))
+  end
+
   panel.render(ui.column({ flexGrow = 1, gap = 12 }, {
-    ui.label({ text = "Display Layout", fontSize = 16, fontWeight = "bold" }),
+    ui.row({ align = "center", justify = "space_between", gap = 8 }, header),
     ui.scroll({ flexGrow = 1, gap = 2 }, body),
   }))
 end
@@ -142,6 +153,8 @@ local function load()
 end
 
 function onOpen()
+  closeButton = noctalia.getSetting("shell.show_close_buttons") ~= false
+  radiusScale = noctalia.getSetting("shell.corner_radius_scale") or 1
   load()
 end
 
