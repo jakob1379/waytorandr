@@ -56,6 +56,7 @@ build:
 build-release:
     nix build
     nix build .#vicinae-extension --no-link
+    nix build .#noctalia-plugin --no-link
 
 smoke: build (_smoke "target/debug")
 

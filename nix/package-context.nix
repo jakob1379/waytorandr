@@ -26,6 +26,7 @@
     sccache
     pkg-config
     nodejs
+    luau
   ];
 
   runtimeLibraries = with pkgs; [
