@@ -97,6 +97,7 @@ waytorandr service   Manage the waytorandrd user service
 `cycle` shows a desktop notification naming the layout it switched to, so it is
 usable from a keybinding. It is skipped with `--dry-run`, and skipped without
 failing the command when no notification server answers within a second.
+Configure it under `settings.notifications` in the config file (see below).
 
 Built-in `set` targets:
 
@@ -257,6 +258,24 @@ with width and height swapped for rotated transforms. Serialization omits
 `scaled_resolution` when derivation is unavailable (None). Manual edits are
 recalculated from `mode`, `scale`, and `transform` during normalization of profiles
 or observed topologies.
+
+Notifications are configured in the `settings` object of `waytorandr.json`. Both keys are
+optional; omitted keys keep their defaults:
+
+```json
+{
+  "settings": {
+    "notifications": {
+      "enabled": true,
+      "timeout_ms": 3000
+    }
+  }
+}
+```
+
+`enabled = false` turns off the `cycle` notification. `timeout_ms` is passed to the
+notification server as the expiry: `-1` uses the server's default and `0` keeps the
+notification until it is dismissed.
 
 If the XDG variables are unset, these typically resolve to:
 

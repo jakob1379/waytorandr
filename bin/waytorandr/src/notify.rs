@@ -4,19 +4,18 @@ use std::time::Duration;
 use zbus::blocking::connection::Builder;
 use zbus::zvariant::Value;
 
-const EXPIRE_TIMEOUT_MS: i32 = 3000;
 const METHOD_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Sends a desktop notification, ignoring delivery errors.
-pub(crate) fn notify(summary: &str, body: &str) {
-    let _ = try_notify(summary, body);
+pub(crate) fn notify(summary: &str, body: &str, timeout_ms: i32) {
+    let _ = try_notify(summary, body, timeout_ms);
 }
 
-/// Sends a transient notification over the session bus with a three-second expiry.
+/// Sends a transient notification over the session bus with the given expiry in milliseconds.
 ///
 /// Requests replacement via the synchronous hint and limits the method reply wait
 /// to one second. Returns an error if connecting to the bus or sending fails.
-fn try_notify(summary: &str, body: &str) -> zbus::Result<()> {
+fn try_notify(summary: &str, body: &str, timeout_ms: i32) -> zbus::Result<()> {
     let connection = Builder::session()?.method_timeout(METHOD_TIMEOUT).build()?;
     let hints = HashMap::from([
         ("transient", Value::from(true)),
@@ -35,7 +34,7 @@ fn try_notify(summary: &str, body: &str) -> zbus::Result<()> {
             body,
             Vec::<&str>::new(),
             hints,
-            EXPIRE_TIMEOUT_MS,
+            timeout_ms,
         ),
     )?;
     Ok(())

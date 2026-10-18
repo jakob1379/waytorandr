@@ -319,7 +319,8 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
 /// Selects the next saved profile or built-in preset for the current setup.
 ///
 /// Emits the action outcome in the requested format and, after a successful
-/// non-dry-run action, sends a best-effort notification naming the selected layout.
+/// non-dry-run action, sends a best-effort notification naming the selected layout
+/// unless `settings.notifications.enabled` is false.
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     const CYCLE_PRESETS: [VirtualPreset; 2] = [VirtualPreset::Horizontal, VirtualPreset::Vertical];
 
@@ -377,10 +378,12 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         outcome
     };
     emit_action_outcome("cycle", None, &outcome, output_mode)?;
-    if !dry_run {
+    let notifications = store.settings()?.notifications;
+    if !dry_run && notifications.enabled {
         notify(
             &format!("Display layout: {}", targets[next_idx]),
             &format!("{} of {}", next_idx + 1, targets.len()),
+            notifications.timeout_ms,
         );
     }
     Ok(())

@@ -49,6 +49,31 @@ pub struct ProfilesSettings {
     pub setup_defaults: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin_output: Option<OutputIdentity>,
+    #[serde(default, skip_serializing_if = "NotificationSettings::is_default")]
+    pub notifications: NotificationSettings,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct NotificationSettings {
+    pub enabled: bool,
+    pub timeout_ms: i32,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_ms: 3000,
+        }
+    }
+}
+
+impl NotificationSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl ProfilesSettings {
