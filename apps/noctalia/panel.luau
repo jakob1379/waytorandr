@@ -42,7 +42,7 @@ local function row(target, index)
     ui.spacer({ flexGrow = 1 }),
   }
   if target.active then
-    table.insert(children, ui.label({ text = "Active", fontWeight = "semibold", color = "primary" }))
+    table.insert(children, ui.glyph({ name = "check", color = "primary" }))
   end
   table.insert(children, ui.button({
     glyph = target.isDefault and "star-filled" or "star",
@@ -62,7 +62,7 @@ local function row(target, index)
     height = 42,
     align = "center",
     radius = 8 * radiusScale,
-    fill = selected and "primary/0.14" or "#00000000",
+    fill = selected and "surface_variant" or "surface",
     onClick = function()
       apply(target)
     end,
@@ -75,8 +75,18 @@ local function row(target, index)
   }, children)
 end
 
-local function section(title)
-  return ui.label({ text = title, fontWeight = "medium", color = "on_surface_variant" })
+local function section(title, rows)
+  return ui.column({
+    gap = 6,
+    padding = 12,
+    radius = 12 * radiusScale,
+    fill = "surface_variant/0.35",
+    border = "outline/0.5",
+    borderWidth = 1,
+  }, {
+    ui.label({ text = title, fontWeight = "bold", color = "on_surface" }),
+    ui.column({ gap = 6 }, rows),
+  })
 end
 
 render = function()
@@ -89,18 +99,18 @@ render = function()
       ui.label({ text = loadError, color = "error", maxLines = 3 }),
     }))
   else
-    local kind = nil
+    local profiles, layoutRows = {}, {}
     for index, target in targets do
-      if target.kind ~= kind then
-        kind = target.kind
-        table.insert(body, section(kind == "profile" and "Saved profiles" or "Layouts"))
-      end
-      table.insert(body, row(target, index))
+      table.insert(target.kind == "profile" and profiles or layoutRows, row(target, index))
     end
+    if #profiles > 0 then
+      table.insert(body, section("Saved profiles", profiles))
+    end
+    table.insert(body, section("Layouts", layoutRows))
   end
 
   local header = {
-    ui.label({ text = "Display Layout", fontSize = 16, fontWeight = "bold", color = "on_surface", flexGrow = 1 }),
+    ui.label({ text = "Display Layout", fontSize = 16, fontWeight = "bold", color = "on_surface_variant", flexGrow = 1 }),
   }
   if closeButton then
     table.insert(header, ui.button({ glyph = "close", onClick = function()
@@ -110,7 +120,7 @@ render = function()
 
   panel.render(ui.column({ flexGrow = 1, gap = 12 }, {
     ui.row({ align = "center", justify = "space_between", gap = 8 }, header),
-    ui.scroll({ flexGrow = 1, gap = 2 }, body),
+    ui.scroll({ flexGrow = 1, gap = 12 }, body),
   }))
 end
 
