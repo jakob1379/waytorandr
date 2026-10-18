@@ -45,5 +45,9 @@ assert(table.concat(layouts.setArgs(layouts.targets(status(nil))[3]), " ") == "w
 
 assert(layouts.errorMessage({ exitCode = 1, stderr = "Error: profile 'x' not found\n" }) == "profile 'x' not found")
 assert(layouts.errorMessage({ exitCode = 3, stderr = "" }) == "waytorandr exited with code 3")
+assert(layouts.errorMessage({ exitCode = 9, stderr = "partial", timedOut = true }) == "waytorandr timed out")
+
+assert(table.concat(layouts.defaultArgs(shadowing), " ") == "waytorandr set --profile vertical --default")
+assert(table.concat(layouts.defaultArgs(layouts.targets(status(nil))[3]), " ") == "waytorandr set horizontal --save --default")
 
 print("layouts: ok")

@@ -52,7 +52,7 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 `apps/noctalia` is a Noctalia v5 plugin that drives the `waytorandr` CLI. `luau` comes from the dev shell.
 
 - Test the pure logic: `cd apps/noctalia && nix develop -c luau layouts.test.luau`
-- Lint the manifest against a running Noctalia install: `noctalia plugins lint apps/noctalia`
+- Lint the manifest offline: `noctalia plugins lint apps/noctalia`
 - Load it live with hot reload: `ln -s "$PWD/apps/noctalia" ~/.local/share/noctalia/plugins/waytorandr`, then `noctalia msg plugins enable jakob1379/waytorandr` and `noctalia msg panel-toggle jakob1379/waytorandr:layouts`
 - Build it as Nix users get it, with the tests in the check phase: `nix build .#noctalia-plugin` (also run by `just build-release`)
 

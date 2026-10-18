@@ -61,7 +61,17 @@ local function setArgs(target: Target): { string }
   return { "waytorandr", "set", target.name }
 end
 
+local function defaultArgs(target: Target): { string }
+  if target.kind == "profile" then
+    return { "waytorandr", "set", "--profile", target.name, "--default" }
+  end
+  return { "waytorandr", "set", target.name, "--save", "--default" }
+end
+
 local function errorMessage(result: any): string
+  if result.timedOut then
+    return "waytorandr timed out"
+  end
   local stderr = string.gsub(result.stderr or "", "^Error:%s*", "")
   stderr = string.gsub(stderr, "%s+$", "")
   if stderr ~= "" then
@@ -73,5 +83,6 @@ end
 return {
   targets = targets,
   setArgs = setArgs,
+  defaultArgs = defaultArgs,
   errorMessage = errorMessage,
 }

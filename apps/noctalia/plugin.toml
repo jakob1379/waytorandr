@@ -16,7 +16,6 @@ width = 560
 height = 480
 placement = "floating"
 position = "center"
-open_near_click = false
 keyboard_focus = "exclusive"
 capture_keys = ["up", "down", "return"]
 

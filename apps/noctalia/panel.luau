@@ -10,20 +10,25 @@ local busy = false
 
 local render
 
-local function apply(target)
+local function apply(target, makeDefault)
   if busy then
     return
   end
   busy = true
-  noctalia.runAsync(layouts.setArgs(target), function(result)
+  local args = makeDefault and layouts.defaultArgs(target) or layouts.setArgs(target)
+  local started = noctalia.runAsync(args, function(result)
     busy = false
     if result.exitCode == 0 then
-      noctalia.notify("Display layout", target.title)
+      noctalia.notify(makeDefault and "Default display layout" or "Display layout", target.title)
       panel.close()
     else
       noctalia.notifyError("Couldn't switch to " .. target.title, layouts.errorMessage(result))
     end
   end)
+  if not started then
+    busy = false
+    noctalia.notifyError("Couldn't switch to " .. target.title, "waytorandr could not be started")
+  end
 end
 
 local function row(target, index)
@@ -34,12 +39,19 @@ local function row(target, index)
     ui.label({ text = target.subtitle, color = "on_surface_variant" }),
     ui.spacer({ flexGrow = 1 }),
   }
-  if target.isDefault then
-    table.insert(children, ui.label({ text = "Default", fontSize = 11, color = "on_surface_variant" }))
-  end
   if target.active then
     table.insert(children, ui.label({ text = "Active", fontSize = 11, fontWeight = "semibold", color = "primary" }))
   end
+  table.insert(children, ui.button({
+    glyph = target.isDefault and "star-filled" or "star",
+    variant = "ghost",
+    controlSize = "sm",
+    enabled = not target.isDefault,
+    tooltip = target.isDefault and "Default for this setup" or "Switch to this and make it the default",
+    onClick = function()
+      apply(target, true)
+    end,
+  }))
 
   return ui.row({
     key = target.kind .. ":" .. target.name,
@@ -48,7 +60,7 @@ local function row(target, index)
     height = 42,
     align = "center",
     radius = 8,
-    fill = selected and "primary/0.14" or nil,
+    fill = selected and "primary/0.14" or "#00000000",
     onClick = function()
       apply(target)
     end,
@@ -94,6 +106,7 @@ end
 local function load()
   loading = true
   loadError = nil
+  targets = {}
   render()
   if not noctalia.commandExists("waytorandr") then
     loading = false
@@ -101,7 +114,7 @@ local function load()
     render()
     return
   end
-  noctalia.runAsync({ "waytorandr", "status", "--json" }, function(result)
+  local started = noctalia.runAsync({ "waytorandr", "status", "--json" }, function(result)
     loading = false
     if result.exitCode ~= 0 then
       loadError = layouts.errorMessage(result)
@@ -121,6 +134,11 @@ local function load()
     end
     render()
   end)
+  if not started then
+    loading = false
+    loadError = "waytorandr could not be started"
+    render()
+  end
 end
 
 function onOpen()
@@ -128,7 +146,7 @@ function onOpen()
 end
 
 function onKey(chord, pressed)
-  if not pressed or loading or #targets == 0 then
+  if (pressed ~= true and pressed ~= "true") or loading or #targets == 0 then
     return
   end
   if chord == "up" then
