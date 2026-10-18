@@ -316,6 +316,10 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
     }
 }
 
+/// Selects the next saved profile or built-in preset for the current setup.
+///
+/// Emits the action outcome in the requested format and, after a successful
+/// non-dry-run action, sends a best-effort notification naming the selected layout.
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     const CYCLE_PRESETS: [VirtualPreset; 2] = [VirtualPreset::Horizontal, VirtualPreset::Vertical];
 

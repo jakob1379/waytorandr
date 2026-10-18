@@ -175,6 +175,9 @@ impl TestEnvironment {
         Ok(command.output()?)
     }
 
+    /// Builds a CLI command using the test's config, state, backend, and desktop.
+    ///
+    /// Points the session bus at a nonexistent socket to prevent desktop popups.
     fn base_command(&self) -> Result<Command, Box<dyn Error>> {
         let mut command = Command::new(cli_bin()?);
         command

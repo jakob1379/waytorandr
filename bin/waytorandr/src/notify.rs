@@ -7,10 +7,15 @@ use zbus::zvariant::Value;
 const EXPIRE_TIMEOUT_MS: i32 = 3000;
 const METHOD_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Sends a desktop notification, ignoring delivery errors.
 pub(crate) fn notify(summary: &str, body: &str) {
     let _ = try_notify(summary, body);
 }
 
+/// Sends a transient notification over the session bus with a three-second expiry.
+///
+/// Requests replacement via the synchronous hint and limits the method reply wait
+/// to one second. Returns an error if connecting to the bus or sending fails.
 fn try_notify(summary: &str, body: &str) -> zbus::Result<()> {
     let connection = Builder::session()?.method_timeout(METHOD_TIMEOUT).build()?;
     let hints = HashMap::from([
