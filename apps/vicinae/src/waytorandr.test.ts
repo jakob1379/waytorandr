@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setArgs, targets, type Status } from "./waytorandr.ts";
 
+/** Create a status fixture with current and unrelated setups, applying test overrides last. */
 const status = (overrides: Partial<Status>): Status => ({
   setups: [
     { is_current: false, profiles: [{ name: "elsewhere", is_default: true, is_active: false }] },

@@ -87,6 +87,7 @@ struct StatusView {
     has_saved_profiles: bool,
 }
 
+/// Print current topology and saved profile status as text or JSON, including the detected layout in JSON.
 pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> {
     let view = load_status_view(show_all)?;
 

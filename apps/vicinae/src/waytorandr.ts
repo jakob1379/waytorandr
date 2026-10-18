@@ -26,6 +26,7 @@ const LAYOUTS = [
   { name: "builtin", title: "Built-in", subtitle: "Laptop screen only" },
 ];
 
+/** Build targets for the current setup, giving active profiles precedence over detected layouts. */
 export function targets(status: Status): { profiles: Target[]; layouts: Target[] } {
   const saved = status.setups.find((setup) => setup.is_current)?.profiles ?? [];
   const anyProfileActive = saved.some((profile) => profile.is_active);
@@ -49,10 +50,12 @@ export function targets(status: Status): { profiles: Target[]; layouts: Target[]
   };
 }
 
+/** Build set arguments, explicitly selecting profiles whose names may also be layout names. */
 export function setArgs(target: Target): string[] {
   return target.kind === "profile" ? ["set", "--profile", target.name] : ["set", target.name];
 }
 
+/** Run the CLI and return stdout, rejecting with a readable error if it cannot run or fails. */
 export function run(args: string[]): Promise<string> {
   return new Promise((resolve, reject) =>
     execFile("waytorandr", args, (err, stdout, stderr) => {

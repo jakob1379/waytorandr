@@ -432,6 +432,10 @@ fn topology_has_internal_output(
     })
 }
 
+/// Infer a horizontal, vertical, or mirror preset from enabled, non-ignored, non-virtual outputs.
+///
+/// Vertical stacks may share a left edge or a horizontal center within half a pixel.
+/// Returns `None` for fewer than two such outputs or when no preset is recognized.
 #[must_use]
 pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     let enabled: Vec<_> = topology
@@ -472,6 +476,12 @@ pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     None
 }
 
+/// Detect the layout while excluding ignored and virtual outputs from consideration.
+///
+/// When all remaining outputs are enabled, delegate to [`detect_preset`]. Otherwise,
+/// recognize builtin-only or external-only output selection, using `builtin_output`
+/// as an identity override or falling back to connector and description heuristics.
+/// Returns `None` when no output is enabled or the selection is unrecognized.
 #[must_use]
 pub fn detect_layout(
     topology: &Topology,

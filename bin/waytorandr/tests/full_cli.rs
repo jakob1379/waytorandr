@@ -239,6 +239,7 @@ fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Verify saving, applying, cycling, and default selection, including detected layouts in status JSON.
 fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let save_default_dry_run = env.run_json(["save", "--dry-run", "--json"])?;
     assert_eq!(save_default_dry_run["command"], "save");
@@ -333,6 +334,7 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
 }
 
 #[allow(clippy::too_many_lines)]
+/// Verify virtual presets and their resulting topology, status layout, and CLI help.
 fn exercise_virtual_workflows(
     env: &TestEnvironment,
     supports_native_mirror: bool,

@@ -476,6 +476,7 @@ fn detect_preset_returns_virtual_preset() {
     assert_eq!(detect_preset(&topology), Some(VirtualPreset::Horizontal));
 }
 
+/// Verify centered vertical stacks remain recognizable with mixed widths and pixel rounding.
 #[test]
 fn detect_preset_recognizes_planned_vertical_with_mixed_widths() -> anyhow::Result<()> {
     let topology = Topology {
@@ -495,6 +496,7 @@ fn detect_preset_recognizes_planned_vertical_with_mixed_widths() -> anyhow::Resu
     Ok(())
 }
 
+/// Verify disabling the builtin panel takes precedence over the external screens' geometry.
 #[test]
 fn detect_layout_reports_external_when_only_externals_are_enabled() {
     let mut panel = planner_output_state("eDP-1", 1920, 1080);
@@ -517,6 +519,7 @@ fn detect_layout_reports_external_when_only_externals_are_enabled() {
     );
 }
 
+/// Verify a lone enabled builtin panel is recognized when an external screen is disabled.
 #[test]
 fn detect_layout_reports_builtin_when_only_the_panel_is_enabled() {
     let panel = planner_output_state("eDP-1", 1920, 1080);
@@ -529,6 +532,7 @@ fn detect_layout_reports_builtin_when_only_the_panel_is_enabled() {
     assert_eq!(detect_layout(&topology, None), Some(VirtualPreset::Builtin));
 }
 
+/// Verify fully enabled topologies use geometry to identify the layout.
 #[test]
 fn detect_layout_defers_to_detect_preset_when_every_output_is_enabled() {
     let panel = planner_output_state("eDP-1", 1920, 1080);

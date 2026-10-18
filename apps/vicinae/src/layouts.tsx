@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import { run, setArgs, targets, type Status, type Target } from "./waytorandr.ts";
 
+/** Load the current CLI status once on mount, exposing the result or error message. */
 function useStatus() {
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState<string>();
@@ -25,6 +26,7 @@ function useStatus() {
   return { status, error };
 }
 
+/** Apply a target, showing a confirmation HUD on success or a failure toast. */
 async function apply(target: Target) {
   const toast = await showToast(Toast.Style.Animated, `Switching to ${target.title}`);
   try {
@@ -37,6 +39,7 @@ async function apply(target: Target) {
   }
 }
 
+/** Render a profile or layout with its status tags and switch action. */
 function TargetItem({ target }: { target: Target }) {
   const icon: Image.ImageLike =
     target.kind === "profile"
@@ -62,6 +65,7 @@ function TargetItem({ target }: { target: Target }) {
   );
 }
 
+/** Show saved profiles and layouts, or an error when the CLI status cannot be loaded. */
 export default function Layouts() {
   const { status, error } = useStatus();
   const { profiles, layouts } = status ? targets(status) : { profiles: [], layouts: [] };
