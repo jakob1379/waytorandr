@@ -62,7 +62,7 @@ local function row(target, index)
     height = 42,
     align = "center",
     radius = 8 * radiusScale,
-    fill = selected and "surface_variant" or "surface",
+    fill = selected and "primary/0.18" or "surface",
     onClick = function()
       apply(target)
     end,
@@ -80,7 +80,7 @@ local function section(title, rows)
     gap = 6,
     padding = 12,
     radius = 12 * radiusScale,
-    fill = "surface_variant/0.35",
+    fill = "surface_variant",
     border = "outline/0.5",
     borderWidth = 1,
   }, {
