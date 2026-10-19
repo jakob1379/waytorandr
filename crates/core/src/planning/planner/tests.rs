@@ -547,3 +547,16 @@ fn detect_layout_defers_to_detect_preset_when_every_output_is_enabled() {
         Some(VirtualPreset::Horizontal)
     );
 }
+
+#[test]
+fn detect_preset_recognizes_vertical_stacks_centered_on_logical_width() {
+    let mut scaled = planner_output_state("A", 3840, 2160);
+    scaled.scale = 1.5;
+    let mut plain = planner_output_state("B", 1920, 1080);
+    plain.position = Position::new(320, 1440);
+    let topology = Topology {
+        outputs: HashMap::from([("A".to_string(), scaled), ("B".to_string(), plain)]),
+    };
+
+    assert_eq!(detect_preset(&topology), Some(VirtualPreset::Vertical));
+}

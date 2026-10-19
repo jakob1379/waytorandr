@@ -455,13 +455,20 @@ pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
 
     let same_y = positions.iter().all(|(_, y)| *y == positions[0].1);
     let same_x = positions.iter().all(|(x, _)| *x == positions[0].0);
-    let doubled_centers: Vec<i64> = enabled
-        .iter()
-        .map(|s| 2 * i64::from(s.position.x) + s.mode.map_or(0, |mode| i64::from(mode.width)))
-        .collect();
-    let same_center_x = doubled_centers
-        .iter()
-        .all(|center| (center - doubled_centers[0]).abs() <= 1);
+    let centered_on = |width: &dyn Fn(&OutputState) -> u32| {
+        let doubled_centers: Vec<i64> = enabled
+            .iter()
+            .map(|s| 2 * i64::from(s.position.x) + i64::from(width(s)))
+            .collect();
+        doubled_centers
+            .iter()
+            .all(|center| (center - doubled_centers[0]).abs() <= 1)
+    };
+    let same_center_x = centered_on(&|s| s.mode.map_or(0, |mode| mode.width))
+        || centered_on(&|s| {
+            s.layout_resolution()
+                .map_or(0, |resolution| resolution.width)
+        });
 
     if same_y && !same_x {
         return Some(VirtualPreset::Horizontal);
