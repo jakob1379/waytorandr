@@ -148,7 +148,25 @@ for the full command reference and examples.
 > `waytorandr service run` does not support `--json`.
 > `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
 > `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
-> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured.
+> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, and an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one.
+
+## Vicinae layout switcher
+
+`apps/vicinae` is a [Vicinae](https://vicinae.com) extension built on the `waytorandr` CLI.
+Its *Display Layout* command shows a floating list of your saved profiles and the `horizontal`,
+`vertical`, `mirror`, `external`, and `builtin` layouts, with the current one tagged *Active*.
+Enter applies it through `waytorandr set`. The flake ships it as `vicinae-extension`; with the
+Home Manager Vicinae module:
+
+```nix
+programs.vicinae.extensions = [
+  inputs.waytorandr.packages.${pkgs.stdenv.hostPlatform.system}.vicinae-extension
+];
+```
+
+The extension runs the `waytorandr` CLI, so install waytorandr itself as well (for example
+with the [Home Manager](#home-manager) module, or `home.packages`) and make sure it is on Vicinae's `PATH`.
+Bind it to a key with `vicinae cmd launch @jakob1379/waytorandr:layouts`.
 
 ## Daemon
 

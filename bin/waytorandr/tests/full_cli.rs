@@ -239,6 +239,7 @@ fn assert_initial_state(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Verify saving, applying, cycling, and default selection, including detected layouts in status JSON.
 fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn Error>> {
     let save_default_dry_run = env.run_json(["save", "--dry-run", "--json"])?;
     assert_eq!(save_default_dry_run["command"], "save");
@@ -298,10 +299,12 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
     assert_eq!(cycled_horizontal["command"], "cycle");
     assert_eq!(cycled_horizontal["target"], "horizontal");
     assert_eq!(cycled_horizontal["target_type"], "virtual");
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "horizontal");
 
     let cycled_vertical = env.run_json(["cycle", "--json"])?;
     assert_eq!(cycled_vertical["target"], "vertical");
     assert_eq!(cycled_vertical["target_type"], "virtual");
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "vertical");
 
     let cycled = env.run_json(["cycle", "--json"])?;
     assert_eq!(cycled["command"], "cycle");
@@ -331,6 +334,7 @@ fn exercise_save_and_set_workflows(env: &TestEnvironment) -> Result<(), Box<dyn 
 }
 
 #[allow(clippy::too_many_lines)]
+/// Verify virtual presets and their resulting topology, status layout, and CLI help.
 fn exercise_virtual_workflows(
     env: &TestEnvironment,
     supports_native_mirror: bool,
@@ -476,6 +480,10 @@ fn exercise_virtual_workflows(
     let topology = env.backend_topology()?;
     assert!(topology.outputs["DP-1"].enabled);
     assert!(!topology.outputs["eDP-1"].enabled);
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "external");
+
+    env.run_json(["set", "builtin", "--json"])?;
+    assert_eq!(env.run_json(["status", "--json"])?["layout"], "builtin");
 
     let top_level_help = env.run_text(["--help"])?;
     let set_help = env.run_text(["set", "--help"])?;

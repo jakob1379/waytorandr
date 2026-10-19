@@ -33,7 +33,7 @@ pub use model::{
     OutputState, Position, Topology, Transform, VirtualPreset,
 };
 pub use planning::{
-    canonicalize_profile, detect_preset, normalize_profile_with_known_outputs,
+    canonicalize_profile, detect_layout, detect_preset, normalize_profile_with_known_outputs,
     normalize_topology_with_known_outputs, LayoutPlan, MatchResult, MatchedOutputBinding, Matcher,
     Planner,
 };

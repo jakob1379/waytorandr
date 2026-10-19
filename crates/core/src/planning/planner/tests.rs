@@ -475,3 +475,88 @@ fn detect_preset_returns_virtual_preset() {
 
     assert_eq!(detect_preset(&topology), Some(VirtualPreset::Horizontal));
 }
+
+/// Verify centered vertical stacks remain recognizable with mixed widths and pixel rounding.
+#[test]
+fn detect_preset_recognizes_planned_vertical_with_mixed_widths() -> anyhow::Result<()> {
+    let topology = Topology {
+        outputs: HashMap::from([
+            ("A".to_string(), planner_output_state("A", 3440, 1440)),
+            ("B".to_string(), planner_output_state("B", 2561, 1440)),
+            ("C".to_string(), planner_output_state("C", 1920, 1080)),
+        ]),
+    };
+
+    let plan = Planner::plan_from_preset(VirtualPreset::Vertical, &topology, None, None)?;
+    let planned = Topology {
+        outputs: plan.outputs,
+    };
+
+    assert_eq!(detect_preset(&planned), Some(VirtualPreset::Vertical));
+    Ok(())
+}
+
+/// Verify disabling the builtin panel takes precedence over the external screens' geometry.
+#[test]
+fn detect_layout_reports_external_when_only_externals_are_enabled() {
+    let mut panel = planner_output_state("eDP-1", 1920, 1080);
+    panel.enabled = false;
+    let left = planner_output_state("DP-1", 2560, 1440);
+    let mut right = planner_output_state("DP-2", 2560, 1440);
+    right.position = Position::new(2560, 0);
+    let topology = Topology {
+        outputs: HashMap::from([
+            ("eDP-1".to_string(), panel),
+            ("DP-1".to_string(), left),
+            ("DP-2".to_string(), right),
+        ]),
+    };
+
+    assert_eq!(detect_preset(&topology), Some(VirtualPreset::Horizontal));
+    assert_eq!(
+        detect_layout(&topology, None),
+        Some(VirtualPreset::External)
+    );
+}
+
+/// Verify a lone enabled builtin panel is recognized when an external screen is disabled.
+#[test]
+fn detect_layout_reports_builtin_when_only_the_panel_is_enabled() {
+    let panel = planner_output_state("eDP-1", 1920, 1080);
+    let mut external = planner_output_state("DP-1", 2560, 1440);
+    external.enabled = false;
+    let topology = Topology {
+        outputs: HashMap::from([("eDP-1".to_string(), panel), ("DP-1".to_string(), external)]),
+    };
+
+    assert_eq!(detect_layout(&topology, None), Some(VirtualPreset::Builtin));
+}
+
+/// Verify fully enabled topologies use geometry to identify the layout.
+#[test]
+fn detect_layout_defers_to_detect_preset_when_every_output_is_enabled() {
+    let panel = planner_output_state("eDP-1", 1920, 1080);
+    let mut external = planner_output_state("DP-1", 2560, 1440);
+    external.position = Position::new(1920, 0);
+    let topology = Topology {
+        outputs: HashMap::from([("eDP-1".to_string(), panel), ("DP-1".to_string(), external)]),
+    };
+
+    assert_eq!(
+        detect_layout(&topology, None),
+        Some(VirtualPreset::Horizontal)
+    );
+}
+
+#[test]
+fn detect_preset_recognizes_vertical_stacks_centered_on_logical_width() {
+    let mut scaled = planner_output_state("A", 3840, 2160);
+    scaled.scale = 1.5;
+    let mut plain = planner_output_state("B", 1920, 1080);
+    plain.position = Position::new(320, 1440);
+    let topology = Topology {
+        outputs: HashMap::from([("A".to_string(), scaled), ("B".to_string(), plain)]),
+    };
+
+    assert_eq!(detect_preset(&topology), Some(VirtualPreset::Vertical));
+}

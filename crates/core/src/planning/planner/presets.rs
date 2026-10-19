@@ -432,6 +432,10 @@ fn topology_has_internal_output(
     })
 }
 
+/// Infer a horizontal, vertical, or mirror preset from enabled, non-ignored, non-virtual outputs.
+///
+/// Vertical stacks may share a left edge or a horizontal center within half a pixel.
+/// Returns `None` for fewer than two such outputs or when no preset is recognized.
 #[must_use]
 pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
     let enabled: Vec<_> = topology
@@ -451,17 +455,68 @@ pub fn detect_preset(topology: &Topology) -> Option<VirtualPreset> {
 
     let same_y = positions.iter().all(|(_, y)| *y == positions[0].1);
     let same_x = positions.iter().all(|(x, _)| *x == positions[0].0);
+    let centered_on = |width: &dyn Fn(&OutputState) -> u32| {
+        let doubled_centers: Vec<i64> = enabled
+            .iter()
+            .map(|s| 2 * i64::from(s.position.x) + i64::from(width(s)))
+            .collect();
+        doubled_centers
+            .iter()
+            .all(|center| (center - doubled_centers[0]).abs() <= 1)
+    };
+    let same_center_x = centered_on(&|s| s.mode.map_or(0, |mode| mode.width))
+        || centered_on(&|s| {
+            s.layout_resolution()
+                .map_or(0, |resolution| resolution.width)
+        });
 
     if same_y && !same_x {
         return Some(VirtualPreset::Horizontal);
     }
-    if same_x && !same_y {
+    if (same_x || same_center_x) && !same_y {
         return Some(VirtualPreset::Vertical);
     }
     if enabled.iter().any(|state| state.mirror_target.is_some()) {
         return Some(VirtualPreset::Mirror);
     }
 
+    None
+}
+
+/// Detect the layout while excluding ignored and virtual outputs from consideration.
+///
+/// When all remaining outputs are enabled, delegate to [`detect_preset`]. Otherwise,
+/// recognize builtin-only or external-only output selection, using `builtin_output`
+/// as an identity override or falling back to connector and description heuristics.
+/// Returns `None` when no output is enabled or the selection is unrecognized.
+#[must_use]
+pub fn detect_layout(
+    topology: &Topology,
+    builtin_output: Option<&OutputIdentity>,
+) -> Option<VirtualPreset> {
+    let real: Vec<_> = topology
+        .outputs
+        .values()
+        .filter(|s| !s.identity.is_ignored && !s.identity.is_virtual)
+        .collect();
+    if real.iter().all(|s| s.enabled) {
+        return detect_preset(topology);
+    }
+    if !real.iter().any(|s| s.enabled) {
+        return None;
+    }
+    if real
+        .iter()
+        .all(|s| s.enabled == is_internal_output(s, builtin_output))
+    {
+        return Some(VirtualPreset::Builtin);
+    }
+    if real
+        .iter()
+        .all(|s| s.enabled != is_internal_output(s, builtin_output))
+    {
+        return Some(VirtualPreset::External);
+    }
     None
 }
 

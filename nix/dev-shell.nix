@@ -21,6 +21,7 @@ pkgs.mkShell {
     export SCCACHE_BASEDIR="$PWD"
     if [ -z "$GITHUB_ACTIONS" ]; then
       export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+      export CARGO_INCREMENTAL=0
     fi
     ${extraShellHook}
   '';
