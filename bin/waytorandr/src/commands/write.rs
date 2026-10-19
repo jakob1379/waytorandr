@@ -320,7 +320,8 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
 ///
 /// Emits the action outcome in the requested format and, after a successful
 /// non-dry-run action, sends a best-effort notification naming the selected layout
-/// unless `settings.notifications.enabled` is false.
+/// unless `settings.notifications.enabled` is false. A settings file that cannot be
+/// re-read at that point skips the notification instead of failing the command.
 pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
     const CYCLE_PRESETS: [VirtualPreset; 2] = [VirtualPreset::Horizontal, VirtualPreset::Vertical];
 
@@ -378,13 +379,16 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         outcome
     };
     emit_action_outcome("cycle", None, &outcome, output_mode)?;
-    let notifications = store.settings()?.notifications;
-    if !dry_run && notifications.enabled {
-        notify(
-            &format!("Display layout: {}", targets[next_idx]),
-            &format!("{} of {}", next_idx + 1, targets.len()),
-            notifications.timeout_ms,
-        );
+    if !dry_run {
+        if let Ok(settings) = store.settings() {
+            if settings.notifications.enabled {
+                notify(
+                    &format!("Display layout: {}", targets[next_idx]),
+                    &format!("{} of {}", next_idx + 1, targets.len()),
+                    settings.notifications.timeout_ms,
+                );
+            }
+        }
     }
     Ok(())
 }
