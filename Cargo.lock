@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr-backend-loader"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr-gnome"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "waytorandr-core",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr-kscreen"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandr-wlroots"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "tracing",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "waytorandrd"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
