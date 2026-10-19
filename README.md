@@ -164,6 +164,8 @@ programs.vicinae.extensions = [
 ];
 ```
 
+The extension runs the `waytorandr` CLI, so install waytorandr itself as well (for example
+with the [Home Manager](#home-manager) module, or `home.packages`) and make sure it is on Vicinae's `PATH`.
 Bind it to a key with `vicinae cmd launch @jakob1379/waytorandr:layouts`.
 
 ## Daemon
