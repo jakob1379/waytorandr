@@ -168,6 +168,27 @@ The extension runs the `waytorandr` CLI, so install waytorandr itself as well (f
 with the [Home Manager](#home-manager) module, or `home.packages`) and make sure it is on Vicinae's `PATH`.
 Bind it to a key with `vicinae cmd launch @jakob1379/waytorandr:layouts`.
 
+## Noctalia layout switcher
+
+`apps/noctalia` is a [Noctalia](https://noctalia.dev) v5 plugin built on the `waytorandr` CLI.
+It adds a *Display Layout* panel, placed like Noctalia's built-in panels (attached to the bar,
+near the widget that opened it; override it in the plugin's settings), listing your saved profiles and the
+`horizontal`, `vertical`, `mirror`, `external`, and `builtin` layouts, with the current one
+tagged *Active*. Up/Down and Enter, or a click, apply it through `waytorandr set`. Each row's star
+switches to that layout and makes it the setup default (`set --profile <name> --default`, or
+`set <layout> --save --default` for virtual layouts). A bar widget opens the same panel. The flake ships it as `noctalia-plugin`; with Home Manager:
+
+```nix
+xdg.dataFile."noctalia/plugins/waytorandr".source =
+  "${inputs.waytorandr.packages.${pkgs.stdenv.hostPlatform.system}.noctalia-plugin}/share/noctalia/plugins/waytorandr";
+```
+
+The plugin runs the `waytorandr` CLI, so install waytorandr itself as well (for example with the
+[Home Manager](#home-manager) module, or `home.packages`) and make sure it is on Noctalia's `PATH`.
+Then enable it with `noctalia msg plugins enable jakob1379/waytorandr`, add a bar widget with
+`type = "jakob1379/waytorandr:widget"`, and bind a key to
+`noctalia msg panel-toggle jakob1379/waytorandr:layouts`.
+
 ## Daemon
 
 `waytorandrd` watches for physical display changes such as dock, undock, and

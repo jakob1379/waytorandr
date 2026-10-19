@@ -58,5 +58,6 @@ in {
     // {
       default = packages.waytorandr;
       vicinae-extension = import ./vicinae-extension.nix {inherit pkgs workspace;};
+      noctalia-plugin = import ./noctalia-plugin.nix {inherit pkgs;};
     };
 }

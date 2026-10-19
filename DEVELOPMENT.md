@@ -12,7 +12,7 @@
 - Enter the dev shell to install Git hooks automatically: `nix develop`
 - Run all autofixable hooks on demand: `nix fmt`
 - Local gate (native cargo build, tests, help smoke test): `nix develop -c just check`
-- CI gate (`just check` plus the `nix build` package smoke test and the Vicinae extension build): `nix develop -c just ci`
+- CI gate (`just check` plus the `nix build` package smoke test and the Vicinae and Noctalia plugin builds): `nix develop -c just ci`
 - Format everything: `nix develop -c just fmt`
 - Lint everything: `nix develop -c just lint`
 - Format: `nix develop -c cargo fmt --all`
@@ -46,6 +46,15 @@ The full CLI integration test is debug-only. It uses a fake backend path compile
 - Test and typecheck: `nix develop -c npm test` and `nix develop -c npm run typecheck` (typecheck needs the types `npm run build` generates)
 - Load it into a running Vicinae with live reload: `nix develop -c npm run dev`
 - Build it as Nix users get it, with tests and typecheck in the check phase: `nix build .#vicinae-extension` (also run by `just build-release`)
+
+## Noctalia Plugin
+
+`apps/noctalia` is a Noctalia v5 plugin that drives the `waytorandr` CLI. `luau` comes from the dev shell.
+
+- Test the pure logic: `cd apps/noctalia && nix develop -c luau layouts.test.luau`
+- Lint the manifest offline: `noctalia plugins lint apps/noctalia`
+- Load it live with hot reload: `ln -s "$PWD/apps/noctalia" ~/.local/share/noctalia/plugins/waytorandr`, then `noctalia msg plugins enable jakob1379/waytorandr` and `noctalia msg panel-toggle jakob1379/waytorandr:layouts`
+- Build it as Nix users get it, with the tests in the check phase: `nix build .#noctalia-plugin` (also run by `just build-release`)
 
 ## Daemon Timing Diagnostics
 

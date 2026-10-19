@@ -1,0 +1,25 @@
+id = "jakob1379/waytorandr"
+name = "Display Layout"
+version = "0.1.0"
+plugin_api = 24
+author = "jakob1379"
+license = "MIT"
+icon = "device-desktop"
+description = "Switch between saved waytorandr profiles and virtual display layouts."
+tags = ["display", "monitor", "waytorandr"]
+dependencies = ["waytorandr"]
+
+[[panel]]
+id = "layouts"
+entry = "panel.luau"
+width = 560
+height = 540
+placement = "attached"
+position = "auto"
+open_near_click = true
+keyboard_focus = "exclusive"
+capture_keys = ["up", "down", "return"]
+
+[[widget]]
+id = "widget"
+entry = "widget.luau"
