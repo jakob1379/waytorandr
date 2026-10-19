@@ -183,6 +183,8 @@ xdg.dataFile."noctalia/plugins/waytorandr".source =
   "${inputs.waytorandr.packages.${pkgs.stdenv.hostPlatform.system}.noctalia-plugin}/share/noctalia/plugins/waytorandr";
 ```
 
+The plugin runs the `waytorandr` CLI, so install waytorandr itself as well (for example with the
+[Home Manager](#home-manager) module, or `home.packages`) and make sure it is on Noctalia's `PATH`.
 Then enable it with `noctalia msg plugins enable jakob1379/waytorandr`, add a bar widget with
 `type = "jakob1379/waytorandr:widget"`, and bind a key to
 `noctalia msg panel-toggle jakob1379/waytorandr:layouts`.
