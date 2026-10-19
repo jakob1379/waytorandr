@@ -175,6 +175,9 @@ impl TestEnvironment {
         Ok(command.output()?)
     }
 
+    /// Builds a CLI command using the test's config, state, backend, and desktop.
+    ///
+    /// Points the session bus at a nonexistent socket to prevent desktop popups.
     fn base_command(&self) -> Result<Command, Box<dyn Error>> {
         let mut command = Command::new(cli_bin()?);
         command
@@ -183,6 +186,7 @@ impl TestEnvironment {
             .env("XDG_STATE_HOME", &self.state_home)
             .env(TEST_BACKEND_STATE_ENV, &self.backend_state_path)
             .env(TEST_BACKEND_NAME_ENV, &self.backend_name)
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
             .env_remove("XDG_CURRENT_DESKTOP")
             .env_remove("XDG_SESSION_DESKTOP")
             .env_remove("DESKTOP_SESSION");

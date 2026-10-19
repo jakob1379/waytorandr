@@ -4,6 +4,7 @@
 mod cli;
 mod commands;
 mod completion;
+mod notify;
 mod preset;
 #[cfg(test)]
 mod test_support;

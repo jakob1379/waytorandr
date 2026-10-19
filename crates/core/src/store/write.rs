@@ -165,4 +165,33 @@ mod tests {
         assert_eq!(settings.setup_default_profile("setup-a"), None);
         assert_eq!(settings.setup_default_profile("setup-b"), Some("sofa"));
     }
+
+    #[test]
+    fn notification_settings_default_and_survive_store_writes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = store_in(dir.path());
+        let stored = serde_json::json!({
+            "profiles": [
+                {"name": "desk", "priority": 0, "match_rules": [], "layout": {}}
+            ],
+            "settings": {"notifications": {"enabled": false}}
+        });
+        std::fs::write(&store.path, format!("{stored}\n")).expect("write profiles");
+
+        let settings = store.load_profiles_file().expect("profiles").settings;
+        assert!(!settings.notifications.enabled);
+        assert_eq!(settings.notifications.timeout_ms, 3000);
+
+        assert!(store.remove_unique("desk").expect("remove profile"));
+        let written = std::fs::read_to_string(&store.path).expect("read profiles");
+        assert!(written.contains("\"enabled\": false"), "{written}");
+
+        assert_eq!(
+            ProfilesSettings::default().notifications,
+            crate::store::NotificationSettings::default()
+        );
+        assert!(!serde_json::to_string(&ProfilesSettings::default())
+            .expect("serialize")
+            .contains("notifications"));
+    }
 }

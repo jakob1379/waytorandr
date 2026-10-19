@@ -40,5 +40,6 @@ pub use planning::{
 pub use profile::{validate_profile_name, Hook, Hooks, OutputConfig, OutputMatcher, Profile};
 pub use state::{ReadOnlyStateStore, State, StateReader, StateStore};
 pub use store::{
-    ProfileQueryContext, ProfileStore, ProfilesSettings, ReadOnlyProfileStore, StoredProfile,
+    NotificationSettings, ProfileQueryContext, ProfileStore, ProfilesSettings,
+    ReadOnlyProfileStore, StoredProfile,
 };
