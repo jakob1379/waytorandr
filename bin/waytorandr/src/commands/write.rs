@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Result};
 
 use super::action::{
     emit_action_outcome, emit_remove_outcome, emit_save_outcome, execute_profile_action,
-    execute_virtual_action, persist_virtual_action_outcome, set_default_profile_for_fingerprint,
-    DefaultScope, RemoveOutcome, SaveOutcome,
+    execute_virtual_action, known_setup_fingerprint, persist_virtual_action_outcome,
+    set_default_profile_for_fingerprint, DefaultScope, RemoveOutcome, SaveOutcome,
 };
 use super::shared::load_current_topology;
 use super::OutputMode;
@@ -247,7 +247,10 @@ fn handle_virtual_set(
         outcome.set_default_assignment(preset.as_str(), DefaultScope::Setup);
         if let (Some(store), Some(topology)) = (profile_store.as_ref(), outcome.applied_topology())
         {
-            store.set_setup_default_layout(&topology.setup_fingerprint(), preset)?;
+            store.set_setup_default_layout(
+                &known_setup_fingerprint(&state_store, topology)?,
+                preset,
+            )?;
         }
     }
 

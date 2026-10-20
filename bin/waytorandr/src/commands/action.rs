@@ -12,6 +12,7 @@ use waytorandr_core::Backend;
 use waytorandr_core::Profile;
 use waytorandr_core::ProfileStore;
 use waytorandr_core::StateStore;
+use waytorandr_core::{normalize_topology_with_known_outputs, Topology};
 use waytorandr_core::{BackendKind, OutputIdentity, VirtualPreset};
 
 pub(super) fn execute_virtual_action(
@@ -84,7 +85,7 @@ pub(super) fn persist_virtual_action_outcome(
     if let Some(saved_profile_name) = saved_profile_name {
         let profile_store =
             profile_store.ok_or_else(|| anyhow!("virtual save requested without profile store"))?;
-        let setup_fingerprint = applied_topology.setup_fingerprint();
+        let setup_fingerprint = known_setup_fingerprint(state_store, applied_topology)?;
         let profile = workflow::profile_from_topology(saved_profile_name, applied_topology);
 
         profile_store.save(&profile, state_store)?;
@@ -151,7 +152,7 @@ pub(super) fn execute_profile_action(
             set_default_profile_for_fingerprint(
                 profile_store,
                 &profile.name,
-                &applied_topology.setup_fingerprint(),
+                &known_setup_fingerprint(state_store, applied_topology)?,
             )?;
         }
     }
@@ -163,6 +164,16 @@ pub(super) fn execute_profile_action(
         backend_kind,
         execution,
     )
+}
+
+/// Fingerprint a backend-reported topology the way `status` and selection do, so outputs that
+/// report less identity while disabled still key the same setup.
+pub(super) fn known_setup_fingerprint(
+    state_store: &StateStore,
+    topology: &Topology,
+) -> Result<String> {
+    let state = state_store.load_state()?.unwrap_or_default();
+    Ok(normalize_topology_with_known_outputs(topology, &state.known_outputs).setup_fingerprint())
 }
 
 pub(super) fn set_default_profile_for_fingerprint(
