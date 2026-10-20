@@ -10,7 +10,7 @@ import {
   type Image,
 } from "@vicinae/api";
 import { useEffect, useState } from "react";
-import { run, setArgs, targets, type Status, type Target } from "./waytorandr.ts";
+import { defaultArgs, run, setArgs, targets, type Status, type Target } from "./waytorandr.ts";
 
 /** Load the current CLI status once on mount, exposing the result or error message. */
 function useStatus() {
@@ -26,20 +26,20 @@ function useStatus() {
   return { status, error };
 }
 
-/** Apply a target, showing a confirmation HUD on success or a failure toast. */
-async function apply(target: Target) {
+/** Apply a target, optionally making it the setup default, showing a confirmation HUD or a failure toast. */
+async function apply(target: Target, makeDefault = false) {
   const toast = await showToast(Toast.Style.Animated, `Switching to ${target.title}`);
   try {
-    await run(setArgs(target));
-    await showHUD(`Display layout: ${target.title}`);
+    await run(makeDefault ? defaultArgs(target) : setArgs(target));
+    await showHUD(`${makeDefault ? "Default display layout" : "Display layout"}: ${target.title}`);
   } catch (err) {
     toast.style = Toast.Style.Failure;
-    toast.title = `Couldn't switch to ${target.title}`;
+    toast.title = makeDefault ? `Couldn't make ${target.title} the default` : `Couldn't switch to ${target.title}`;
     toast.message = (err as Error).message;
   }
 }
 
-/** Render a profile or layout with its status tags and switch action. */
+/** Render a profile or layout with its status tags, switch and make-default actions. */
 function TargetItem({ target }: { target: Target }) {
   const icon: Image.ImageLike =
     target.kind === "profile"
@@ -59,6 +59,14 @@ function TargetItem({ target }: { target: Target }) {
       actions={
         <ActionPanel>
           <Action title={`Switch to ${target.title}`} icon={Icon.Monitor} onAction={() => apply(target)} />
+          {!target.isDefault && (
+            <Action
+              title="Switch and Make Default"
+              icon={Icon.Star}
+              shortcut={{ modifiers: ["ctrl"], key: "d" }}
+              onAction={() => apply(target, true)}
+            />
+          )}
         </ActionPanel>
       }
     />
