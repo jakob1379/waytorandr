@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Result};
 
 use super::action::{
     emit_action_outcome, emit_remove_outcome, emit_save_outcome, execute_profile_action,
-    execute_virtual_action, persist_virtual_action_outcome, set_default_profile_for_fingerprint,
-    DefaultScope, RemoveOutcome, SaveOutcome,
+    execute_virtual_action, known_setup_fingerprint, persist_virtual_action_outcome,
+    set_default_profile_for_fingerprint, DefaultScope, RemoveOutcome, SaveOutcome,
 };
 use super::shared::load_current_topology;
 use super::OutputMode;
@@ -17,7 +17,7 @@ use waytorandr_core::LayoutPlan;
 use waytorandr_core::Profile;
 use waytorandr_core::ProfileStore;
 use waytorandr_core::Topology;
-use waytorandr_core::{ProfileQueryContext, StateStore, VirtualPreset};
+use waytorandr_core::{ProfileQueryContext, State, StateStore, VirtualPreset};
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
 const CUSTOM_SAVED_PROFILE_NAME: &str = "custom";
@@ -81,7 +81,7 @@ pub(super) fn cmd_save(
         None => detect_preset(&topology).map_or(CUSTOM_SAVED_PROFILE_NAME, VirtualPreset::as_str),
     };
     let make_default = make_default
-        || is_only_profile_for_setup(name, &topology.setup_fingerprint(), &state_store)?;
+        || is_implicit_default_for_setup(name, &topology.setup_fingerprint(), &state_store)?;
 
     let profile = workflow::profile_from_topology(name, &topology);
 
@@ -119,12 +119,20 @@ pub(super) fn cmd_save(
     emit_save_outcome(&outcome, output_mode)
 }
 
-fn is_only_profile_for_setup(
+fn is_implicit_default_for_setup(
     name: &str,
     setup_fingerprint: &str,
     state_store: &StateStore,
 ) -> Result<bool> {
-    Ok(ProfileStore::open_read_only()?
+    let store = ProfileStore::open_read_only()?;
+    if store
+        .settings()?
+        .setup_default_layout(setup_fingerprint)
+        .is_some()
+    {
+        return Ok(false);
+    }
+    Ok(store
         .profiles_for_setup(setup_fingerprint, &ProfileQueryContext::load(state_store)?)?
         .iter()
         .all(|profile| profile.name == name))
@@ -201,27 +209,31 @@ fn handle_virtual_set(
     } = options;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
-    let saved_profile_name = if save {
-        Some(preset.as_str())
-    } else {
-        make_default.then_some(DEFAULT_SAVED_PROFILE_NAME)
-    };
+    let saved_profile_name = save.then_some(preset.as_str());
+    let default_layout = make_default && !save;
     let recorded_profile_name = saved_profile_name.unwrap_or(preset.as_str());
-    let profile_store = if saved_profile_name.is_some() && !dry_run {
+    let profile_store = if (save || make_default) && !dry_run {
         Some(ProfileStore::bootstrap()?)
     } else {
         None
     };
     let assign_default = match saved_profile_name {
-        Some(name) if !make_default => is_only_profile_for_setup(
+        Some(name) if !make_default => is_implicit_default_for_setup(
             name,
             &load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint(),
             &state_store,
         )?,
         _ => make_default,
     };
-    let mut outcome =
-        execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
+    let settings = ProfileStore::open_read_only()?.settings()?;
+    let mut outcome = execute_virtual_action(
+        backend.as_ref(),
+        &state_store,
+        preset,
+        dry_run,
+        settings.builtin_output.as_ref(),
+        force,
+    )?;
 
     persist_virtual_action_outcome(
         &state_store,
@@ -231,6 +243,16 @@ fn handle_virtual_set(
         saved_profile_name,
         assign_default,
     )?;
+    if default_layout {
+        outcome.set_default_assignment(preset.as_str(), DefaultScope::Setup);
+        if let (Some(store), Some(topology)) = (profile_store.as_ref(), outcome.applied_topology())
+        {
+            store.set_setup_default_layout(
+                &known_setup_fingerprint(&state_store, topology)?,
+                preset,
+            )?;
+        }
+    }
 
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
@@ -271,7 +293,34 @@ fn apply_auto_profile_selection(dry_run: bool, force: bool, output_mode: OutputM
     let query_context = ProfileQueryContext::load(&state_store)?;
     let profiles = store.profiles(&query_context)?;
     let settings = store.settings()?;
-    let profile = workflow::select_profile_for_topology(&topology, &profiles, &settings)
+    let decision = workflow::select_profile_application_target(
+        &topology,
+        &profiles,
+        &settings,
+        &State::default(),
+    );
+    if let workflow::ProfileSelectionDecision::SetupDefaultLayout(preset) = decision {
+        let mut outcome = execute_virtual_action(
+            backend.as_ref(),
+            &state_store,
+            preset,
+            dry_run,
+            settings.builtin_output.as_ref(),
+            force,
+        )?;
+        persist_virtual_action_outcome(
+            &state_store,
+            None,
+            &mut outcome,
+            preset.as_str(),
+            None,
+            false,
+        )?;
+        return emit_action_outcome("set", Some("auto"), &outcome, output_mode);
+    }
+    let profile = decision
+        .selected_profile()
+        .cloned()
         .ok_or_else(|| anyhow!("no matching profile configured"))?;
 
     let outcome = execute_profile_action(
@@ -297,15 +346,26 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
     let exists = store
         .get_for_setup(name, &setup_fingerprint, &query_context)?
         .is_some();
+    let clears_default_layout = !exists
+        && store
+            .settings()?
+            .setup_default_layout(&setup_fingerprint)
+            .is_some_and(|preset| preset.as_str() == name);
 
     if dry_run {
-        let outcome = RemoveOutcome::dry_run(name, exists);
+        let outcome = RemoveOutcome::dry_run(name, exists || clears_default_layout)
+            .with_default_layout(clears_default_layout);
         return emit_remove_outcome(&outcome, output_mode);
     }
 
-    let removed = store.remove_for_setup(name, &setup_fingerprint, &state_store)?;
+    let removed = if clears_default_layout {
+        store.clear_setup_default_layout(&setup_fingerprint)?;
+        true
+    } else {
+        store.remove_for_setup(name, &setup_fingerprint, &state_store)?
+    };
     let missing_profile_error = || anyhow!("profile '{name}' not found for the current setup");
-    let outcome = RemoveOutcome::removed(name, removed);
+    let outcome = RemoveOutcome::removed(name, removed).with_default_layout(clears_default_layout);
 
     emit_remove_outcome(&outcome, output_mode)?;
 
@@ -366,8 +426,14 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         )?
     } else {
         let preset = presets[next_idx - profiles.len()];
-        let mut outcome =
-            execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, false)?;
+        let mut outcome = execute_virtual_action(
+            backend.as_ref(),
+            &state_store,
+            preset,
+            dry_run,
+            store.settings()?.builtin_output.as_ref(),
+            false,
+        )?;
         persist_virtual_action_outcome(
             &state_store,
             None,

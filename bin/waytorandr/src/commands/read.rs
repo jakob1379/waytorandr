@@ -34,6 +34,8 @@ struct JsonStatusResponse {
     profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     layout: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_layout: Option<&'static str>,
     show_all: bool,
     has_saved_profiles: bool,
     topology_fingerprint: String,
@@ -83,6 +85,7 @@ struct StatusView {
     topology: Topology,
     setup_name: Option<String>,
     builtin_output: Option<OutputIdentity>,
+    default_layout: Option<VirtualPreset>,
     list: ListView,
     has_saved_profiles: bool,
 }
@@ -97,6 +100,7 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             profile: view.profile.clone(),
             layout: detect_layout(&view.topology, view.builtin_output.as_ref())
                 .map(VirtualPreset::as_str),
+            default_layout: view.default_layout.map(VirtualPreset::as_str),
             show_all: view.list.show_all,
             has_saved_profiles: view.has_saved_profiles,
             topology_fingerprint: view.topology.fingerprint(),
@@ -135,6 +139,13 @@ pub(super) fn cmd_status(show_all: bool, output_mode: OutputMode) -> Result<()> 
             "{}: {}",
             key("Builtin display override"),
             value(builtin_output.primary_key())
+        );
+    }
+    if let Some(default_layout) = view.default_layout {
+        println!(
+            "{}: {}",
+            key("Default layout"),
+            value(default_layout.as_str())
         );
     }
     print_topology("Detected outputs:", &view.topology);
@@ -196,6 +207,7 @@ fn build_status_view(
         topology,
         setup_name: current_setup_name,
         builtin_output: settings.builtin_output.clone(),
+        default_layout: settings.setup_default_layout(&current_setup),
         list,
         has_saved_profiles,
     })

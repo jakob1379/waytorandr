@@ -99,6 +99,10 @@ impl ProfileStore {
                     .settings
                     .setup_defaults
                     .contains_key(setup_fingerprint)
+                    && !stored
+                        .settings
+                        .setup_default_layouts
+                        .contains_key(setup_fingerprint)
                 {
                     stored
                         .settings

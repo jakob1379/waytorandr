@@ -102,7 +102,7 @@ mod tests {
 
         assert_eq!(
             default_assignment_description(&outcome).as_deref(),
-            Some("'docked' as the default profile for this setup")
+            Some("'docked' as the default for this setup")
         );
     }
 

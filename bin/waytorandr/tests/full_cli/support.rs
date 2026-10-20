@@ -56,6 +56,17 @@ impl TestEnvironment {
         Ok(())
     }
 
+    pub(crate) fn write_settings(&self, settings: &Value) -> Result<(), Box<dyn Error>> {
+        let dir = self.config_home.join("waytorandr");
+        std::fs::create_dir_all(&dir)?;
+        let content = serde_json::json!({ "settings": settings });
+        std::fs::write(
+            dir.join("waytorandr.json"),
+            format!("{}\n", serde_json::to_string_pretty(&content)?),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn backend_topology(&self) -> Result<Topology, Box<dyn Error>> {
         let content = std::fs::read_to_string(&self.backend_state_path)?;
         Ok(serde_json::from_str::<PersistedBackendState>(&content)?.topology)

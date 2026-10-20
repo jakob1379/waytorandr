@@ -1,6 +1,6 @@
 use super::ProfileStore;
 use crate::error::{CoreError, CoreResult};
-use crate::model::OutputIdentity;
+use crate::model::{OutputIdentity, VirtualPreset};
 use crate::planning::canonicalize_profile;
 use crate::profile::Profile;
 use crate::state::StateStore;
@@ -20,6 +20,37 @@ impl ProfileStore {
             stored
                 .settings
                 .set_setup_default_profile(setup_fingerprint, profile_name);
+            Ok(())
+        })
+    }
+
+    /// Sets a virtual layout as the default for a setup fingerprint, replacing any default profile.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read or written.
+    pub fn set_setup_default_layout(
+        &self,
+        setup_fingerprint: &str,
+        preset: VirtualPreset,
+    ) -> CoreResult<()> {
+        self.update_profiles_file(|stored| {
+            stored
+                .settings
+                .set_setup_default_layout(setup_fingerprint, preset);
+            Ok(())
+        })
+    }
+
+    /// Clears the virtual layout default for a setup fingerprint.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read or written.
+    pub fn clear_setup_default_layout(&self, setup_fingerprint: &str) -> CoreResult<()> {
+        self.update_profiles_file(|stored| {
+            stored
+                .settings
+                .setup_default_layouts
+                .remove(setup_fingerprint);
             Ok(())
         })
     }

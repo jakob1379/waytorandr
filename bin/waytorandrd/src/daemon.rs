@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 
 use waytorandr_core::workflow;
-use waytorandr_core::LayoutPlan;
 use waytorandr_core::ProfileStore;
 use waytorandr_core::{Backend, ConfigFailureKind};
 use waytorandr_core::{BackendKind, OutputState, Topology};
 use waytorandr_core::{Hooks, Profile};
+use waytorandr_core::{LayoutPlan, Planner};
 use waytorandr_core::{ProfileQueryContext, StateStore};
 
 mod persistence;
@@ -250,6 +250,32 @@ fn maybe_apply_matching_profile(
                 no_hooks,
             )
         }
+        workflow::ProfileSelectionDecision::SetupDefaultLayout(preset) => {
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(selection_start),
+                setup_fingerprint = %setup_fingerprint,
+                layout = %preset,
+                decision = "setup_default_layout",
+                "daemon profile selection completed"
+            );
+            tracing::info!(layout = %preset, "selected explicit default layout for current topology");
+            let plan = Planner::plan_from_preset(
+                preset,
+                topology,
+                settings.builtin_output.as_ref(),
+                None,
+            )?;
+            let layout_profile = Profile::new(preset.as_str(), 0, Vec::new(), HashMap::new());
+            apply_plan(
+                backend,
+                state_store,
+                &layout_profile,
+                workflow::PreparedPlanApplication::new(plan),
+                topology,
+                Some(preset.as_str()),
+                no_hooks,
+            )
+        }
         workflow::ProfileSelectionDecision::ExactMatch(profile) => {
             tracing::debug!(
                 elapsed_ms = elapsed_ms(selection_start),
@@ -330,21 +356,45 @@ fn apply_profile(
     recorded_profile_name: Option<&str>,
     no_hooks: bool,
 ) -> Result<DaemonOutcome> {
-    let backend_kind = backend.capabilities().backend;
     let prepare_start = Instant::now();
     let prepared =
         workflow::prepare_profile_application(profile, topology).map_err(anyhow::Error::from)?;
+    tracing::debug!(
+        elapsed_ms = elapsed_ms(prepare_start),
+        profile = %profile.name,
+        "daemon profile plan prepared"
+    );
+    apply_plan(
+        backend,
+        state_store,
+        profile,
+        prepared,
+        topology,
+        recorded_profile_name,
+        no_hooks,
+    )
+}
+
+fn apply_plan(
+    backend: &(impl Backend + ?Sized),
+    state_store: &StateStore,
+    profile: &Profile,
+    prepared: workflow::PreparedPlanApplication,
+    topology: &Topology,
+    recorded_profile_name: Option<&str>,
+    no_hooks: bool,
+) -> Result<DaemonOutcome> {
+    let backend_kind = backend.capabilities().backend;
     let plan_matches = plan_matches_topology(prepared.plan(), topology);
     let planned_outputs = plan_outputs_summary(prepared.plan());
     tracing::debug!(
-        elapsed_ms = elapsed_ms(prepare_start),
         profile = %profile.name,
         plan_matches,
         no_hooks,
         current_setup = %topology.setup_fingerprint(),
         current_outputs = %topology_outputs_summary(topology),
         planned_outputs = %planned_outputs,
-        "daemon profile plan prepared"
+        "daemon plan evaluated"
     );
     let daemon_apply = DaemonApplyWorkflow::new(
         state_store,

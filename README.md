@@ -14,7 +14,7 @@ It includes:
 - Save the current compositor layout as a named profile
 - Optionally assign a friendly name to each detected display setup
 - Reapply a saved profile or a built-in virtual layout
-- Set a preferred default profile for each display fingerprint
+- Set a preferred default profile or virtual layout for each display fingerprint
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
 - Offer dynamic shell completion for current-setup saved profile names and `set` targets
@@ -123,8 +123,10 @@ Use `--force` only when you accept applying through a backend whose validation
 result is unsupported; it does not override the blank-layout safety gate.
 
 `--default` is setup-local: it only updates the default for the current setup
-fingerprint. With virtual targets, `set --default` alone saves the resulting layout
-as profile `default` and makes that saved profile the default for the current setup.
+fingerprint. With virtual targets, `set --default` alone makes the virtual layout itself
+the setup default without saving a profile, so `set auto` and the daemon re-plan it for
+whatever outputs are connected. A later `save` or `set <virtual> --save` does not replace
+it, and `remove <virtual>` clears it.
 `set <virtual> --save` saves the layout as a profile named after the applied layout
 (for example `vertical` or `vertical-reverse`) and only makes it the setup default
 when it is the only saved profile for the current setup, so several layouts can be
@@ -146,9 +148,9 @@ for the full command reference and examples.
 > Human-readable output and daemon logs escape terminal control characters from profile, backend, and monitor strings. JSON preserves raw values through serde escaping.
 > Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
 > `waytorandr service run` does not support `--json`.
-> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
-> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
-> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, and an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one.
+> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`, plus `default_layout: true` when it cleared a virtual layout default. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
+> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`). `waytorandr set <virtual> --default --json` reports `default_set` with `default_target` set to the virtual layout and no `saved_profile`.
+> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one, and an optional `default_layout` field naming the virtual layout that is the current setup's default (any `set` target name, such as `vertical-reverse` or `largest`).
 
 ## Vicinae layout switcher
 
@@ -157,7 +159,7 @@ Its *Display Layout* command shows a floating list of your saved profiles and th
 `vertical`, `mirror`, `external`, and `builtin` layouts, with the current one tagged *Active* and
 the setup default starred. Enter applies it through `waytorandr set`; Ctrl+D switches to it and
 stars it as the setup default without closing the list (`set --profile <name> --default`, or
-`set <layout> --save --default` for virtual layouts).
+`set <layout> --default` for virtual layouts, which links the layout instead of copying it).
 The flake ships it as `vicinae-extension`; with the
 Home Manager Vicinae module:
 
@@ -179,7 +181,7 @@ near the widget that opened it; override it in the plugin's settings), listing y
 `horizontal`, `vertical`, `mirror`, `external`, and `builtin` layouts, with the current one
 tagged *Active*. Up/Down and Enter, or a click, apply it through `waytorandr set`. Each row's star
 switches to that layout and makes it the setup default (`set --profile <name> --default`, or
-`set <layout> --save --default` for virtual layouts). A bar widget opens the same panel. The flake ships it as `noctalia-plugin`; with Home Manager:
+`set <layout> --default` for virtual layouts). A bar widget opens the same panel. The flake ships it as `noctalia-plugin`; with Home Manager:
 
 ```nix
 xdg.dataFile."noctalia/plugins/waytorandr".source =
@@ -199,7 +201,7 @@ hotplug events. It does not react to compositor-only layout changes on an
 unchanged set of connected displays. If the current topology is blank and only
 built-in/internal panels are connected, it applies an immutable built-in fallback
 before user defaults or saved profiles. Otherwise, when the physical setup
-changes, it tries the configured default profile for the current fingerprint,
+changes, it tries the configured default profile or virtual layout for the current fingerprint,
 then the best matching saved profile, then a remembered layout for that setup,
 and finally falls back to remembering the current topology. Remembered layouts
 that would leave all real outputs disabled are skipped instead of being reused.

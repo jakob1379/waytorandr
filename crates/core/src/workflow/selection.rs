@@ -1,5 +1,5 @@
 use crate::error::{CoreError, CoreResult};
-use crate::model::Topology;
+use crate::model::{Topology, VirtualPreset};
 use crate::planning::{LayoutPlan, Matcher, Planner};
 use crate::profile::{Hooks, OutputMatcher, Profile};
 use crate::state::State;
@@ -7,6 +7,7 @@ use crate::store::ProfilesSettings;
 
 pub enum ProfileSelectionDecision {
     SetupDefault(Profile),
+    SetupDefaultLayout(VirtualPreset),
     ExactMatch(Profile),
     RememberedLayout(Topology),
     NoMatch,
@@ -17,7 +18,7 @@ impl ProfileSelectionDecision {
     pub fn selected_profile(&self) -> Option<&Profile> {
         match self {
             Self::SetupDefault(profile) | Self::ExactMatch(profile) => Some(profile),
-            Self::RememberedLayout(_) | Self::NoMatch => None,
+            Self::SetupDefaultLayout(_) | Self::RememberedLayout(_) | Self::NoMatch => None,
         }
     }
 }
@@ -48,6 +49,10 @@ pub fn select_profile_application_target(
         }) {
             return ProfileSelectionDecision::SetupDefault(profile.clone());
         }
+    }
+
+    if let Some(preset) = settings.setup_default_layout(&setup_fingerprint) {
+        return ProfileSelectionDecision::SetupDefaultLayout(preset);
     }
 
     if let Some(matched) = Matcher::match_profile_exact(topology, profiles) {

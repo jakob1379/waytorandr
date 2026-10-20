@@ -1,5 +1,5 @@
 use crate::error::CoreResult;
-use crate::model::OutputIdentity;
+use crate::model::{OutputIdentity, VirtualPreset};
 use crate::profile::Profile;
 use crate::state::{ReadOnlyStateStore, State, StateReader, StateStore};
 use std::collections::HashMap;
@@ -47,6 +47,8 @@ struct ProfilesFile {
 pub struct ProfilesSettings {
     #[serde(default)]
     pub setup_defaults: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub setup_default_layouts: HashMap<String, VirtualPreset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin_output: Option<OutputIdentity>,
     #[serde(default, skip_serializing_if = "NotificationSettings::is_default")]
@@ -85,8 +87,20 @@ impl ProfilesSettings {
     }
 
     pub fn set_setup_default_profile(&mut self, setup_fingerprint: &str, profile_name: &str) {
+        self.setup_default_layouts.remove(setup_fingerprint);
         self.setup_defaults
             .insert(setup_fingerprint.to_string(), profile_name.to_string());
+    }
+
+    #[must_use]
+    pub fn setup_default_layout(&self, setup_fingerprint: &str) -> Option<VirtualPreset> {
+        self.setup_default_layouts.get(setup_fingerprint).copied()
+    }
+
+    pub fn set_setup_default_layout(&mut self, setup_fingerprint: &str, preset: VirtualPreset) {
+        self.setup_defaults.remove(setup_fingerprint);
+        self.setup_default_layouts
+            .insert(setup_fingerprint.to_string(), preset);
     }
 
     fn clear_setup_default_if_matches(&mut self, setup_fingerprint: &str, profile_name: &str) {

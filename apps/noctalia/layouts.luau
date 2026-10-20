@@ -48,7 +48,7 @@ local function targets(status: any): { Target }
       subtitle = layout.subtitle,
       glyph = layout.glyph,
       active = not anyProfileActive and status.layout == layout.name,
-      isDefault = false,
+      isDefault = status.default_layout == layout.name,
     })
   end
   return list
@@ -65,7 +65,7 @@ local function defaultArgs(target: Target): { string }
   if target.kind == "profile" then
     return { "waytorandr", "set", "--profile", target.name, "--default" }
   end
-  return { "waytorandr", "set", target.name, "--save", "--default" }
+  return { "waytorandr", "set", target.name, "--default" }
 end
 
 local function errorMessage(result: any): string

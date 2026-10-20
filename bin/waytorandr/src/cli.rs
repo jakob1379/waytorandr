@@ -55,8 +55,9 @@ Examples:
   waytorandr set vertical --reverse --dry-run
 
 `--default` only affects the current setup fingerprint.
-With virtual configurations, `--default` alone saves the resulting layout as profile `default`
-and makes that saved profile the default for the current setup.
+With virtual configurations, `--default` alone makes the virtual configuration itself the
+default for the current setup, without saving a profile; `set auto` and the daemon re-plan it
+for the connected outputs.
 Use `--save` with a virtual configuration to save the resulting layout as a profile named
 after the applied layout (for example `vertical` or `vertical-reverse`). It only becomes the
 default for the current setup when it is the only saved profile for that setup; add `--default`
@@ -248,7 +249,7 @@ pub struct SaveArgs {
 pub struct RemoveArgs {
     #[arg(
         value_name = "profile",
-        help = "Profile name to remove from the current setup",
+        help = "Profile name to remove from the current setup; a virtual layout name clears it as the setup default",
         add = ArgValueCompleter::new(complete_saved_profiles)
     )]
     pub(crate) name: String,
@@ -340,7 +341,10 @@ mod tests {
             .expect("remove profile arg should exist");
         assert_eq!(
             profile_arg.get_help().map(|value| value.to_string()),
-            Some("Profile name to remove from the current setup".to_string())
+            Some(
+                "Profile name to remove from the current setup; a virtual layout name clears it as the setup default"
+                    .to_string()
+            )
         );
     }
 
