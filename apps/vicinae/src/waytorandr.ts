@@ -55,6 +55,11 @@ export function setArgs(target: Target): string[] {
   return target.kind === "profile" ? ["set", "--profile", target.name] : ["set", target.name];
 }
 
+/** Build set arguments that apply a target and make it the setup default, saving layouts as profiles. */
+export function defaultArgs(target: Target): string[] {
+  return target.kind === "profile" ? [...setArgs(target), "--default"] : [...setArgs(target), "--save", "--default"];
+}
+
 /** Run the CLI and return stdout, rejecting with a readable error if it cannot run or fails. */
 export function run(args: string[]): Promise<string> {
   return new Promise((resolve, reject) =>

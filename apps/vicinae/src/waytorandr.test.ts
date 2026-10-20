@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setArgs, targets, type Status } from "./waytorandr.ts";
+import { defaultArgs, setArgs, targets, type Status } from "./waytorandr.ts";
 
 /** Create a status fixture with current and unrelated setups, applying test overrides last. */
 const status = (overrides: Partial<Status>): Status => ({
@@ -41,4 +41,10 @@ test("saved profiles are applied by name even when they shadow a layout", () => 
   const [, shadowing] = targets(status({})).profiles;
   assert.deepEqual(setArgs(shadowing), ["set", "--profile", "vertical"]);
   assert.deepEqual(setArgs(targets(status({})).layouts[0]), ["set", "horizontal"]);
+});
+
+test("making a target the default saves layouts and selects profiles by name", () => {
+  const { profiles, layouts } = targets(status({}));
+  assert.deepEqual(defaultArgs(profiles[1]), ["set", "--profile", "vertical", "--default"]);
+  assert.deepEqual(defaultArgs(layouts[0]), ["set", "horizontal", "--save", "--default"]);
 });
