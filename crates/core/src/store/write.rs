@@ -41,6 +41,20 @@ impl ProfileStore {
         })
     }
 
+    /// Clears the virtual layout default for a setup fingerprint.
+    ///
+    /// # Errors
+    /// Returns an error if profile storage cannot be read or written.
+    pub fn clear_setup_default_layout(&self, setup_fingerprint: &str) -> CoreResult<()> {
+        self.update_profiles_file(|stored| {
+            stored
+                .settings
+                .setup_default_layouts
+                .remove(setup_fingerprint);
+            Ok(())
+        })
+    }
+
     /// Saves a profile with normalized state.
     ///
     /// # Errors

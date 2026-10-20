@@ -69,6 +69,7 @@ pub(in crate::commands) struct SaveOutcome {
 
 pub(in crate::commands) struct RemoveOutcome {
     pub(super) profile: String,
+    pub(super) default_layout: bool,
     pub(super) dry_run: bool,
     pub(super) removed: Option<bool>,
     pub(super) would_remove: Option<bool>,
@@ -150,6 +151,7 @@ impl RemoveOutcome {
     pub(in crate::commands) fn dry_run(profile: impl Into<String>, would_remove: bool) -> Self {
         Self {
             profile: profile.into(),
+            default_layout: false,
             dry_run: true,
             removed: None,
             would_remove: Some(would_remove),
@@ -159,10 +161,16 @@ impl RemoveOutcome {
     pub(in crate::commands) fn removed(profile: impl Into<String>, removed: bool) -> Self {
         Self {
             profile: profile.into(),
+            default_layout: false,
             dry_run: false,
             removed: Some(removed),
             would_remove: None,
         }
+    }
+
+    pub(in crate::commands) const fn with_default_layout(mut self, default_layout: bool) -> Self {
+        self.default_layout = default_layout;
+        self
     }
 }
 

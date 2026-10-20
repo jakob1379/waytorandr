@@ -107,12 +107,17 @@ pub(super) fn emit_save_text(outcome: &SaveOutcome) {
 }
 
 pub(super) fn emit_remove_text(outcome: &RemoveOutcome) {
+    let kind = if outcome.default_layout {
+        "default layout"
+    } else {
+        "profile"
+    };
     if outcome.dry_run {
         if outcome.would_remove == Some(true) {
             println!(
                 "{} {}",
                 warning("Would remove"),
-                value(format!("profile '{}'", outcome.profile))
+                value(format!("{kind} '{}'", outcome.profile))
             );
         } else {
             println!(
@@ -128,7 +133,7 @@ pub(super) fn emit_remove_text(outcome: &RemoveOutcome) {
         println!(
             "{} {}",
             success("Removed"),
-            value(format!("profile '{}'", outcome.profile))
+            value(format!("{kind} '{}'", outcome.profile))
         );
     }
 }

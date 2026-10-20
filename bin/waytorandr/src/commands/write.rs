@@ -81,7 +81,7 @@ pub(super) fn cmd_save(
         None => detect_preset(&topology).map_or(CUSTOM_SAVED_PROFILE_NAME, VirtualPreset::as_str),
     };
     let make_default = make_default
-        || is_only_profile_for_setup(name, &topology.setup_fingerprint(), &state_store)?;
+        || is_implicit_default_for_setup(name, &topology.setup_fingerprint(), &state_store)?;
 
     let profile = workflow::profile_from_topology(name, &topology);
 
@@ -119,12 +119,20 @@ pub(super) fn cmd_save(
     emit_save_outcome(&outcome, output_mode)
 }
 
-fn is_only_profile_for_setup(
+fn is_implicit_default_for_setup(
     name: &str,
     setup_fingerprint: &str,
     state_store: &StateStore,
 ) -> Result<bool> {
-    Ok(ProfileStore::open_read_only()?
+    let store = ProfileStore::open_read_only()?;
+    if store
+        .settings()?
+        .setup_default_layout(setup_fingerprint)
+        .is_some()
+    {
+        return Ok(false);
+    }
+    Ok(store
         .profiles_for_setup(setup_fingerprint, &ProfileQueryContext::load(state_store)?)?
         .iter()
         .all(|profile| profile.name == name))
@@ -210,7 +218,7 @@ fn handle_virtual_set(
         None
     };
     let assign_default = match saved_profile_name {
-        Some(name) if !make_default => is_only_profile_for_setup(
+        Some(name) if !make_default => is_implicit_default_for_setup(
             name,
             &load_current_topology(backend.as_ref(), &state_store)?.setup_fingerprint(),
             &state_store,
@@ -322,15 +330,26 @@ pub(super) fn cmd_remove(name: &str, dry_run: bool, output_mode: OutputMode) -> 
     let exists = store
         .get_for_setup(name, &setup_fingerprint, &query_context)?
         .is_some();
+    let clears_default_layout = !exists
+        && store
+            .settings()?
+            .setup_default_layout(&setup_fingerprint)
+            .is_some_and(|preset| preset.as_str() == name);
 
     if dry_run {
-        let outcome = RemoveOutcome::dry_run(name, exists);
+        let outcome = RemoveOutcome::dry_run(name, exists || clears_default_layout)
+            .with_default_layout(clears_default_layout);
         return emit_remove_outcome(&outcome, output_mode);
     }
 
-    let removed = store.remove_for_setup(name, &setup_fingerprint, &state_store)?;
+    let removed = if clears_default_layout {
+        store.clear_setup_default_layout(&setup_fingerprint)?;
+        true
+    } else {
+        store.remove_for_setup(name, &setup_fingerprint, &state_store)?
+    };
     let missing_profile_error = || anyhow!("profile '{name}' not found for the current setup");
-    let outcome = RemoveOutcome::removed(name, removed);
+    let outcome = RemoveOutcome::removed(name, removed).with_default_layout(clears_default_layout);
 
     emit_remove_outcome(&outcome, output_mode)?;
 

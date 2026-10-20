@@ -95,6 +95,31 @@ fn set_save_ignores_profiles_from_other_setups() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn layout_default_survives_later_saves_and_can_be_removed() -> Result<(), Box<dyn Error>> {
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+
+    env.run_json(["set", "vertical", "--default", "--json"])?;
+    let saved = env.run_json(["set", "horizontal", "--save", "--json"])?;
+    assert!(saved.get("default_set").is_none());
+    let saved = env.run_json(["save", "desk", "--json"])?;
+    assert!(saved.get("default_set").is_none());
+    assert_eq!(
+        env.run_json(["status", "--json"])?["default_layout"],
+        "vertical"
+    );
+
+    let removed = env.run_json(["remove", "vertical", "--json"])?;
+    assert_eq!(removed["removed"], true);
+    assert!(env
+        .run_json(["status", "--json"])?
+        .get("default_layout")
+        .is_none());
+
+    Ok(())
+}
+
+#[test]
 fn save_without_name_uses_detected_layout() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
 

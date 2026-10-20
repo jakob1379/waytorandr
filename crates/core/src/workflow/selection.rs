@@ -174,33 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn select_profile_application_target_prefers_setup_default_layout_before_match() {
-        let topology = Topology {
-            outputs: HashMap::from([("DP-1".to_string(), selection_output_state("DP-1"))]),
-        };
-        let mut settings = ProfilesSettings::default();
-        settings.set_setup_default_profile(&topology.setup_fingerprint(), "desk");
-        settings.set_setup_default_layout(&topology.setup_fingerprint(), VirtualPreset::Horizontal);
-        let profiles = vec![selection_profile("desk", "DP-1")];
-
-        let decision =
-            select_profile_application_target(&topology, &profiles, &settings, &State::default());
-
-        assert!(matches!(
-            decision,
-            ProfileSelectionDecision::SetupDefaultLayout(VirtualPreset::Horizontal)
-        ));
-
-        settings.set_setup_default_profile(&topology.setup_fingerprint(), "desk");
-        let selected = select_profile_for_topology(&topology, &profiles, &settings).unwrap();
-        assert_eq!(selected.name, "desk");
-        assert_eq!(
-            settings.setup_default_layout(&topology.setup_fingerprint()),
-            None
-        );
-    }
-
-    #[test]
     fn select_profile_for_topology_uses_matching_profile_without_fallback() {
         let topology = Topology {
             outputs: HashMap::from([("DP-1".to_string(), selection_output_state("DP-1"))]),

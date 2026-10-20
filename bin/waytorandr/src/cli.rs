@@ -249,7 +249,7 @@ pub struct SaveArgs {
 pub struct RemoveArgs {
     #[arg(
         value_name = "profile",
-        help = "Profile name to remove from the current setup",
+        help = "Profile name to remove from the current setup; a virtual layout name clears it as the setup default",
         add = ArgValueCompleter::new(complete_saved_profiles)
     )]
     pub(crate) name: String,
@@ -341,7 +341,10 @@ mod tests {
             .expect("remove profile arg should exist");
         assert_eq!(
             profile_arg.get_help().map(|value| value.to_string()),
-            Some("Profile name to remove from the current setup".to_string())
+            Some(
+                "Profile name to remove from the current setup; a virtual layout name clears it as the setup default"
+                    .to_string()
+            )
         );
     }
 

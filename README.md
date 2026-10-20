@@ -14,7 +14,7 @@ It includes:
 - Save the current compositor layout as a named profile
 - Optionally assign a friendly name to each detected display setup
 - Reapply a saved profile or a built-in virtual layout
-- Set a preferred default profile for each display fingerprint
+- Set a preferred default profile or virtual layout for each display fingerprint
 - Automatically restore the best layout when outputs change
 - Emit machine-readable JSON from most commands with `--json`
 - Offer dynamic shell completion for current-setup saved profile names and `set` targets
@@ -125,7 +125,8 @@ result is unsupported; it does not override the blank-layout safety gate.
 `--default` is setup-local: it only updates the default for the current setup
 fingerprint. With virtual targets, `set --default` alone makes the virtual layout itself
 the setup default without saving a profile, so `set auto` and the daemon re-plan it for
-whatever outputs are connected.
+whatever outputs are connected. A later `save` or `set <virtual> --save` does not replace
+it, and `remove <virtual>` clears it.
 `set <virtual> --save` saves the layout as a profile named after the applied layout
 (for example `vertical` or `vertical-reverse`) and only makes it the setup default
 when it is the only saved profile for the current setup, so several layouts can be
@@ -147,9 +148,9 @@ for the full command reference and examples.
 > Human-readable output and daemon logs escape terminal control characters from profile, backend, and monitor strings. JSON preserves raw values through serde escaping.
 > Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
 > `waytorandr service run` does not support `--json`.
-> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
-> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`).
-> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one, and an optional `default_layout` field naming the virtual layout that is the current setup's default.
+> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`, plus `default_layout: true` when it cleared a virtual layout default. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
+> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`). `waytorandr set <virtual> --default --json` reports `default_set` with `default_target` set to the virtual layout and no `saved_profile`.
+> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one, and an optional `default_layout` field naming the virtual layout that is the current setup's default (any `set` target name, such as `vertical-reverse` or `largest`).
 
 ## Vicinae layout switcher
 

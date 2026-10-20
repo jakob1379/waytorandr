@@ -57,6 +57,8 @@ struct JsonSaveResponse {
 struct JsonRemoveResponse {
     command: &'static str,
     profile: String,
+    #[serde(skip_serializing_if = "is_false")]
+    default_layout: bool,
     dry_run: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     removed: Option<bool>,
@@ -126,6 +128,7 @@ pub(super) fn emit_remove_json(outcome: &RemoveOutcome) -> Result<()> {
     write_json(&JsonRemoveResponse {
         command: "remove",
         profile: outcome.profile.clone(),
+        default_layout: outcome.default_layout,
         dry_run: outcome.dry_run,
         removed: outcome.removed,
         would_remove: outcome.would_remove,
