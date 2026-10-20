@@ -1,5 +1,5 @@
 use crate::error::{CoreError, CoreResult};
-use crate::model::Topology;
+use crate::model::{Topology, VirtualPreset};
 use crate::planning::{LayoutPlan, Matcher, Planner};
 use crate::profile::{Hooks, OutputMatcher, Profile};
 use crate::state::State;
@@ -7,6 +7,7 @@ use crate::store::ProfilesSettings;
 
 pub enum ProfileSelectionDecision {
     SetupDefault(Profile),
+    SetupDefaultLayout(VirtualPreset),
     ExactMatch(Profile),
     RememberedLayout(Topology),
     NoMatch,
@@ -17,7 +18,7 @@ impl ProfileSelectionDecision {
     pub fn selected_profile(&self) -> Option<&Profile> {
         match self {
             Self::SetupDefault(profile) | Self::ExactMatch(profile) => Some(profile),
-            Self::RememberedLayout(_) | Self::NoMatch => None,
+            Self::SetupDefaultLayout(_) | Self::RememberedLayout(_) | Self::NoMatch => None,
         }
     }
 }
@@ -48,6 +49,10 @@ pub fn select_profile_application_target(
         }) {
             return ProfileSelectionDecision::SetupDefault(profile.clone());
         }
+    }
+
+    if let Some(preset) = settings.setup_default_layout(&setup_fingerprint) {
+        return ProfileSelectionDecision::SetupDefaultLayout(preset);
     }
 
     if let Some(matched) = Matcher::match_profile_exact(topology, profiles) {
@@ -166,6 +171,33 @@ mod tests {
         let selected = select_profile_for_topology(&topology, &profiles, &settings).unwrap();
 
         assert_eq!(selected.name, "external-only");
+    }
+
+    #[test]
+    fn select_profile_application_target_prefers_setup_default_layout_before_match() {
+        let topology = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), selection_output_state("DP-1"))]),
+        };
+        let mut settings = ProfilesSettings::default();
+        settings.set_setup_default_profile(&topology.setup_fingerprint(), "desk");
+        settings.set_setup_default_layout(&topology.setup_fingerprint(), VirtualPreset::Horizontal);
+        let profiles = vec![selection_profile("desk", "DP-1")];
+
+        let decision =
+            select_profile_application_target(&topology, &profiles, &settings, &State::default());
+
+        assert!(matches!(
+            decision,
+            ProfileSelectionDecision::SetupDefaultLayout(VirtualPreset::Horizontal)
+        ));
+
+        settings.set_setup_default_profile(&topology.setup_fingerprint(), "desk");
+        let selected = select_profile_for_topology(&topology, &profiles, &settings).unwrap();
+        assert_eq!(selected.name, "desk");
+        assert_eq!(
+            settings.setup_default_layout(&topology.setup_fingerprint()),
+            None
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@ use waytorandr_core::LayoutPlan;
 use waytorandr_core::Profile;
 use waytorandr_core::ProfileStore;
 use waytorandr_core::Topology;
-use waytorandr_core::{ProfileQueryContext, StateStore, VirtualPreset};
+use waytorandr_core::{ProfileQueryContext, State, StateStore, VirtualPreset};
 
 const DEFAULT_SAVED_PROFILE_NAME: &str = "default";
 const CUSTOM_SAVED_PROFILE_NAME: &str = "custom";
@@ -201,13 +201,10 @@ fn handle_virtual_set(
     } = options;
     let state_store = StateStore::bootstrap()?;
     let backend = connect_backend()?;
-    let saved_profile_name = if save {
-        Some(preset.as_str())
-    } else {
-        make_default.then_some(DEFAULT_SAVED_PROFILE_NAME)
-    };
+    let saved_profile_name = save.then_some(preset.as_str());
+    let default_layout = make_default && !save;
     let recorded_profile_name = saved_profile_name.unwrap_or(preset.as_str());
-    let profile_store = if saved_profile_name.is_some() && !dry_run {
+    let profile_store = if (save || make_default) && !dry_run {
         Some(ProfileStore::bootstrap()?)
     } else {
         None
@@ -231,6 +228,13 @@ fn handle_virtual_set(
         saved_profile_name,
         assign_default,
     )?;
+    if default_layout {
+        outcome.set_default_assignment(preset.as_str(), DefaultScope::Setup);
+        if let (Some(store), Some(topology)) = (profile_store.as_ref(), outcome.applied_topology())
+        {
+            store.set_setup_default_layout(&topology.setup_fingerprint(), preset)?;
+        }
+    }
 
     emit_action_outcome("set", Some("explicit"), &outcome, output_mode)
 }
@@ -271,7 +275,28 @@ fn apply_auto_profile_selection(dry_run: bool, force: bool, output_mode: OutputM
     let query_context = ProfileQueryContext::load(&state_store)?;
     let profiles = store.profiles(&query_context)?;
     let settings = store.settings()?;
-    let profile = workflow::select_profile_for_topology(&topology, &profiles, &settings)
+    let decision = workflow::select_profile_application_target(
+        &topology,
+        &profiles,
+        &settings,
+        &State::default(),
+    );
+    if let workflow::ProfileSelectionDecision::SetupDefaultLayout(preset) = decision {
+        let mut outcome =
+            execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
+        persist_virtual_action_outcome(
+            &state_store,
+            None,
+            &mut outcome,
+            preset.as_str(),
+            None,
+            false,
+        )?;
+        return emit_action_outcome("set", Some("auto"), &outcome, output_mode);
+    }
+    let profile = decision
+        .selected_profile()
+        .cloned()
         .ok_or_else(|| anyhow!("no matching profile configured"))?;
 
     let outcome = execute_profile_action(

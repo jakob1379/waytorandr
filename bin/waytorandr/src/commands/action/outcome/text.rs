@@ -74,7 +74,7 @@ pub(super) fn emit_save_text(outcome: &SaveOutcome) {
                 "{} {}",
                 warning("Would also set"),
                 value(format!(
-                    "'{}' as the default profile for this setup",
+                    "'{}' as the default for this setup",
                     outcome.profile
                 ))
             );
@@ -99,7 +99,7 @@ pub(super) fn emit_save_text(outcome: &SaveOutcome) {
             "{} {}",
             success("Set"),
             value(format!(
-                "'{}' as the default profile for this setup",
+                "'{}' as the default for this setup",
                 outcome.profile
             ))
         );

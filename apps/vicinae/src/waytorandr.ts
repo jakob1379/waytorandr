@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 
 export type Status = {
   layout?: string;
+  default_layout?: string;
   setups: {
     is_current: boolean;
     profiles: { name: string; is_default: boolean; is_active: boolean }[];
@@ -45,7 +46,7 @@ export function targets(status: Status): { profiles: Target[]; layouts: Target[]
       kind: "layout",
       icon: `${layout.name}.svg`,
       active: !anyProfileActive && status.layout === layout.name,
-      isDefault: false,
+      isDefault: status.default_layout === layout.name,
     })),
   };
 }
@@ -55,9 +56,9 @@ export function setArgs(target: Target): string[] {
   return target.kind === "profile" ? ["set", "--profile", target.name] : ["set", target.name];
 }
 
-/** Build set arguments that apply a target and make it the setup default, saving layouts as profiles. */
+/** Build set arguments that apply a target and make it the setup default. */
 export function defaultArgs(target: Target): string[] {
-  return target.kind === "profile" ? [...setArgs(target), "--default"] : [...setArgs(target), "--save", "--default"];
+  return [...setArgs(target), "--default"];
 }
 
 /** Run the CLI and return stdout, rejecting with a readable error if it cannot run or fails. */

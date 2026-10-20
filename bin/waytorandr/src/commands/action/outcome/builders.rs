@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(assignment.target, "desk");
         assert_eq!(
             super::super::default_assignment_description(&outcome).as_deref(),
-            Some("'desk' as the default profile for this setup")
+            Some("'desk' as the default for this setup")
         );
         Ok(())
     }

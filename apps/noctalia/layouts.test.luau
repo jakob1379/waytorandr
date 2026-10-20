@@ -48,6 +48,11 @@ assert(layouts.errorMessage({ exitCode = 3, stderr = "" }) == "waytorandr exited
 assert(layouts.errorMessage({ exitCode = 9, stderr = "partial", timedOut = true }) == "waytorandr timed out")
 
 assert(table.concat(layouts.defaultArgs(shadowing), " ") == "waytorandr set --profile vertical --default")
-assert(table.concat(layouts.defaultArgs(layouts.targets(status(nil))[3]), " ") == "waytorandr set horizontal --save --default")
+assert(table.concat(layouts.defaultArgs(layouts.targets(status(nil))[3]), " ") == "waytorandr set horizontal --default")
+
+local layoutDefault = status(nil)
+layoutDefault.default_layout = "vertical"
+layoutDefault.setups[2].profiles[1].is_default = false
+assert(names(layouts.targets(layoutDefault), function(t) return t.isDefault end) == "layout:vertical")
 
 print("layouts: ok")

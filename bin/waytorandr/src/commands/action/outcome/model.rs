@@ -48,7 +48,7 @@ impl DefaultScope {
 
     fn description(self, target: &str) -> String {
         match self {
-            Self::Setup => format!("'{target}' as the default profile for this setup"),
+            Self::Setup => format!("'{target}' as the default for this setup"),
         }
     }
 }
@@ -216,7 +216,7 @@ mod tests {
                 .as_ref()
                 .map(DefaultAssignment::description)
                 .as_deref(),
-            Some("'docked' as the default profile for this setup")
+            Some("'docked' as the default for this setup")
         );
     }
 

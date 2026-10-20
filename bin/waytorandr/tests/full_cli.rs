@@ -395,15 +395,33 @@ fn exercise_virtual_workflows(
     assert_saved_profiles(env, &["horizontal", "vertical"])?;
     assert_default_and_active(env, Some("vertical"), Some("vertical"))?;
 
-    let set_setup_default = env.run_json(["set", "vertical", "--default", "--json"])?;
-    assert_eq!(set_setup_default["target"], "vertical");
-    assert_eq!(set_setup_default["saved_profile"], "default");
-    assert_eq!(set_setup_default["default_set"], true);
-    assert_eq!(set_setup_default["default_scope"], "setup");
-    assert_eq!(set_setup_default["default_target"], "default");
-    assert_saved_profiles(env, &["default", "horizontal", "vertical"])?;
-    assert_default_and_active(env, Some("default"), Some("default"))?;
-    assert_eq!(env.run_json(["status", "--json"])?["profile"], "default");
+    let set_layout_default =
+        env.run_json(["set", "vertical", "--reverse", "--default", "--json"])?;
+    assert_eq!(set_layout_default["target"], "vertical-reverse");
+    assert!(set_layout_default.get("saved_profile").is_none());
+    assert_eq!(set_layout_default["default_set"], true);
+    assert_eq!(set_layout_default["default_scope"], "setup");
+    assert_eq!(set_layout_default["default_target"], "vertical-reverse");
+    assert_saved_profiles(env, &["horizontal", "vertical"])?;
+    assert_default_and_active(env, None, None)?;
+    assert_eq!(
+        env.run_json(["status", "--json"])?["default_layout"],
+        "vertical-reverse"
+    );
+
+    env.run_json(["set", "horizontal", "--json"])?;
+    let auto_layout = env.run_json(["set", "auto", "--json"])?;
+    assert_eq!(auto_layout["target"], "vertical-reverse");
+    let topology = env.backend_topology()?;
+    assert_eq!(topology.outputs["eDP-1"].position, Position::new(320, 0));
+    assert_eq!(topology.outputs["DP-1"].position, Position::new(0, 1080));
+
+    env.run_json(["set", "--profile", "vertical", "--default", "--json"])?;
+    assert!(env
+        .run_json(["status", "--json"])?
+        .get("default_layout")
+        .is_none());
+    assert_default_and_active(env, Some("vertical"), Some("vertical"))?;
 
     let invalid_reverse = env.run_json_failure(["set", "external", "--reverse", "--json"])?;
     assert!(invalid_reverse.stderr.contains(

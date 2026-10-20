@@ -809,6 +809,53 @@ fn matching_saved_profile_is_preferred_over_remembered_layout() -> Result<(), Bo
 }
 
 #[test]
+fn setup_default_layout_is_preferred_over_matching_profile() -> Result<(), Box<dyn Error>> {
+    with_test_state_dir(|| {
+        let state_store = StateStore::bootstrap()?;
+        let store = ProfileStore::bootstrap()?;
+        let current = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), daemon_output_state("DP-1", false))]),
+        };
+        let applied = Topology {
+            outputs: HashMap::from([("DP-1".to_string(), daemon_output_state("DP-1", true))]),
+        };
+        let apply_calls = Arc::new(Mutex::new(0));
+        let backend = StubBackend {
+            enumerated_topology: current.clone(),
+            applied_topology: Some(applied),
+            test_success: true,
+            validation_failure: None,
+            validation_message: None,
+            apply_calls: apply_calls.clone(),
+            test_calls: Arc::new(Mutex::new(0)),
+        };
+
+        store.save(&daemon_profile("desk", "DP-1", false), &state_store)?;
+        store.set_setup_default_layout(
+            &current.setup_fingerprint(),
+            waytorandr_core::VirtualPreset::Horizontal,
+        )?;
+
+        let outcome =
+            maybe_apply_matching_profile(&backend, &store, &state_store, &current, false)?;
+        let state = state_store
+            .load_state()?
+            .ok_or_else(|| std::io::Error::other("state should exist"))?;
+
+        assert!(matches!(outcome, DaemonOutcome::Applied));
+        assert_eq!(
+            *apply_calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
+        assert_eq!(state.last_profile.as_deref(), Some("horizontal"));
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[test]
 fn unsafe_remembered_layout_is_not_applied() -> Result<(), Box<dyn Error>> {
     with_test_state_dir(|| {
         let state_store = StateStore::bootstrap()?;

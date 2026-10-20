@@ -55,8 +55,9 @@ Examples:
   waytorandr set vertical --reverse --dry-run
 
 `--default` only affects the current setup fingerprint.
-With virtual configurations, `--default` alone saves the resulting layout as profile `default`
-and makes that saved profile the default for the current setup.
+With virtual configurations, `--default` alone makes the virtual configuration itself the
+default for the current setup, without saving a profile; `set auto` and the daemon re-plan it
+for the connected outputs.
 Use `--save` with a virtual configuration to save the resulting layout as a profile named
 after the applied layout (for example `vertical` or `vertical-reverse`). It only becomes the
 default for the current setup when it is the only saved profile for that setup; add `--default`

@@ -43,8 +43,15 @@ test("saved profiles are applied by name even when they shadow a layout", () => 
   assert.deepEqual(setArgs(targets(status({})).layouts[0]), ["set", "horizontal"]);
 });
 
-test("making a target the default saves layouts and selects profiles by name", () => {
+test("making a target the default links layouts and selects profiles by name", () => {
   const { profiles, layouts } = targets(status({}));
   assert.deepEqual(defaultArgs(profiles[1]), ["set", "--profile", "vertical", "--default"]);
-  assert.deepEqual(defaultArgs(layouts[0]), ["set", "horizontal", "--save", "--default"]);
+  assert.deepEqual(defaultArgs(layouts[0]), ["set", "horizontal", "--default"]);
+});
+
+test("stars the layout that is the setup default", () => {
+  const s = status({ default_layout: "vertical" });
+  s.setups[1].profiles[0].is_default = false;
+  const { profiles, layouts } = targets(s);
+  assert.deepEqual([...profiles, ...layouts].filter((t) => t.isDefault).map((t) => t.kind + ":" + t.name), ["layout:vertical"]);
 });
