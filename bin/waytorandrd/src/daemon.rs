@@ -259,7 +259,12 @@ fn maybe_apply_matching_profile(
                 "daemon profile selection completed"
             );
             tracing::info!(layout = %preset, "selected explicit default layout for current topology");
-            let plan = Planner::plan_from_preset(preset, topology, None, None)?;
+            let plan = Planner::plan_from_preset(
+                preset,
+                topology,
+                settings.builtin_output.as_ref(),
+                None,
+            )?;
             let layout_profile = Profile::new(preset.as_str(), 0, Vec::new(), HashMap::new());
             apply_plan(
                 backend,

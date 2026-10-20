@@ -120,6 +120,28 @@ fn layout_default_survives_later_saves_and_can_be_removed() -> Result<(), Box<dy
 }
 
 #[test]
+fn configured_builtin_output_applies_to_set_and_auto_layout_default() -> Result<(), Box<dyn Error>>
+{
+    let env = TestEnvironment::new("wlroots")?;
+    env.write_backend_topology(&fixture_topology())?;
+    env.write_settings(&serde_json::json!({ "builtin_output": { "connector": "DP-1" } }))?;
+
+    env.run_json(["set", "builtin", "--default", "--json"])?;
+    let topology = env.backend_topology()?;
+    assert!(topology.outputs["DP-1"].enabled);
+    assert!(!topology.outputs["eDP-1"].enabled);
+
+    env.run_json(["set", "horizontal", "--json"])?;
+    let auto = env.run_json(["set", "auto", "--json"])?;
+    assert_eq!(auto["target"], "builtin");
+    let topology = env.backend_topology()?;
+    assert!(topology.outputs["DP-1"].enabled);
+    assert!(!topology.outputs["eDP-1"].enabled);
+
+    Ok(())
+}
+
+#[test]
 fn save_without_name_uses_detected_layout() -> Result<(), Box<dyn Error>> {
     let env = TestEnvironment::new("wlroots")?;
 

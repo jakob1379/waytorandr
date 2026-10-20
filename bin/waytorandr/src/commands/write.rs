@@ -225,8 +225,15 @@ fn handle_virtual_set(
         )?,
         _ => make_default,
     };
-    let mut outcome =
-        execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
+    let settings = ProfileStore::open_read_only()?.settings()?;
+    let mut outcome = execute_virtual_action(
+        backend.as_ref(),
+        &state_store,
+        preset,
+        dry_run,
+        settings.builtin_output.as_ref(),
+        force,
+    )?;
 
     persist_virtual_action_outcome(
         &state_store,
@@ -290,8 +297,14 @@ fn apply_auto_profile_selection(dry_run: bool, force: bool, output_mode: OutputM
         &State::default(),
     );
     if let workflow::ProfileSelectionDecision::SetupDefaultLayout(preset) = decision {
-        let mut outcome =
-            execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, force)?;
+        let mut outcome = execute_virtual_action(
+            backend.as_ref(),
+            &state_store,
+            preset,
+            dry_run,
+            settings.builtin_output.as_ref(),
+            force,
+        )?;
         persist_virtual_action_outcome(
             &state_store,
             None,
@@ -410,8 +423,14 @@ pub(super) fn cmd_cycle(dry_run: bool, output_mode: OutputMode) -> Result<()> {
         )?
     } else {
         let preset = presets[next_idx - profiles.len()];
-        let mut outcome =
-            execute_virtual_action(backend.as_ref(), &state_store, preset, dry_run, None, false)?;
+        let mut outcome = execute_virtual_action(
+            backend.as_ref(),
+            &state_store,
+            preset,
+            dry_run,
+            store.settings()?.builtin_output.as_ref(),
+            false,
+        )?;
         persist_virtual_action_outcome(
             &state_store,
             None,
