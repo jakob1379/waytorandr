@@ -1,8 +1,24 @@
-# waytorandr
+<h1 align="center">waytorandr</h1>
 
-`waytorandr` is a Wayland-native display profile manager inspired by `autorandr`.
-It saves the current layout as a named profile, reapplies profiles on demand,
-and can automatically restore the right layout when outputs change.
+<p align="center">
+  Wayland-native display profile manager inspired by <code>autorandr</code>.<br>
+  Save a layout once, and get it back every time you dock.
+</p>
+
+<p align="center">
+  <img src=".github/assets/hotplug-loop.svg" width="880" alt="Animated loop of a display arrangement: the laptop panel eDP-1 is alone, an external monitor DP-1 is plugged in and waytorandrd applies the saved profile work-dock beside the laptop, waytorandr set vertical stacks DP-1 above it, and unplugging DP-1 returns the laptop-only layout.">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> |
+  <a href="#cli">CLI</a> |
+  <a href="#daemon">Daemon</a> |
+  <a href="#home-manager">Home Manager</a> |
+  <a href="#limits">Limits</a>
+</p>
+
+`waytorandr` saves the current layout as a named profile, reapplies profiles on
+demand, and can automatically restore the right layout when outputs change.
 
 It includes:
 
@@ -122,6 +138,9 @@ explicitly with `waytorandr set --profile <name>`.
 Use `--force` only when you accept applying through a backend whose validation
 result is unsupported; it does not override the blank-layout safety gate.
 
+<details>
+<summary>How <code>--default</code> and <code>--save</code> choose the setup default</summary>
+
 `--default` is setup-local: it only updates the default for the current setup
 fingerprint. With virtual targets, `set --default` alone makes the virtual layout itself
 the setup default without saving a profile, so `set auto` and the daemon re-plan it for
@@ -139,18 +158,26 @@ profile only becomes the setup default when it is the only saved profile for the
 current setup. `save --default` always makes it the default and, without a name,
 saves it as `default`.
 
+</details>
+
 Run `waytorandr set --help`, `waytorandr save --help`, and `waytorandr status --help`
 for the full command reference and examples.
 
 > [!TIP]
 > Use `--json` on supported commands when you want stable machine-readable output.
-> Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
-> Human-readable output and daemon logs escape terminal control characters from profile, backend, and monitor strings. JSON preserves raw values through serde escaping.
-> Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
-> `waytorandr service run` does not support `--json`.
-> `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`, plus `default_layout: true` when it cleared a virtual layout default. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
-> `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`). `waytorandr set <virtual> --default --json` reports `default_set` with `default_target` set to the virtual layout and no `saved_profile`.
-> `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one, and an optional `default_layout` field naming the virtual layout that is the current setup's default (any `set` target name, such as `vertical-reverse` or `largest`).
+
+<details>
+<summary>Color, redaction, and JSON output details</summary>
+
+- Human-readable output uses color when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset. Set `CLICOLOR_FORCE=1` to force color for non-terminal output.
+- Human-readable output and daemon logs escape terminal control characters from profile, backend, and monitor strings. JSON preserves raw values through serde escaping.
+- Set `WAYTORANDR_REDACT_MONITORS=1` to redact monitor identifiers from human topology and plan output.
+- `waytorandr service run` does not support `--json`.
+- `waytorandr remove --dry-run --json` reports `would_remove`; applied `remove --json` reports `removed`, plus `default_layout: true` when it cleared a virtual layout default. Removing a missing profile exits non-zero, and JSON mode still emits the `removed: false` payload before returning the error.
+- `waytorandr set <virtual> --save --json` reports `saved_profile`, and reports `default_set` only when the saved profile becomes the setup default (also in `--dry-run`). `waytorandr set <virtual> --default --json` reports `default_set` with `default_target` set to the virtual layout and no `saved_profile`.
+- `waytorandr status --json` includes optional `setup_name` and `builtin_output` fields when they are configured, an optional `layout` field (`horizontal`, `vertical`, `mirror`, `external`, or `builtin`) when the current layout matches one, and an optional `default_layout` field naming the virtual layout that is the current setup's default (any `set` target name, such as `vertical-reverse` or `largest`).
+
+</details>
 
 ## Vicinae layout switcher
 

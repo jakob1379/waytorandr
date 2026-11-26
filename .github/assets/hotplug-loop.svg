@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" width="880" height="420" role="img" aria-labelledby="t d">
+  <title id="t">waytorandr restoring display layouts on hotplug</title>
+  <desc id="d">A laptop panel eDP-1 is alone. An external monitor DP-1 is plugged in, waytorandrd detects it and applies the saved profile work-dock, placing DP-1 beside the laptop. Then waytorandr set vertical stacks DP-1 above the laptop. Finally DP-1 is unplugged and the laptop-only layout returns.</desc>
+  <defs>
+    <pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" class="dot"/>
+    </pattern>
+  </defs>
+  <style>
+    :root {
+      --bg: #e9edf2;
+      --grid: #c5cdd9;
+      --ink: #1d2635;
+      --muted: #5b677a;
+      --screen: #ffffff;
+      --applied: #0e7c86;
+      --signal: #b4690e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #131a24;
+        --grid: #2a3547;
+        --ink: #e3e8f0;
+        --muted: #97a3b6;
+        --screen: #1c2532;
+        --applied: #4fc3c9;
+        --signal: #f2b544;
+      }
+    }
+    .bg { fill: var(--bg); }
+    .dot { fill: var(--grid); }
+    .sans { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .screen { fill: var(--screen); stroke: var(--ink); stroke-width: 1.5; }
+    .ghost { fill: none; stroke: var(--signal); stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .ring { fill: none; stroke: var(--signal); stroke-width: 2; transform-box: fill-box; transform-origin: center; }
+    .bar { fill: var(--applied); }
+    .name { fill: var(--ink); font-size: 15px; font-weight: 600; }
+    .meta { fill: var(--muted); font-size: 12px; }
+    .head { fill: var(--ink); font-size: 18px; font-weight: 600; }
+    .sub { fill: var(--muted); font-size: 14px; }
+    .cmd { fill: var(--applied); }
+
+    .loop { animation-duration: 16s; animation-iteration-count: infinite; animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
+
+    .edp { transform: translate(212px, 122px); animation-name: edp; }
+    .dp { transform: translate(412px, 98px); animation-name: dp; }
+    .dp-ghost { opacity: 0; animation-name: ghost; }
+    .dp-solid { opacity: 1; animation-name: solid; }
+    .ring { opacity: 0; animation-name: ring; animation-timing-function: ease-out; }
+    .cap { opacity: 0; animation-timing-function: linear; }
+    .cap-c { opacity: 1; }
+    .cap-a { animation-name: cap-a; }
+    .cap-b { animation-name: cap-b; }
+    .cap-c { animation-name: cap-c; }
+    .cap-d { animation-name: cap-d; }
+    .cap-e { animation-name: cap-e; }
+
+    @keyframes edp {
+      0%, 22% { transform: translate(344px, 110px); }
+      30%, 52% { transform: translate(212px, 122px); }
+      55% { transform: translate(212px, 122px); }
+      62%, 80% { transform: translate(344px, 186px); }
+      88%, 100% { transform: translate(344px, 110px); }
+    }
+    @keyframes dp {
+      0%, 22% { transform: translate(576px, 98px); }
+      0%, 14% { opacity: 0; }
+      17%, 78% { opacity: 1; }
+      30%, 52% { transform: translate(412px, 98px); }
+      58%, 78% { transform: translate(312px, 34px); }
+      84% { transform: translate(312px, 20px); opacity: 0; }
+      90%, 100% { transform: translate(576px, 98px); opacity: 0; }
+    }
+    @keyframes ghost {
+      0%, 23% { opacity: 1; }
+      29%, 100% { opacity: 0; }
+    }
+    @keyframes solid {
+      0%, 23% { opacity: 0; }
+      29%, 100% { opacity: 1; }
+    }
+    @keyframes ring {
+      0%, 15% { opacity: 0; transform: scale(1); }
+      15.5% { opacity: .9; transform: scale(1); }
+      23%, 100% { opacity: 0; transform: scale(1.22); }
+    }
+    @keyframes cap-a {
+      0%, 13% { opacity: 1; }
+      15%, 95% { opacity: 0; }
+      97%, 100% { opacity: 1; }
+    }
+    @keyframes cap-b {
+      0%, 13% { opacity: 0; }
+      15%, 25% { opacity: 1; }
+      27%, 100% { opacity: 0; }
+    }
+    @keyframes cap-c {
+      0%, 25% { opacity: 0; }
+      27%, 47% { opacity: 1; }
+      49%, 100% { opacity: 0; }
+    }
+    @keyframes cap-d {
+      0%, 47% { opacity: 0; }
+      49%, 77% { opacity: 1; }
+      79%, 100% { opacity: 0; }
+    }
+    @keyframes cap-e {
+      0%, 77% { opacity: 0; }
+      79%, 95% { opacity: 1; }
+      97%, 100% { opacity: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .loop { animation: none; }
+    }
+  </style>
+
+  <rect class="bg" width="880" height="420"/>
+  <rect width="880" height="328" fill="url(#grid)"/>
+
+  <g class="loop dp">
+    <rect class="loop ring" x="0" y="0" width="256" height="144" rx="8"/>
+    <rect class="loop dp-ghost ghost" x="0" y="0" width="256" height="144" rx="8"/>
+    <g class="loop dp-solid">
+      <rect class="screen" x="0" y="0" width="256" height="144" rx="8"/>
+      <rect class="bar" x="0.75" y="0.75" width="254.5" height="4" rx="2"/>
+    </g>
+    <text class="sans name" x="16" y="30">DP-1</text>
+    <text class="mono meta" x="16" y="49">2560×1440</text>
+    <text class="sans meta" x="16" y="128">external</text>
+  </g>
+
+  <g class="loop edp">
+    <rect class="screen" x="0" y="0" width="192" height="120" rx="8"/>
+    <rect class="bar" x="0.75" y="0.75" width="190.5" height="4" rx="2"/>
+    <text class="sans name" x="16" y="30">eDP-1</text>
+    <text class="mono meta" x="16" y="49">1920×1200</text>
+    <text class="sans meta" x="16" y="104">built-in</text>
+  </g>
+
+  <g text-anchor="middle">
+    <g class="loop cap cap-a">
+      <text class="sans head" x="440" y="366">Laptop panel only</text>
+      <text class="sans sub" x="440" y="392">One setup, one layout: eDP-1 on its own</text>
+    </g>
+    <g class="loop cap cap-b">
+      <text class="sans head" x="440" y="366">DP-1 plugged in</text>
+      <text class="sans sub" x="440" y="392">waytorandrd sees the new setup and looks up its profile</text>
+    </g>
+    <g class="loop cap cap-c">
+      <text class="sans head" x="440" y="366">Profile work-dock applied</text>
+      <text class="sans sub" x="440" y="392">Saved earlier with <tspan class="mono cmd">waytorandr save work-dock --setup-name office</tspan></text>
+    </g>
+    <g class="loop cap cap-d">
+      <text class="mono head cmd" x="440" y="366">$ waytorandr set vertical</text>
+      <text class="sans sub" x="440" y="392">A built-in virtual layout, planned for the outputs connected now</text>
+    </g>
+    <g class="loop cap cap-e">
+      <text class="sans head" x="440" y="366">DP-1 unplugged</text>
+      <text class="sans sub" x="440" y="392">waytorandrd puts the laptop-only layout back</text>
+    </g>
+  </g>
+</svg>
